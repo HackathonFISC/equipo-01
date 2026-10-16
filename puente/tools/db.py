@@ -388,3 +388,33 @@ def historial(conn: sqlite3.Connection, postulacion_id: int) -> list[dict]:
         (postulacion_id,),
     ).fetchall()
     return [dict(f) for f in filas]
+
+
+# ---------------------------------------------------------------- lecturas para el Matching (#46)
+
+# Parejas que ya salieron hacia la empresa: el Matching las deja fijas y no las reasigna.
+ESTADOS_FIJOS = frozenset({ENVIADO, ENTREVISTA, CONTRATADO})
+
+
+def listar_perfiles(conn: sqlite3.Connection) -> list[Perfil]:
+    """Todos los perfiles guardados, ordenados por id."""
+    filas = conn.execute("SELECT datos_json FROM perfiles ORDER BY id").fetchall()
+    return [Perfil.model_validate_json(f[0]) for f in filas]
+
+
+def listar_ofertas(conn: sqlite3.Connection, no_bloqueadas: bool = True) -> list[Oferta]:
+    """Ofertas guardadas, ordenadas por id; por defecto sin las bloqueadas por la Ley 11."""
+    filas = conn.execute("SELECT datos_json FROM ofertas ORDER BY id").fetchall()
+    ofertas = [Oferta.model_validate_json(f[0]) for f in filas]
+    return [o for o in ofertas if not o.bloqueada] if no_bloqueadas else ofertas
+
+
+def parejas_fijas(conn: sqlite3.Connection) -> list[tuple[str, str]]:
+    """(perfil_id, oferta_id) en estado enviado o posterior, ordenadas."""
+    marcas = ", ".join("?" * len(ESTADOS_FIJOS))
+    filas = conn.execute(
+        f"SELECT perfil_id, oferta_id FROM postulaciones WHERE estado IN ({marcas}) "
+        "ORDER BY perfil_id, oferta_id",
+        sorted(ESTADOS_FIJOS),
+    ).fetchall()
+    return [(f[0], f[1]) for f in filas]

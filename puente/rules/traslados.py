@@ -227,6 +227,8 @@ def construir_matriz_default() -> dict[tuple[str, str], InfoTraslado]:
                 minutos_hora_pico=min_pico,
                 pasaje_ida_usd=pasaje_ida,
                 modo=modo,
+                fuente="fixture_prueba",
+                fecha_medicion="2026-10-16",
             )
     return matriz
 
@@ -236,11 +238,15 @@ def cargar_traslados(
 ) -> dict[tuple[str, str], InfoTraslado]:
     """Carga data/traslados.csv en un diccionario indexado por (origen_norm, destino_norm).
 
-    Si el archivo no existe todavía, devuelve la matriz por defecto para pruebas.
+    En producción exige que el archivo CSV exista; si falta lanza FileNotFoundError (#48).
+    Para pruebas sin archivo, usar el fixture explícito `construir_matriz_default()`.
     """
     archivo = Path(ruta) if ruta is not None else RUTA_TRASLADOS_DEFAULT
     if not archivo.exists():
-        return construir_matriz_default()
+        raise FileNotFoundError(
+            f"No se encontró el archivo de traslados en '{archivo}'. "
+            "Verifique data/traslados.csv o pase el fixture explícito a asignar()."
+        )
 
     matriz: dict[tuple[str, str], InfoTraslado] = {}
     with archivo.open("r", encoding="utf-8-sig", newline="") as f:
@@ -434,13 +440,15 @@ def obtener_traslado(
             fecha_medicion=inv_a.fecha_medicion,
         )
 
-    if ko and ko == kd:
+    nodos_conocidos = {k[0] for k in indice} | {k[1] for k in indice}
+    if ko and ko == kd and (ko in nodos_conocidos or ko_alias in nodos_conocidos):
         return InfoTraslado(
             origen=origen,
             destino=destino,
             minutos_hora_pico=15,
             pasaje_ida_usd=0.50,
             modo="Ruta interna",
+            fuente="estimado",
         )
     return None
 

@@ -1,10 +1,10 @@
-"""Asignación jóvenes-vacantes con OR-Tools CP-SAT y restricciones duras. Issue #4."""
+"""Asignación jóvenes-vacantes con OR-Tools CP-SAT y restricciones duras. Issues #4 y #48."""
 
 from __future__ import annotations
 
 import re
 import unicodedata
-from typing import Any
+from typing import Any, Sequence
 
 from ortools.sat.python import cp_model
 from pydantic import BaseModel, ConfigDict, Field
@@ -16,20 +16,32 @@ from puente.rules.traslados import (
     obtener_traslado,
 )
 
+SIN_OFERTA_ID = getattr(_schemas_mod, "SIN_OFERTA", "SIN_OFERTA")
+PENALIZACION_CONFIRMACION_DEFAULT = int(
+    getattr(_schemas_mod, "PENALIZACION_POR_CONFIRMAR", 10)
+)
+
 
 class ConfigSolver(BaseModel):
-    """Configuración determinística del solver CP-SAT y sus restricciones duras."""
+    """Configuración determinística del solver CP-SAT y sus restricciones duras.
+
+    Los umbrales por defecto (60 min de traslado, 15 % del salario en pasaje, 22 días
+    laborables, tope de 2 vacantes por joven y 3 candidatos por plaza) son parámetros
+    del orientador documentados en `data/FUENTES.md` como supuesto del equipo (#48).
+    """
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
     max_minutos_traslado: int = Field(
-        default=60, ge=1, description="Tiempo máximo de traslado permitido en minutos (hora pico)"
+        default=60,
+        ge=1,
+        description="Tiempo máximo de traslado permitido en minutos (hora pico); parámetro del orientador",
     )
     max_porcentaje_salario_pasaje: float = Field(
         default=0.15,
         gt=0.0,
         le=1.0,
-        description="Fracción máxima del salario mensual que puede representar el pasaje mensual",
+        description="Fracción máxima del salario mensual que puede representar el pasaje mensual; parámetro del orientador",
     )
     dias_laborables: int = Field(
         default=22,
@@ -42,12 +54,12 @@ class ConfigSolver(BaseModel):
         default=3,
         ge=1,
         alias="k",
-        description="Máximo k candidatos asignados por vacante (lista corta)",
+        description="Máximo k candidatos asignados por plaza de vacante (lista corta)",
     )
     max_vacantes_por_perfil: int | None = Field(
-        default=None,
+        default=2,
         ge=1,
-        description="Máximo de vacantes a las que puede ser asignado un mismo perfil (None = sin tope adicional)",
+        description="Máximo de vacantes a las que puede ser asignado un mismo joven (por defecto 2, #48)",
     )
     peso_cobertura: int = Field(
         default=100,
@@ -55,9 +67,24 @@ class ConfigSolver(BaseModel):
         description="Coeficiente entero para el porcentaje de cobertura de habilidades (0..100)",
     )
     peso_penalizacion_minuto: int = Field(
-        default=1,
+        default=0,
         ge=0,
-        description="Penalización entera por cada minuto de traslado a hora pico",
+        description=(
+            "Penalización directa por minuto de traslado (0 por defecto: los minutos filtran "
+            "según el máximo del joven y desempatan sin restar puntaje entre jóvenes, #48)"
+        ),
+    )
+    penalizacion_por_confirmar: int = Field(
+        default=PENALIZACION_CONFIRMACION_DEFAULT,
+        ge=0,
+        description="Penalización por cada dato no publicado en requiere_confirmacion (#42, #48)",
+    )
+    permitir_traslado_estimado: bool = Field(
+        default=False,
+        description=(
+            "Si True, cuando falta una pareja en traslados.csv no descarta sino que "
+            "marca fuente='estimado' y agrega 'traslado' a requiere_confirmacion"
+        ),
     )
     semilla: int = Field(
         default=42, description="Semilla fija para garantizar determinismo en CP-SAT"
@@ -67,7 +94,7 @@ class ConfigSolver(BaseModel):
     )
     incluir_perfiles_sin_vacante: bool = Field(
         default=True,
-        description="Si True, incluye un registro Match con puntaje=0 y el motivo cuando un perfil no tiene vacante viable",
+        description="Si True, incluye un registro Match con oferta_id=SIN_OFERTA y puntaje=0 cuando un perfil no tiene vacante viable",
     )
 
 
@@ -93,7 +120,7 @@ def _construir_match(
     brechas: list[str],
     explicacion: str,
 ) -> Any:
-    """Instancia `puente.schemas.Match` si ya existe (#2), o `MatchFallback` en su defecto."""
+    """Instancia `puente.schemas.Match` (#2, #42) o `MatchFallback` en su defecto."""
     cls_match = getattr(_schemas_mod, "Match", None)
     if cls_match is not None and isinstance(cls_match, type) and issubclass(cls_match, BaseModel):
         try:
@@ -106,11 +133,15 @@ def _construir_match(
                 explicacion=explicacion,
             )
         except Exception:
+            req_conf = desglose.get("requiere_confirmacion", [])
+            if not isinstance(req_conf, list):
+                req_conf = []
             desglose_basico = {
                 "cobertura": desglose.get("cobertura", 0.0),
                 "minutos_traslado": desglose.get("minutos_traslado", 0),
                 "pasaje_diario": desglose.get("pasaje_diario", 0.0),
                 "penalizacion": desglose.get("penalizacion", 0),
+                "requiere_confirmacion": req_conf,
             }
             return cls_match(
                 perfil_id=perfil_id,
@@ -143,6 +174,13 @@ def _get_field(obj: Any, *names: str, default: Any = None) -> Any:
             if val is not None:
                 return val
     return default
+
+
+def _has_explicit_none(obj: Any, *names: str) -> bool:
+    """Devuelve True si el objeto o dict tiene explícitamente alguno de los campos en None."""
+    if isinstance(obj, dict):
+        return any(name in obj and obj[name] is None for name in names)
+    return any(hasattr(obj, name) and getattr(obj, name) is None for name in names)
 
 
 def _normalizar_texto(texto: str) -> str:
@@ -355,13 +393,12 @@ def verificar_compatibilidad_horario(perfil: Any, oferta: Any) -> tuple[bool, st
 
     # 2. Revisar horario_libre del perfil
     libre_raw = _get_field(perfil, "horario_libre", "disponibilidad", "horario", default=None)
-    if libre_raw is None:
+    if not libre_raw:
         return True, None
 
     if isinstance(libre_raw, str):
         norm = _normalizar_texto(libre_raw)
         if ("estudia de noche" in norm or "clases de noche" in norm or "nocturn" in norm) and "libre" not in norm:
-            # Si horario_libre fue llenado como "estudia de noche" o "diurno (estudia de noche)"
             if ventana_oferta["fin"] > 18 * 60:
                 return (
                     False,
@@ -407,54 +444,113 @@ def verificar_compatibilidad_horario(perfil: Any, oferta: Any) -> tuple[bool, st
     )
 
 
+def _campos_por_confirmar_oferta(oferta: Any) -> list[str]:
+    """Determina qué campos desconocidos de la oferta requieren confirmación (#42, #48)."""
+    faltan: list[str] = []
+
+    salario_raw = _get_field(oferta, "salario_mensual", "salario", default=None)
+    salario_tipo = _get_field(oferta, "salario_tipo", default=None)
+    if salario_raw is None or salario_tipo == "no_publicado":
+        faltan.append("salario")
+
+    horario_raw = _get_field(oferta, "horario", default=None)
+    horario_tipo = _get_field(oferta, "horario_tipo", default=None)
+    horario_explicito_none = _has_explicit_none(oferta, "horario")
+    if (
+        horario_tipo in ("no_publicado", "rotativo")
+        or isinstance(oferta, getattr(_schemas_mod, "Oferta", ())) and horario_raw is None
+        or (horario_explicito_none and horario_raw is None)
+    ):
+        faltan.append("horario")
+
+    corregimiento = str(_get_field(oferta, "corregimiento", default="") or "").strip()
+    if not corregimiento:
+        faltan.append("corregimiento")
+
+    return faltan
+
+
 def evaluar_factibilidad_par(
     perfil: Any,
     oferta: Any,
     indice_traslados: dict[tuple[str, str], InfoTraslado],
     config: ConfigSolver,
 ) -> dict[str, Any]:
-    """Evalúa todas las restricciones duras y calcula métricas para el par (perfil, oferta)."""
+    """Evalúa todas las restricciones duras y calcula métricas para el par (perfil, oferta).
+
+    Regla de lo desconocido (#42, #48):
+    - Si `salario_mensual` es `None` (`salario_tipo="no_publicado"`), no descarta por salario
+      ni por el 15 % de salario en pasaje; agrega `"salario"` a `requiere_confirmacion` y resta
+      `config.penalizacion_por_confirmar` puntos.
+    - Si `horario` es `None` en una `Oferta` o `horario_tipo="no_publicado"`, no descarta por
+      horario; agrega `"horario"` a `requiere_confirmacion` y resta `config.penalizacion_por_confirmar`.
+    - Los minutos de traslado filtran según el máximo del joven (`perfil.max_minutos_traslado`
+      o `config.max_minutos_traslado`) y desempatan, pero no restan puntaje entre jóvenes
+      (`peso_penalizacion_minuto = 0` por defecto).
+    """
     perfil_id = str(_get_field(perfil, "id", "perfil_id", default="perfil"))
     oferta_id = str(_get_field(oferta, "id", "oferta_id", default="oferta"))
-    origen = str(_get_field(perfil, "corregimiento", default=""))
-    destino = str(_get_field(oferta, "corregimiento", default=""))
+    origen = str(_get_field(perfil, "corregimiento", default="") or "").strip()
+    destino = str(_get_field(oferta, "corregimiento", default="") or "").strip()
 
-    salario_oferta = float(_get_field(oferta, "salario_mensual", "salario", default=0.0))
+    salario_raw = _get_field(oferta, "salario_mensual", "salario", default=None)
+    salario_tipo = _get_field(oferta, "salario_tipo", default=None)
+    salario_conocido = salario_raw is not None and salario_tipo != "no_publicado"
+    salario_oferta = float(salario_raw) if salario_conocido else None
+
     salario_min_perfil = float(_get_field(perfil, "salario_minimo", default=0.0))
     presupuesto_diario = float(
         _get_field(perfil, "presupuesto_pasaje_diario", "presupuesto_diario", default=999.0)
     )
+    max_minutos_joven = int(
+        _get_field(perfil, "max_minutos_traslado", default=config.max_minutos_traslado)
+    )
     bloqueada = bool(_get_field(oferta, "bloqueada", default=False))
 
     motivos: list[str] = []
+    requiere_confirmacion: list[str] = _campos_por_confirmar_oferta(oferta)
 
     if bloqueada:
         motivos.append("oferta bloqueada por reglas de discriminación")
 
-    info_traslado = obtener_traslado(indice_traslados, origen, destino)
+    info_traslado = obtener_traslado(indice_traslados, origen, destino) if (origen and destino) else None
+    fuente_traslado = "desconocida"
     if info_traslado is None:
-        minutos_traslado = 999
-        pasaje_diario = 999.0
-        pasaje_mensual = 999.0 * config.dias_laborables
-        motivos.append(f"sin dato de traslado ({origen} -> {destino})")
+        if config.permitir_traslado_estimado:
+            minutos_traslado = config.max_minutos_traslado
+            pasaje_diario = min(presupuesto_diario, 2.00)
+            pasaje_mensual = round(pasaje_diario * config.dias_laborables, 2)
+            fuente_traslado = "estimado"
+            if "traslado" not in requiere_confirmacion:
+                requiere_confirmacion.append("traslado")
+        else:
+            minutos_traslado = 999
+            pasaje_diario = 999.0
+            pasaje_mensual = 999.0 * config.dias_laborables
+            fuente_traslado = "estimado"
+            motivos.append(f"sin dato de traslado ({origen} -> {destino})")
     else:
         minutos_traslado = int(info_traslado.minutos_hora_pico)
         pasaje_diario = info_traslado.pasaje_diario_usd
         pasaje_mensual = info_traslado.pasaje_mensual_usd(dias_laborables=config.dias_laborables)
+        fuente_traslado = str(getattr(info_traslado, "fuente", "") or "medido")
+        if fuente_traslado == "estimado" and "traslado" not in requiere_confirmacion:
+            requiere_confirmacion.append("traslado")
 
-        # 1. Restricción dura: traslado <= max_minutos_traslado (60 min)
-        if minutos_traslado > config.max_minutos_traslado:
-            motivos.append(f"traslado {minutos_traslado} min > {config.max_minutos_traslado}")
+        # 1. Restricción dura: traslado <= máximo del joven (por defecto 60 min)
+        if minutos_traslado > max_minutos_joven:
+            motivos.append(f"traslado {minutos_traslado} min > {max_minutos_joven}")
 
-        # 2. Restricción dura: pasaje mensual <= 15 % del salario mensual
-        limite_salario_pasaje = round(
-            salario_oferta * config.max_porcentaje_salario_pasaje, 2
-        )
-        if round(pasaje_mensual * 100) > round(limite_salario_pasaje * 100):
-            pct_entero = int(round(config.max_porcentaje_salario_pasaje * 100))
-            motivos.append(
-                f"pasaje mensual ${pasaje_mensual:.2f} > {pct_entero}% del salario (${limite_salario_pasaje:.2f})"
+        # 2. Restricción dura: pasaje mensual <= 15 % del salario mensual (solo si el salario es conocido)
+        if salario_oferta is not None:
+            limite_salario_pasaje = round(
+                salario_oferta * config.max_porcentaje_salario_pasaje, 2
             )
+            if round(pasaje_mensual * 100) > round(limite_salario_pasaje * 100):
+                pct_entero = int(round(config.max_porcentaje_salario_pasaje * 100))
+                motivos.append(
+                    f"pasaje mensual ${pasaje_mensual:.2f} > {pct_entero}% del salario (${limite_salario_pasaje:.2f})"
+                )
 
         # 3. Restricción dura: pasaje <= presupuesto del perfil
         presupuesto_mensual = round(presupuesto_diario * config.dias_laborables, 2)
@@ -463,16 +559,18 @@ def evaluar_factibilidad_par(
                 f"pasaje diario ${pasaje_diario:.2f} (mensual ${pasaje_mensual:.2f}) > presupuesto ${presupuesto_diario:.2f}/día (${presupuesto_mensual:.2f}/mes)"
             )
 
-    # 4. Restricción dura: horario sin cruce con clases
-    horario_ok, motivo_horario = verificar_compatibilidad_horario(perfil, oferta)
-    if not horario_ok and motivo_horario:
-        motivos.append(motivo_horario)
+    # 4. Restricción dura: horario sin cruce con clases (si el horario de la oferta está publicado)
+    if "horario" not in requiere_confirmacion or _get_field(oferta, "horario", default=None) is not None:
+        horario_ok, motivo_horario = verificar_compatibilidad_horario(perfil, oferta)
+        if not horario_ok and motivo_horario:
+            motivos.append(motivo_horario)
 
-    # 5. Restricción dura: salario >= salario mínimo del perfil
-    if round(salario_oferta * 100) < round(salario_min_perfil * 100):
-        motivos.append(
-            f"salario ${salario_oferta:.2f} < salario mínimo del perfil (${salario_min_perfil:.2f})"
-        )
+    # 5. Restricción dura: salario >= salario mínimo del perfil (solo si el salario de la oferta es conocido)
+    if salario_oferta is not None:
+        if round(salario_oferta * 100) < round(salario_min_perfil * 100):
+            motivos.append(
+                f"salario ${salario_oferta:.2f} < salario mínimo del perfil (${salario_min_perfil:.2f})"
+            )
 
     # Cálculo determinístico de cobertura de habilidades y brechas
     skills_perfil = set(extraer_skill_ids_perfil(perfil))
@@ -488,7 +586,9 @@ def evaluar_factibilidad_par(
         cobertura = 1.0
 
     cobertura_entera = int(round(cobertura * config.peso_cobertura))
-    penalizacion = int(minutos_traslado * config.peso_penalizacion_minuto)
+    penalizacion_confirmacion = len(requiere_confirmacion) * config.penalizacion_por_confirmar
+    penalizacion_traslado = int(minutos_traslado * config.peso_penalizacion_minuto)
+    penalizacion = penalizacion_confirmacion + penalizacion_traslado
     puntaje = cobertura_entera - penalizacion
 
     viable = len(motivos) == 0
@@ -509,6 +609,9 @@ def evaluar_factibilidad_par(
         "minutos_traslado": minutos_traslado,
         "pasaje_diario": pasaje_diario,
         "pasaje_mensual": round(pasaje_mensual, 2),
+        "fuente_traslado": fuente_traslado,
+        "requiere_confirmacion": list(requiere_confirmacion),
+        "penalizacion_confirmacion": penalizacion_confirmacion,
         "penalizacion": penalizacion,
         "puntaje": puntaje,
     }
@@ -524,24 +627,117 @@ def _normalizar_config(config: ConfigSolver | dict[str, Any] | None) -> ConfigSo
     return ConfigSolver()
 
 
+def _normalizar_mapa_excluidos(excluidos: Any) -> dict[tuple[str, str], str]:
+    """Convierte una colección de exclusiones en {(perfil_id, oferta_id): motivo}."""
+    mapa: dict[tuple[str, str], str] = {}
+    if not excluidos:
+        return mapa
+    for item in excluidos:
+        if isinstance(item, tuple) and len(item) >= 2:
+            pid, oid = str(item[0]), str(item[1])
+            motivo = str(item[2]) if len(item) >= 3 and item[2] else "excluido por el orientador o la empresa"
+            mapa[(pid, oid)] = motivo
+        elif isinstance(item, dict):
+            pid = str(item.get("perfil_id", ""))
+            oid = str(item.get("oferta_id", ""))
+            origen_exc = str(item.get("origen", "orientador"))
+            motivo = str(item.get("motivo") or f"excluido por {origen_exc}")
+            if pid and oid:
+                mapa[(pid, oid)] = motivo
+        else:
+            pid = str(getattr(item, "perfil_id", ""))
+            oid = str(getattr(item, "oferta_id", ""))
+            motivo = str(getattr(item, "motivo", "") or "excluido por el orientador o la empresa")
+            if pid and oid:
+                mapa[(pid, oid)] = motivo
+    return mapa
+
+
+def _normalizar_parejas_fijas(parejas_fijas: Any) -> set[tuple[str, str]]:
+    """Convierte una colección de parejas fijas en set[(perfil_id, oferta_id)]."""
+    conjunto: set[tuple[str, str]] = set()
+    if not parejas_fijas:
+        return conjunto
+    for item in parejas_fijas:
+        if isinstance(item, tuple) and len(item) >= 2:
+            conjunto.add((str(item[0]), str(item[1])))
+        elif isinstance(item, dict):
+            pid = str(item.get("perfil_id", ""))
+            oid = str(item.get("oferta_id", ""))
+            if pid and oid:
+                conjunto.add((pid, oid))
+        else:
+            pid = str(getattr(item, "perfil_id", ""))
+            oid = str(getattr(item, "oferta_id", ""))
+            if pid and oid:
+                conjunto.add((pid, oid))
+    return conjunto
+
+
+def _cupo_vacante(oferta: Any, cfg: ConfigSolver) -> int:
+    """Calcula el cupo de lista corta de una oferta respetando `Oferta.plazas` (#42, #48)."""
+    cupo_explicito = _get_field(oferta, "cupo_lista_corta", "max_candidatos", default=None)
+    if cupo_explicito is not None:
+        return max(1, int(cupo_explicito))
+    plazas = max(1, int(_get_field(oferta, "plazas", default=1) or 1))
+    return cfg.max_candidatos_por_vacante * plazas
+
+
+def _formatear_explicacion_match(
+    ev: dict[str, Any],
+    descartes_map: dict[str, str],
+) -> str:
+    """Plantilla determinística sobre el desglose del match, sin llamadas al LLM (#48)."""
+    resumen_descartes = (
+        " | Descartes: "
+        + "; ".join(f"{oid} ({mot})" for oid, mot in descartes_map.items())
+        if descartes_map
+        else ""
+    )
+    req_conf = ev.get("requiere_confirmacion") or []
+    nota_confirmacion = (
+        f", requiere confirmación ({', '.join(req_conf)}, -{ev['penalizacion_confirmacion']} pts)"
+        if req_conf
+        else ""
+    )
+    return (
+        f"Asignado a {ev['oferta_id']} ({ev['destino']}): "
+        f"cobertura {ev['cobertura_entera']}% ({len(ev['cubiertas'])}/{len(ev['cubiertas']) + len(ev['brechas'])} habs), "
+        f"traslado {ev['minutos_traslado']} min, "
+        f"pasaje ${ev['pasaje_diario']:.2f}/día (${ev['pasaje_mensual']:.2f}/mes)"
+        f"{nota_confirmacion}, "
+        f"puntaje={ev['puntaje']}.{resumen_descartes}"
+    )
+
+
 def asignar(
-    perfiles: list[Any],
-    ofertas: list[Any],
+    perfiles: Sequence[Any],
+    ofertas: Sequence[Any],
     traslados: Any = None,
     config: ConfigSolver | dict[str, Any] | None = None,
+    *,
+    excluidos: Any = None,
+    parejas_excluidas: Any = None,
+    parejas_fijas: Any = None,
 ) -> list[Any]:
     """Asigna jóvenes a vacantes con OR-Tools CP-SAT respetando todas las restricciones duras.
 
     - Nunca realiza llamadas al LLM.
     - Determinístico: num_workers=1 y semilla fija.
-    - Maximiza (cobertura_entera - penalizacion_traslado) con coeficientes enteros.
-    - Si un perfil no tiene vacante viable, devuelve un Match con puntaje=0 y el motivo detallado.
+    - Respeta `max_vacantes_por_perfil` (2 por defecto) y `Oferta.plazas` (#42, #48).
+    - Los minutos de traslado filtran según el máximo del joven y desempatan entre vacantes
+      del mismo joven sin restar puntaje entre jóvenes distintos (#48).
+    - Las parejas en `excluidos` no se asignan; las parejas en `parejas_fijas` quedan fijas.
+    - Si un perfil no tiene vacante viable, devuelve un Match con `oferta_id=SIN_OFERTA` y el motivo.
     """
     cfg = _normalizar_config(config)
     indice_traslados = indexar_traslados(traslados)
 
     if not perfiles:
         return []
+
+    mapa_excluidos = _normalizar_mapa_excluidos(excluidos or parejas_excluidas)
+    set_fijas = _normalizar_parejas_fijas(parejas_fijas)
 
     evaluaciones: dict[tuple[int, int], dict[str, Any]] = {}
     descartes_por_perfil: dict[str, dict[str, str]] = {}
@@ -552,6 +748,11 @@ def asignar(
         for j, oferta in enumerate(ofertas):
             oid = str(_get_field(oferta, "id", "oferta_id", default=f"O{j+1:02d}"))
             ev = evaluar_factibilidad_par(perfil, oferta, indice_traslados, cfg)
+            if (pid, oid) in mapa_excluidos:
+                motivo_exc = mapa_excluidos[(pid, oid)]
+                ev["viable"] = False
+                ev["motivos"] = [*ev["motivos"], motivo_exc]
+                ev["motivo_str"] = "; ".join(ev["motivos"])
             evaluaciones[(i, j)] = ev
             if not ev["viable"] and ev["motivo_str"]:
                 descartes_por_perfil[pid][oid] = ev["motivo_str"]
@@ -559,33 +760,69 @@ def asignar(
     model = cp_model.CpModel()
     x_vars: dict[tuple[int, int], cp_model.IntVar] = {}
 
-    for i in range(len(perfiles)):
-        for j in range(len(ofertas)):
+    for i, perfil in enumerate(perfiles):
+        pid = str(_get_field(perfil, "id", "perfil_id", default=f"P{i+1:02d}"))
+        for j, oferta in enumerate(ofertas):
+            oid = str(_get_field(oferta, "id", "oferta_id", default=f"O{j+1:02d}"))
             ev = evaluaciones[(i, j)]
             var = model.NewBoolVar(f"x_{i}_{j}")
             x_vars[(i, j)] = var
-            if not ev["viable"]:
+            if (pid, oid) in set_fijas and (pid, oid) not in mapa_excluidos:
+                model.Add(var == 1)
+                ev["viable"] = True
+            elif not ev["viable"]:
                 model.Add(var == 0)
 
-    # Restricción dura de capacidad por vacante: máximo k candidatos por vacante
-    for j in range(len(ofertas)):
+    # Restricción dura de capacidad por vacante: máximo k * plazas candidatos por vacante
+    for j, oferta in enumerate(ofertas):
+        cupo_j = _cupo_vacante(oferta, cfg)
         model.Add(
-            sum(x_vars[(i, j)] for i in range(len(perfiles))) <= cfg.max_candidatos_por_vacante
+            sum(x_vars[(i, j)] for i in range(len(perfiles))) <= cupo_j
         )
 
-    # Restricción opcional de máximo de vacantes por perfil
+    # Restricción de máximo de vacantes por perfil (por defecto 2, #48)
     if cfg.max_vacantes_por_perfil is not None:
         for i in range(len(perfiles)):
+            fijas_i = sum(
+                1
+                for j, oferta in enumerate(ofertas)
+                if (
+                    str(_get_field(perfiles[i], "id", "perfil_id", default=f"P{i+1:02d}")),
+                    str(_get_field(oferta, "id", "oferta_id", default=f"O{j+1:02d}")),
+                )
+                in set_fijas
+            )
+            tope_i = max(cfg.max_vacantes_por_perfil, fijas_i)
             model.Add(
-                sum(x_vars[(i, j)] for j in range(len(ofertas))) <= cfg.max_vacantes_por_perfil
+                sum(x_vars[(i, j)] for j in range(len(ofertas))) <= tope_i
             )
 
-    bono_factibilidad = 10_000
+    # Desempate relativo por traslado dentro de cada joven:
+    # Para cada joven i, su vacante viable más cercana tiene delta_traslado = 0.
+    # Así, dos jóvenes de distintos corregimientos (ej. La Chorrera vs Bella Vista)
+    # compiten en igualdad de condiciones por sus habilidades, pero para un mismo joven
+    # ante vacantes de igual puntaje se prefiere la más cercana (#48).
+    min_traslado_por_joven: dict[int, int] = {}
+    for i in range(len(perfiles)):
+        viables_i = [
+            evaluaciones[(i, j)]["minutos_traslado"]
+            for j in range(len(ofertas))
+            if evaluaciones[(i, j)]["viable"]
+        ]
+        min_traslado_por_joven[i] = min(viables_i) if viables_i else 0
+
+    bono_factibilidad = 100_000
+    escala_puntaje = 100
     terminos_objetivo = []
     for (i, j), var in x_vars.items():
         ev = evaluaciones[(i, j)]
         if ev["viable"]:
-            coef_entero = int(bono_factibilidad + ev["puntaje"])
+            delta_traslado = max(
+                0, min(99, ev["minutos_traslado"] - min_traslado_por_joven.get(i, 0))
+            )
+            coef_entero = int(
+                bono_factibilidad + ev["puntaje"] * escala_puntaje - delta_traslado
+            )
             terminos_objetivo.append(coef_entero * var)
 
     if terminos_objetivo:
@@ -609,23 +846,20 @@ def asignar(
                 if solver.Value(x_vars[(i, j)]) == 1:
                     matches_perfil.append((j, evaluaciones[(i, j)]))
 
-            matches_perfil.sort(key=lambda item: (-item[1]["puntaje"], item[1]["oferta_id"]))
+            matches_perfil.sort(
+                key=lambda item: (
+                    -item[1]["puntaje"],
+                    item[1]["minutos_traslado"],
+                    item[1]["oferta_id"],
+                )
+            )
 
-            for _, ev in matches_perfil:
+            for j_idx, ev in matches_perfil:
                 perfiles_con_asignacion.add(i)
                 descartes_map = descartes_por_perfil.get(pid, {})
-                resumen_descartes = (
-                    " | Descartes: "
-                    + "; ".join(f"{oid} ({mot})" for oid, mot in descartes_map.items())
-                    if descartes_map
-                    else ""
-                )
-                explicacion = (
-                    f"Asignado a {ev['oferta_id']} ({ev['destino']}): "
-                    f"cobertura {ev['cobertura_entera']}% ({len(ev['cubiertas'])}/{len(ev['cubiertas']) + len(ev['brechas'])} habs), "
-                    f"traslado {ev['minutos_traslado']} min (-{ev['penalizacion']} pts), "
-                    f"pasaje ${ev['pasaje_diario']:.2f}/día (${ev['pasaje_mensual']:.2f}/mes), "
-                    f"puntaje={ev['puntaje']}.{resumen_descartes}"
+                explicacion = _formatear_explicacion_match(ev, descartes_map)
+                plazas_oferta = max(
+                    1, int(_get_field(ofertas[j_idx], "plazas", default=1) or 1)
                 )
                 desglose = {
                     "cobertura": ev["cobertura"],
@@ -633,6 +867,9 @@ def asignar(
                     "pasaje_diario": ev["pasaje_diario"],
                     "pasaje_mensual": ev["pasaje_mensual"],
                     "penalizacion": ev["penalizacion"],
+                    "requiere_confirmacion": list(ev["requiere_confirmacion"]),
+                    "fuente_traslado": ev["fuente_traslado"],
+                    "plazas": plazas_oferta,
                     "viable": True,
                     "motivo_descarte": None,
                     "ofertas_descartadas": descartes_map,
@@ -659,7 +896,7 @@ def asignar(
                 resultados.append(
                     _construir_match(
                         perfil_id=pid,
-                        oferta_id="SIN_OFERTA",
+                        oferta_id=SIN_OFERTA_ID,
                         puntaje=0,
                         desglose={
                             "cobertura": 0.0,
@@ -667,6 +904,7 @@ def asignar(
                             "pasaje_diario": 0.0,
                             "pasaje_mensual": 0.0,
                             "penalizacion": 0,
+                            "requiere_confirmacion": [],
                             "viable": False,
                             "motivo_descarte": "no hay ofertas disponibles",
                             "ofertas_descartadas": {},
@@ -694,6 +932,7 @@ def asignar(
                 "pasaje_diario": ev_ref["pasaje_diario"],
                 "pasaje_mensual": ev_ref["pasaje_mensual"],
                 "penalizacion": ev_ref["penalizacion"],
+                "requiere_confirmacion": [],
                 "viable": False,
                 "motivo_descarte": motivo_principal,
                 "ofertas_descartadas": descartes_map,
@@ -701,7 +940,7 @@ def asignar(
             resultados.append(
                 _construir_match(
                     perfil_id=pid,
-                    oferta_id=ev_ref["oferta_id"],
+                    oferta_id=SIN_OFERTA_ID,
                     puntaje=0,
                     desglose=desglose_no_viable,
                     brechas=ev_ref["brechas"],
@@ -709,4 +948,67 @@ def asignar(
                 )
             )
 
+    return resultados
+
+
+def asignar_orden_simple(
+    perfiles: Sequence[Any],
+    ofertas: Sequence[Any],
+    traslados: Any = None,
+    config: ConfigSolver | dict[str, Any] | None = None,
+) -> list[Any]:
+    """Línea base voraz (ordenar por vacante y tomar los mejores respetando topes) para comparar contra CP-SAT (#48)."""
+    cfg = _normalizar_config(config)
+    indice_traslados = indexar_traslados(traslados)
+    if not perfiles or not ofertas:
+        return []
+
+    conteo_por_perfil: dict[int, int] = {i: 0 for i in range(len(perfiles))}
+    seleccionados: list[tuple[int, int, dict[str, Any]]] = []
+
+    for j, oferta in enumerate(ofertas):
+        cupo_j = _cupo_vacante(oferta, cfg)
+        candidatos_j: list[tuple[int, dict[str, Any]]] = []
+        for i, perfil in enumerate(perfiles):
+            if (
+                cfg.max_vacantes_por_perfil is not None
+                and conteo_por_perfil[i] >= cfg.max_vacantes_por_perfil
+            ):
+                continue
+            ev = evaluar_factibilidad_par(perfil, oferta, indice_traslados, cfg)
+            if ev["viable"]:
+                candidatos_j.append((i, ev))
+
+        candidatos_j.sort(
+            key=lambda item: (
+                -item[1]["puntaje"],
+                item[1]["minutos_traslado"],
+                item[1]["perfil_id"],
+            )
+        )
+        for i_elegido, ev_elegido in candidatos_j[:cupo_j]:
+            conteo_por_perfil[i_elegido] += 1
+            seleccionados.append((i_elegido, j, ev_elegido))
+
+    resultados: list[Any] = []
+    for _, _, ev in seleccionados:
+        resultados.append(
+            _construir_match(
+                perfil_id=ev["perfil_id"],
+                oferta_id=ev["oferta_id"],
+                puntaje=ev["puntaje"],
+                desglose={
+                    "cobertura": ev["cobertura"],
+                    "minutos_traslado": ev["minutos_traslado"],
+                    "pasaje_diario": ev["pasaje_diario"],
+                    "pasaje_mensual": ev["pasaje_mensual"],
+                    "penalizacion": ev["penalizacion"],
+                    "requiere_confirmacion": list(ev["requiere_confirmacion"]),
+                    "viable": True,
+                    "motivo_descarte": None,
+                },
+                brechas=ev["brechas"],
+                explicacion=_formatear_explicacion_match(ev, {}),
+            )
+        )
     return resultados
