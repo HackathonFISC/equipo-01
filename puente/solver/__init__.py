@@ -1,0 +1,1 @@
+"""Componente determinístico de asignación."""

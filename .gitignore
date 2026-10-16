@@ -1,0 +1,15 @@
+# Secretos
+.env
+.streamlit/secrets.toml
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Datos generados en ejecución
+*.db
+*.sqlite
+*.sqlite3
+outbox/
