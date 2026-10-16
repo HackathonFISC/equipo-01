@@ -166,12 +166,27 @@ def _planos(valor: Any) -> list[Any]:
 
 
 def _resolver(destino: tuple[str, str, int]) -> Callable[..., Any]:
-    """Importa la función del destino; si falta el módulo o la función, el caso queda pendiente."""
+    """Importa la función del destino.
+
+    Solo cuenta como pendiente que el módulo destino (o un paquete que lo contiene) no exista, o que la
+    función no esté en un módulo que sí se importó (ajustar la constante). Cualquier otro ImportError o
+    AttributeError, como un import transitivo roto dentro de un módulo ya fusionado, se propaga para que
+    el caso cuente como 'fallo' y no se oculte.
+    """
     modulo, funcion, issue = destino
     try:
-        return getattr(importlib.import_module(modulo), funcion)
-    except (ImportError, AttributeError) as error:
-        raise DependenciaPendiente(issue, f"#{issue} sin fusionar ({modulo}.{funcion}: {error})") from error
+        importado = importlib.import_module(modulo)
+    except ModuleNotFoundError as error:
+        nombre = error.name or ""
+        if nombre and (modulo == nombre or modulo.startswith(nombre + ".")):
+            raise DependenciaPendiente(issue, f"#{issue} sin fusionar ({modulo}: {error})") from error
+        raise
+    try:
+        return getattr(importado, funcion)
+    except AttributeError as error:
+        raise DependenciaPendiente(
+            issue, f"#{issue}: función {funcion} no existe en {modulo} (ajustar constante)"
+        ) from error
 
 
 def _ids_habilidades(valor: Any) -> list[str]:
@@ -190,16 +205,23 @@ def _regla_normalizada(texto: Any) -> list[str]:
 
 
 def _alertas_normalizadas(items: Any) -> list[str]:
+    """Tokens de alerta. Las que citan un artículo van a reglas y se descartan aquí; cualquier otra alerta
+    no reconocida se conserva como 'otra:<texto>' para que una alerta espuria produzca diferencia."""
     tokens: set[str] = set()
     for item in _planos(items):
         crudo = item if isinstance(item, str) else json.dumps(item, ensure_ascii=False, default=str)
         texto = _norm(crudo).replace("_", " ")
+        conocidas = set()
         if "presencia" in texto:
-            tokens.add("presencia")
+            conocidas.add("presencia")
         if "foto" in texto:
-            tokens.add("foto")
+            conocidas.add("foto")
         if "civil" in texto:
-            tokens.add("estado_civil")
+            conocidas.add("estado_civil")
+        if conocidas:
+            tokens |= conocidas
+        elif not _regla_normalizada(texto) and texto:
+            tokens.add(f"otra:{texto}")
     return sorted(tokens)
 
 
@@ -599,7 +621,7 @@ def correr(
             else:
                 aciertos += 1
         if pendiente is not None:
-            detalle = f"pendiente (#{pendiente.issue} sin fusionar)"
+            detalle = f"pendiente ({pendiente})"
             resultados.append(ResultadoCaso(caso["id"], categoria, "pendiente", 0, 0, None, detalle))
         elif aciertos == ejecutadas:
             resultados.append(ResultadoCaso(caso["id"], categoria, "ok", aciertos, ejecutadas, ultimo, "cumple lo esperado"))

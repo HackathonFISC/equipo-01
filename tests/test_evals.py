@@ -200,6 +200,12 @@ def test_cargar_casos_rechaza_archivos_invalidos(tmp_path):
         ("requisitos_discriminatorios", {"bloqueada": True, "reglas": ["art. 1"], "alertas": []}, {"bloqueada": True, "reglas": ["art. 2"], "alertas": []}, False),
         ("requisitos_discriminatorios", {"bloqueada": False, "reglas": [], "alertas": ["foto"]}, {"bloqueada": True, "reglas": [], "alertas": ["foto"]}, False),
         ("requisitos_discriminatorios", {"bloqueada": False, "reglas": [], "alertas": []}, {"bloqueada": False, "reglas": [], "alertas": ["foto"]}, False),
+        (
+            "requisitos_discriminatorios",
+            {"bloqueada": False, "reglas": [], "alertas": []},
+            {"bloqueada": False, "reglas": [], "alertas": ["posible requisito de edad", "exige sexo"]},
+            False,
+        ),
         ("matching_factible", {"asignacion": {"a": "X", "b": None}, "violaciones_duras": 0}, {"asignacion": {"a": "X", "b": "SIN_OFERTA"}, "violaciones_duras": 0}, True),
         ("matching_factible", {"asignacion": {"a": "X"}, "violaciones_duras": 0}, {"asignacion": {"a": "Y"}, "violaciones_duras": 0}, False),
         ("matching_factible", {"asignacion": {"a": "X"}, "violaciones_duras": 0}, {"asignacion": {"a": "X"}, "violaciones_duras": 1}, False),
@@ -337,6 +343,49 @@ def test_resolver_deja_pendiente_si_falta_el_modulo_o_la_funcion():
         run._resolver(("puente.schemas", "funcion_que_no_existe", 2))
     assert sin_funcion.value.issue == 2
     assert run._resolver(("puente.schemas", "Oferta", 2)) is not None
+
+
+def test_resolver_no_oculta_un_import_roto_dentro_de_un_modulo_existente(tmp_path, monkeypatch):
+    (tmp_path / "modulo_roto_eval.py").write_text("import paquete_que_no_existe_eval", encoding="utf-8")
+    (tmp_path / "modulo_sano_eval.py").write_text("def otra(): return 1", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    # un import transitivo roto en un módulo presente no es 'pendiente': se propaga
+    with pytest.raises(ModuleNotFoundError):
+        run._resolver(("modulo_roto_eval", "f", 5))
+    # función con otro nombre en un módulo presente: pendiente con mensaje que pide ajustar la constante
+    with pytest.raises(DependenciaPendiente) as sin_funcion:
+        run._resolver(("modulo_sano_eval", "extraer_oferta", 5))
+    assert "extraer_oferta" in str(sin_funcion.value) and "modulo_sano_eval" in str(sin_funcion.value)
+
+    casos = {
+        "categorias": {"requisitos_discriminatorios": {"usa_llm": False}},
+        "casos": [
+            {"id": "DIS-X", "categoria": "requisitos_discriminatorios", "entrada": {"texto": "x"}, "esperado": {"bloqueada": False}}
+        ],
+    }
+
+    def ejecutor(caso):
+        return {"bloqueada": run._resolver(("modulo_roto_eval", "f", 5))}
+
+    resultado = run.correr(casos, ejecutores={"requisitos_discriminatorios": ejecutor}, usar_llm=False)[0]
+    assert resultado.estado == "fallo"
+    assert "ModuleNotFoundError" in resultado.detalle
+
+
+def test_detalle_pendiente_conserva_modulo_y_funcion():
+    casos = {
+        "categorias": {"requisitos_discriminatorios": {"usa_llm": False}},
+        "casos": [
+            {"id": "DIS-X", "categoria": "requisitos_discriminatorios", "entrada": {"texto": "x"}, "esperado": {"bloqueada": False}}
+        ],
+    }
+
+    def ejecutor(caso):
+        run._resolver(("puente.schemas", "funcion_que_no_existe", 5))
+
+    resultado = run.correr(casos, ejecutores={"requisitos_discriminatorios": ejecutor}, usar_llm=False)[0]
+    assert resultado.estado == "pendiente"
+    assert "#5" in resultado.detalle and "puente.schemas" in resultado.detalle and "funcion_que_no_existe" in resultado.detalle
 
 
 def test_fallo_abre_issue_bug(casos):
