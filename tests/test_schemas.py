@@ -9,6 +9,7 @@ from puente.schemas import (
     PENALIZACION_POR_CONFIRMAR,
     REQUIERE_CONFIRMACION,
     SIN_OFERTA,
+    TIPOS_ENTRADA,
     Consentimiento,
     Decision,
     EntradaPerfil,
@@ -21,7 +22,6 @@ from puente.schemas import (
     OfertaExtraida,
     Perfil,
     PerfilExtraido,
-    TipoEntrada,
     agregar_decision,
 )
 
@@ -350,11 +350,18 @@ def test_entrada_perfil_acepta_la_forma_de_construir_perfil():
 
 
 def test_registros_de_exclusion_y_consentimiento():
-    excluido = Exclusion(perfil_id="p1", oferta_id="o1", origen="empresa", motivo="plaza cubierta")
-    assert excluido.timestamp
+    from pydantic import TypeAdapter
+
+    exclusion = TypeAdapter(Exclusion)
+    # Como lo escribe hoy el grafo (#10) al quitar un candidato.
+    assert exclusion.validate_python({"perfil_id": "p1", "oferta_id": "o1"})["oferta_id"] == "o1"
+    assert exclusion.validate_python({"perfil_id": "p1", "oferta_id": "o1", "origen": "empresa"})["origen"] == "empresa"
     with pytest.raises(ValidationError):
-        Exclusion(perfil_id="p1", oferta_id="o1", origen="llm")
-    assert Consentimiento(perfil_id="p1", oferta_id="o1", otorgado=True, medio="telegram").otorgado
+        exclusion.validate_python({"perfil_id": "p1", "oferta_id": "o1", "origen": "llm"})
+    consentimiento = TypeAdapter(Consentimiento)
+    assert consentimiento.validate_python({"perfil_id": "p1", "oferta_id": "o1", "otorgado": True})["otorgado"]
+    with pytest.raises(ValidationError):
+        consentimiento.validate_python({"perfil_id": "p1", "oferta_id": "o1"})
 
 
 def test_estado_postulacion_consentido_entre_aprobado_y_enviado():
@@ -364,8 +371,7 @@ def test_estado_postulacion_consentido_entre_aprobado_y_enviado():
 
 
 def test_tipo_entrada():
-    assert [t.value for t in TipoEntrada] == ["oferta", "perfil", "consulta", "evento_empresa"]
-    assert TipoEntrada("perfil") == "perfil"
+    assert TIPOS_ENTRADA == ("oferta", "perfil", "consulta", "evento_empresa")
 
 
 # --- Contratos v2 (#42): el grafo no pierde claves ---
@@ -385,10 +391,10 @@ def test_rutas_formacion_llega_al_estado_final():
 def test_claves_nuevas_sobreviven_al_grafo():
     def escribe(estado):
         return {
-            "tipo_entrada": TipoEntrada.EVENTO_EMPRESA,
+            "tipo_entrada": "evento_empresa",
             "rutas_formacion": [{"perfil_id": "p1", "cursos": []}],
-            "excluidos": [Exclusion(perfil_id="p1", oferta_id="o1", origen="orientador")],
-            "consentimientos": [Consentimiento(perfil_id="p1", oferta_id="o1", otorgado=True)],
+            "excluidos": [{"perfil_id": "p1", "oferta_id": "o1", "origen": "orientador"}],
+            "consentimientos": [{"perfil_id": "p1", "oferta_id": "o1", "otorgado": True}],
             "metricas": {"ofertas_leidas": 1},
         }
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Annotated, Any, Literal, Required, TypedDict
+from typing import Annotated, Any, Literal, Required, TypedDict, get_args
 
 from pydantic import AfterValidator, BaseModel, Field, field_validator, model_validator
 
@@ -243,13 +243,9 @@ class PerfilExtraido(BaseModel):
 # --- Entradas y registros del estado (#42) ---
 
 
-class TipoEntrada(StrEnum):
-    """Lo que lee el router del grafo (#10)."""
-
-    OFERTA = "oferta"
-    PERFIL = "perfil"
-    CONSULTA = "consulta"
-    EVENTO_EMPRESA = "evento_empresa"
+# Lo que lee el router del grafo (#10). Literal y no StrEnum porque el grafo escribe strings.
+TipoEntrada = Literal["oferta", "perfil", "consulta", "evento_empresa"]
+TIPOS_ENTRADA: tuple[str, ...] = get_args(TipoEntrada)
 
 
 class EntradaPerfil(TypedDict, total=False):
@@ -276,24 +272,28 @@ class EntradaPerfil(TypedDict, total=False):
 OfertaCruda = str | dict[str, Any]
 
 
-class Exclusion(BaseModel):
+# Exclusion y Consentimiento son dicts, como los escribe y lee el grafo (#10) con `.get()`.
+# Para validarlos: `pydantic.TypeAdapter(Exclusion).validate_python(...)`.
+
+
+class Exclusion(TypedDict, total=False):
     """Pareja perfil–oferta que el solver no debe volver a proponer."""
 
-    perfil_id: str
-    oferta_id: str
+    perfil_id: Required[str]
+    oferta_id: Required[str]
     origen: Literal["orientador", "empresa"]
-    motivo: str = ""
-    timestamp: str = Field(default_factory=_ahora_utc)
+    motivo: str
+    timestamp: str
 
 
-class Consentimiento(BaseModel):
+class Consentimiento(TypedDict, total=False):
     """El joven acepta (o no) que su perfil se envíe a una empresa. Va entre aprobado y enviado."""
 
-    perfil_id: str
-    oferta_id: str
-    otorgado: bool
-    medio: str = Field("", description="telegram, presencial, ...")
-    timestamp: str = Field(default_factory=_ahora_utc)
+    perfil_id: Required[str]
+    oferta_id: Required[str]
+    otorgado: Required[bool]
+    medio: str
+    timestamp: str
 
 
 class EstadoPuente(TypedDict, total=False):
