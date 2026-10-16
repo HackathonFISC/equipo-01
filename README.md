@@ -59,9 +59,9 @@ entrada -> guardrails (#9) -> router por tipo
                     Postulación (#7, #12): SQLite, PDF, Telegram, .ics
 ```
 
-El `interrupt()` del orientador va antes de Postulación: sin su aprobación no sale nada hacia terceros. Cada nodo registra una `Decision` en la tabla `decisiones` y las trazas van a LangSmith. Contratos de datos en [`puente/schemas.py`](puente/schemas.py); detalle en [`docs/metodologia.md`](docs/metodologia.md).
+El `interrupt()` del orientador va antes de Postulación: sin su aprobación no sale nada hacia terceros. Cada nodo debe registrar una `Decision` en la tabla `decisiones` y las trazas irán a LangSmith (pendiente de #7, #10 y #12): hoy `puente/tools/db.py` es un stub y el tablero guarda las decisiones solo en memoria. Contratos de datos en [`puente/schemas.py`](puente/schemas.py); detalle en [`docs/metodologia.md`](docs/metodologia.md).
 
-Estado de la construcción: el esqueleto del grafo con nodos vacíos y los esquemas (#2), el solver (#4), el Auditor (#8), la Formación (#14) y el tablero (#11) están en `main`. El grafo completo con router, `interrupt()` y checkpointer está pendiente de #10; Mercado y Perfil, pendientes de #5 y #6; los guardrails, pendientes de #9; la acción real de Postulación, pendiente de #7 y #12.
+Estado de la construcción: el esqueleto del grafo con nodos vacíos y los esquemas (#2), Mercado con sus reglas (#5), Perfil (#6), el solver (#4), el Auditor (#8), la Formación (#14), los guardrails (#9) y el tablero (#11) están en `main`. El grafo completo con router, guardrails conectados, `interrupt()` y checkpointer está pendiente de #10; la acción real de Postulación, pendiente de #7 y #12.
 
 ## Tecnologías
 
@@ -83,6 +83,8 @@ Los datos de personas son siempre sintéticos; las ofertas no llevan datos perso
 - Cursos con cupo y sede: `data/cursos.csv` (pendiente de #3).
 - Taxonomía de habilidades con `skill_id`: `data/taxonomia.csv` (pendiente de #3).
 - Ofertas y perfiles sintéticos, entre ellos Yaritza: carpetas `data/ofertas/` y `data/perfiles/` (pendiente de #3).
+
+**Aviso: los traslados y los cursos de hoy son estimados, no mediciones.** Mientras #3 no entregue `data/traslados.csv` y `data/cursos.csv` (pendiente de #3; medidos en Google Maps a hora pico, con fecha y método), el sistema usa tablas de respaldo estimadas en código: la matriz de traslados de `puente/rules/traslados.py`, el catálogo de cursos de `puente/agents/formacion.py` y los casos de ejemplo fijos del tablero en `app/server.py`. Los minutos y pasajes que se ven hoy en la demo (por ejemplo, La Chorrera a Tocumen) salen de esas tablas y no deben presentarse como datos medidos.
 
 ## Instalación y ejecución
 
@@ -145,16 +147,25 @@ Qué partes se hicieron con IA, con qué herramienta y qué se modificó a mano.
 | Componente | Issue | Herramienta | Qué se cambió a mano |
 |---|---|---|---|
 | Esquemas y grafo | #2 | Claude Code (nube) | Nada registrado todavía |
-| Mercado | #5 | Claude Code (nube) | Pendiente: el PR de #5 aún no se fusiona |
-| Perfil | #6 | Claude Code (nube) | Pendiente: el PR de #6 aún no se fusiona |
+| Mercado | #5 | Claude Code (nube) | Nada registrado todavía |
+| Perfil | #6 | Claude Code (nube) | Nada registrado todavía |
 | Matching/solver | #4 | Antigravity (Gemini) | Calibración de tiempos y pasajes de Panamá Oeste a Este; el redactor opcional solo toca el texto, nunca el puntaje |
 | Auditor | #8 | Antigravity (Gemini) | Invariante de corregimiento fijo por ser dependencia legítima del traslado; arista de retorno a Matching |
 | Formación | #14 | Antigravity (Gemini) | Validación de cupo, horario sin cruce con clases nocturnas y traslado <= 60 min |
 | Postulación/herramientas | #7, #12 | Claude Code (flujo implementar-issues) | Pendiente de revisión humana en el PR de #7; #12 sin empezar |
-| Guardrails | #9 | Claude Code (nube) | Pendiente: el PR de #9 aún no se fusiona |
+| Guardrails | #9 | Claude Code (nube) | Nada registrado todavía |
 | Tablero | #11 | Antigravity (Gemini) | Reemplazo de Streamlit por un servidor ASGI con HTML, CSS y JS limpios; verificación de los artefactos de `outbox/` |
 | Evals | #13 | Claude Code (flujo implementar-issues) | Pendiente de revisión humana en el PR de #13 |
-| Datos | #3 | Claude Code (ver bitácora) | Pendiente: el PR de #3 aún no se fusiona |
+| Datos | #3 | Codex (ChatGPT) | Sin edición humana registrada; pendiente: PR #27 sin fusionar, su fila de bitácora aún no está en `main` |
+
+Otras partes hechas con IA, también registradas en la bitácora (la herramienta se copia de sus filas):
+
+- Plan del proyecto, etiquetas, hitos e issues, y esqueleto del repo (#1): Claude Code (app de escritorio).
+- GitHub Action `Pruebas` (#19): Claude Code.
+- Protocolo `AGENTS.md`, scripts y hook pre-commit (#21): Claude Code (Claude Fable 5.1).
+- `scripts/nube.sh` (#31): Claude Code (Claude Opus 5.5).
+- Conexión del tablero a los módulos reales (#33): Antigravity (Gemini).
+- Esta documentación de entrega (#15): Claude Code, flujo implementar-issues (Opus 5.5 y Sonnet 5.5); pendiente de revisión humana en el PR.
 
 ## Flujo de trabajo
 
