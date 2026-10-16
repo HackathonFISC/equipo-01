@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Hook pre-commit de Puente: ningún commit con código o datos sin su fila en la bitácora de IA.
+# Se activa con: git config core.hooksPath .githooks   (lo hace scripts/instalar-hooks.sh y cualquier script del tablero)
+# Emergencia real: git commit --no-verify   (y anota la fila en el siguiente commit).
+set -euo pipefail
+
+CAMBIOS="$(git diff --cached --name-only --diff-filter=ACMR)"
+[ -n "$CAMBIOS" ] || exit 0
+
+# Archivos que no requieren fila por sí solos.
+EXENTOS='^(docs/bitacora_ia\.md|\.gitattributes|\.gitignore|uv\.lock|\.python-version)$'
+
+if printf '%s\n' "$CAMBIOS" | grep -Ev "$EXENTOS" | grep -q .; then
+  if ! printf '%s\n' "$CAMBIOS" | grep -qx 'docs/bitacora_ia.md'; then
+    echo "⛔ Falta la bitácora de IA en este commit." >&2
+    echo "   Añade tu fila:  scripts/bitacora.sh <issue> \"qué se pidió a la IA\" \"qué se cambió a mano\"" >&2
+    echo "   Luego:          git add docs/bitacora_ia.md && git commit" >&2
+    echo "   Solo si no hubo IA en este commit: git commit --no-verify" >&2
+    exit 1
+  fi
+fi
+
+exit 0
