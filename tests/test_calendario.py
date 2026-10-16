@@ -14,6 +14,11 @@ def test_ics_valido_y_legible(tmp_path):
     ruta = generar_ics("Entrevista: Cajera", inicio, 45, "Super Demo, Arraiján", "Con Yaritza", tmp_path / "e.ics")
     texto = ruta.read_text(encoding="utf-8")
     assert texto.startswith("BEGIN:VCALENDAR") and "END:VCALENDAR" in texto
+    crudo = ruta.read_bytes()
+    for requerido in (b"DTSTAMP:", b"UID:", b"DTSTART:", b"BEGIN:VEVENT", b"END:VEVENT"):
+        assert requerido in crudo, requerido
+    assert b"\r\n" in crudo
+    assert b"\n" not in crudo.replace(b"\r\n", b"")
     cal = ics.Calendar(texto)
     assert len(cal.events) == 1
     ev = next(iter(cal.events))

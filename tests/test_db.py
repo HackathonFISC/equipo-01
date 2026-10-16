@@ -129,3 +129,28 @@ def test_registrar_decision(conn):
     fila = conn.execute("SELECT * FROM decisiones WHERE id = ?", (did,)).fetchone()
     assert (fila["agente"], fila["razon"]) == ("postulacion", "r")
     assert fila["timestamp"]
+
+
+def test_registrar_decision_como_dict_del_grafo(conn):
+    """Los nodos Auditor, Formación y el tablero emiten dicts con timestamp ISO en texto."""
+    did = db.registrar_decision(
+        conn,
+        {
+            "agente": "auditor",
+            "entrada_resumen": "3 matches",
+            "salida_resumen": "sin sesgo",
+            "razon": "contrafactuales iguales",
+            "timestamp": "2026-10-16T14:00:00Z",
+        },
+    )
+    fila = conn.execute("SELECT * FROM decisiones WHERE id = ?", (did,)).fetchone()
+    assert (fila["agente"], fila["entrada_resumen"]) == ("auditor", "3 matches")
+    assert (fila["salida_resumen"], fila["razon"]) == ("sin sesgo", "contrafactuales iguales")
+    assert fila["timestamp"] == "2026-10-16T14:00:00Z"
+
+
+def test_registrar_decision_dict_sin_timestamp_usa_la_hora_actual(conn):
+    did = db.registrar_decision(
+        conn, {"agente": "formacion", "entrada_resumen": "e", "salida_resumen": "s", "razon": "r"}
+    )
+    assert conn.execute("SELECT timestamp FROM decisiones WHERE id = ?", (did,)).fetchone()[0]

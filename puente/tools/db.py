@@ -10,7 +10,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from puente.tools._contratos import Decision, Oferta, Perfil
+from puente.tools._contratos import Decision, Oferta, Perfil, _campo
 
 PERFIL_LISTO = "perfil_listo"
 PRESELECCIONADO = "preseleccionado"
@@ -164,9 +164,13 @@ def cambiar_estado(conn: sqlite3.Connection, postulacion_id: int, nuevo, motivo:
         )
 
 
-def registrar_decision(conn: sqlite3.Connection, decision: Decision) -> int:
-    """Guarda una Decision en la tabla decisiones y devuelve su id."""
-    marca = getattr(decision, "timestamp", None)
+def registrar_decision(conn: sqlite3.Connection, decision: Decision | dict) -> int:
+    """Guarda una Decision (modelo o dict) en la tabla decisiones y devuelve su id.
+
+    Los nodos del grafo guardan las decisiones como dict con ``timestamp`` en texto ISO;
+    aquí se aceptan ambas formas y el timestamp puede ser datetime o str.
+    """
+    marca = _campo(decision, "timestamp", None)
     if hasattr(marca, "isoformat"):
         marca = marca.isoformat(timespec="seconds")
     with conn:
@@ -174,11 +178,11 @@ def registrar_decision(conn: sqlite3.Connection, decision: Decision) -> int:
             "INSERT INTO decisiones (agente, entrada_resumen, salida_resumen, razon, timestamp) "
             "VALUES (?, ?, ?, ?, ?)",
             (
-                decision.agente,
-                decision.entrada_resumen,
-                decision.salida_resumen,
-                decision.razon,
-                marca or _ahora(),
+                str(_campo(decision, "agente")),
+                str(_campo(decision, "entrada_resumen")),
+                str(_campo(decision, "salida_resumen")),
+                str(_campo(decision, "razon")),
+                str(marca) if marca else _ahora(),
             ),
         )
     return int(cur.lastrowid)

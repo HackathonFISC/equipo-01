@@ -29,6 +29,8 @@ def generar_ics(
         duration=timedelta(minutes=duracion_min),
         location=lugar,
         description=descripcion,
+        # ics 0.7 serializa ``created`` como DTSTAMP, obligatorio en VEVENT (RFC 5545 3.6.1).
+        created=datetime.now(timezone.utc),
     )
     calendario = Calendar()
     calendario.events.add(evento)
