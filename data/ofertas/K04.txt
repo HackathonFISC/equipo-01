@@ -1,10 +1,8 @@
 ID: K04
 Fuente: Konzerta Panamá
-URL: https://www.konzerta.com/empleos/oficial-de-verificacion-corporacion-el-sol-1118464512.html
-Fecha de consulta: 2026-10-16
 Estado de vigencia: no verificado; muestra de un anuncio consultable
 Puesto: Oficial de verificación
-Empresa publicada: Corporación El Sol
+Empresa de prueba: Empresa R (finanzas, Juan Díaz)
 Zona publicada: Juan Díaz
 Salario mensual: no publicado en la página consultada
 Resumen de tareas: Verificación de documentos y registro de información en sistema; comunicación con clientes y personal interno.

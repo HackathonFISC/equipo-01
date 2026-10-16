@@ -4,15 +4,48 @@
   "genero": "mujer",
   "edad": 20,
   "corregimiento": "La Chorrera",
-  "horario_libre": "Lunes a viernes 08:00-17:00; estudia de noche 18:30-21:30",
-  "horario_clases": "18:30-21:30",
+  "horario_libre": [
+    {
+      "dias": [
+        "lunes",
+        "martes",
+        "miercoles",
+        "jueves",
+        "viernes"
+      ],
+      "hora_inicio": "08:00",
+      "hora_fin": "17:00"
+    }
+  ],
+  "horario_clases": [
+    {
+      "dias": [
+        "lunes",
+        "martes",
+        "miercoles",
+        "jueves",
+        "viernes"
+      ],
+      "hora_inicio": "18:30",
+      "hora_fin": "21:30"
+    }
+  ],
   "salario_minimo": 600,
-  "presupuesto_pasaje_diario": 3.00,
+  "presupuesto_pasaje_diario": 3.0,
   "experiencia_texto": "Ayudo en la fonda de mi mamá: atiendo pedidos, cobro en caja y cuento los productos que quedan al cerrar.",
   "habilidades": [
-    {"skill_id": "atencion_cliente", "evidencia": "atiendo pedidos"},
-    {"skill_id": "manejo_caja", "evidencia": "cobro en caja"},
-    {"skill_id": "inventario", "evidencia": "cuento los productos que quedan al cerrar"}
+    {
+      "skill_id": "atencion_cliente",
+      "evidencia": "atiendo pedidos"
+    },
+    {
+      "skill_id": "manejo_caja",
+      "evidencia": "cobro en caja"
+    },
+    {
+      "skill_id": "inventario",
+      "evidencia": "cuento los productos que quedan al cerrar"
+    }
   ],
   "datos_sinteticos": true
 }

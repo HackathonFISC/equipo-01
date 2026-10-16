@@ -1,10 +1,9 @@
 ID: CT16
 Fuente: Computrabajo Panamá
-URL: https://pa.computrabajo.com/ofertas-de-trabajo/oferta-de-trabajo-de-runner-de-restaurante-asistente-de-servicio-en-panama-A73EF1BF32AE497861373E686DCF3405
-Fecha de consulta: 2026-10-16
 Estado de vigencia: no verificado; muestra de un anuncio consultable
 Puesto: Runner de restaurante - Asistente de servicio
-Empresa y ubicación publicadas: Importante empresa del sector - Panamá, Panamá
+Empresa de prueba: Empresa E (restauración, Panamá, Panamá)
+Ubicación publicada: Panamá, Panamá
 Salario/contrato/jornada publicados: 650.00 $ (Mensual); Contrato por tiempo indefinido; Tiempo Completo
 Resumen de tareas: Apoyo al servicio en restaurante y entrega de platos de cocina a mesas.
 Requisitos publicados: Educación mínima: Bachillerato / Educación Media; años de experiencia; Conocimientos: Comunicación, Dinamismo, Gestión de equipos, Proactividad, Trabajo en equipo, Cocina, Organización, Pedidos, Presentacion, Elaboración de bebidas

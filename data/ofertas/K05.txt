@@ -1,10 +1,8 @@
 ID: K05
 Fuente: Konzerta Panamá
-URL: https://www.konzerta.com/empleos/mercaderista-grupo-melo-1118238026.html
-Fecha de consulta: 2026-10-16
 Estado de vigencia: no verificado; muestra de un anuncio consultable
 Puesto: Mercaderista
-Empresa publicada: Grupo Melo
+Empresa de prueba: Empresa S (comercio, Juan Díaz)
 Zona publicada: Juan Díaz
 Salario mensual: no publicado en la página consultada
 Resumen de tareas: Rotación de mercancía y control de inventarios de productos de consumo masivo.

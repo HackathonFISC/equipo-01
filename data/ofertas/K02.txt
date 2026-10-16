@@ -1,10 +1,8 @@
 ID: K02
 Fuente: Konzerta Panamá
-URL: https://www.konzerta.com/empleos/ayudante-general-1118453487.html
-Fecha de consulta: 2026-10-16
 Estado de vigencia: no verificado; muestra de un anuncio consultable
 Puesto: Ayudante general / dependiente
-Empresa publicada: Confidencial
+Empresa de prueba: Empresa P (comercio, 24 de Diciembre)
 Zona publicada: 24 de Diciembre
 Salario mensual: no publicado en la página consultada
 Resumen de tareas: Puesto de dependiente presencial de jornada completa.
