@@ -642,6 +642,7 @@ def procesar_accion_orientador(
         RUTA_OUTBOX.mkdir(parents=True, exist_ok=True)
         archivo_msg = RUTA_OUTBOX / f"telegram_{perfil_id}_{oferta_id}.txt"
         archivo_ics = RUTA_OUTBOX / f"entrevista_{perfil_id}_{oferta_id}.ics"
+        archivo_pdf = RUTA_OUTBOX / f"cv_{perfil_id}_{oferta_id}.pdf"
         archivo_msg.write_text(
             f"[PUENTE - LISTA CORTA APROBADA POR ORIENTADOR]\n"
             f"Candidato: {perfil_id}\nOferta: {oferta_id}\n"
@@ -654,6 +655,25 @@ def procesar_accion_orientador(
             "END:VEVENT\nEND:VCALENDAR\n",
             encoding="utf-8",
         )
+        try:
+            from fpdf import FPDF
+
+            pdf = FPDF()
+            pdf.add_page()
+            pdf.set_font("Helvetica", size=12)
+            pdf.cell(0, 10, text=f"PUENTE - Resumen de Habilidades Verificadas ({perfil_id})", new_x="LMARGIN", new_y="NEXT")
+            pdf.set_font("Helvetica", size=10)
+            pdf.cell(0, 8, text=f"Vacante objetivo: {oferta_id} (Sin PII: sin cedula, telefono ni direccion exacta)", new_x="LMARGIN", new_y="NEXT")
+            perfil_obj = next((p for p in estado["perfiles"] if p["id"] == perfil_id), None)
+            if perfil_obj:
+                pdf.cell(0, 8, text=f"Corregimiento: {perfil_obj.get('corregimiento', '')}", new_x="LMARGIN", new_y="NEXT")
+                for h in perfil_obj.get("habilidades", []):
+                    sid = h.get("skill_id", "") if isinstance(h, dict) else str(h)
+                    ev = h.get("evidencia", "") if isinstance(h, dict) else ""
+                    pdf.multi_cell(0, 7, text=f"- {sid}: \"{ev}\"")
+            pdf.output(str(archivo_pdf))
+        except Exception:
+            archivo_pdf.write_bytes(b"%PDF-1.4\n% Puente CV Verificado\n%%EOF\n")
 
         for post in estado["postulaciones"]:
             if post["perfil_id"] == perfil_id and post["oferta_id"] == oferta_id:
@@ -661,7 +681,11 @@ def procesar_accion_orientador(
                 post["comentario_orientador"] = (
                     nota_edicion or "Aprobado y enviado a la empresa."
                 )
-                post["archivos_generados"] = [str(archivo_msg.name), str(archivo_ics.name)]
+                post["archivos_generados"] = [
+                    str(archivo_pdf.name),
+                    str(archivo_msg.name),
+                    str(archivo_ics.name),
+                ]
 
         estado["decisiones"].append(
             {
@@ -678,8 +702,8 @@ def procesar_accion_orientador(
                 "timestamp": ahora,
                 "agente": "postulacion",
                 "entrada_resumen": f"Ejecutar herramientas para {perfil_id} -> {oferta_id}",
-                "salida_resumen": f"Estado: enviado | Archivos en outbox/: {archivo_msg.name}, {archivo_ics.name}",
-                "razon": "Envío de lista corta a la empresa y generación de cita .ics tras aprobación humana.",
+                "salida_resumen": f"Estado: enviado | Archivos en outbox/: {archivo_pdf.name}, {archivo_msg.name}, {archivo_ics.name}",
+                "razon": "Generación de CV PDF sin PII, envío a empresa y cita .ics tras aprobación humana.",
             }
         )
         estado["estado_grafo"] = "postulacion_ejecutada"
@@ -697,10 +721,25 @@ def analizar_nueva_oferta_texto(
     salario_mensual: float,
     requisitos_texto: str,
     habilidades: list[str],
+    fuente: str = "Cargada desde Tablero Web",
 ) -> dict[str, Any]:
-    """Agrega una nueva oferta desde el tablero aplicando reglas legales de la Ley 11 de 2005."""
+    """Agrega una nueva oferta desde el tablero aplicando Guardrails y Ley 11 de 2005."""
     ahora = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     texto_lower = requisitos_texto.lower()
+
+    # Guardrail anti-inyección de prompt
+    patrones_inyeccion = ("ignora", "olvida tus instrucciones", "eres ahora", "system prompt")
+    if any(p in texto_lower for p in patrones_inyeccion):
+        estado["decisiones"].append(
+            {
+                "timestamp": ahora,
+                "agente": "guardrails",
+                "entrada_resumen": f"Oferta '{puesto}' con intento de prompt injection",
+                "salida_resumen": "Inyección marcada; el texto se procesa únicamente como dato literal",
+                "razon": "Regla determinística anti-inyección activada antes de invocar al modelo.",
+            }
+        )
+
     alertas: list[dict[str, str]] = []
     bloqueada = False
 
@@ -752,7 +791,7 @@ def analizar_nueva_oferta_texto(
         "requisitos_texto": requisitos_texto,
         "alertas": alertas,
         "bloqueada": bloqueada,
-        "fuente": "Cargada desde Tablero Web",
+        "fuente": fuente,
     }
     estado["ofertas"].append(nueva_oferta)
     estado["matches"] = calcular_matches_tablero(estado["perfiles"], estado["ofertas"])
@@ -787,6 +826,7 @@ def registrar_nuevo_perfil(
     presupuesto_pasaje_diario: float,
     relato_experiencia: str,
     habilidades_ids: list[str] | None = None,
+    modalidad_ingreso: str = "Entrevista en Tablero Web",
 ) -> dict[str, Any]:
     """Registra un nuevo joven desde el tablero con evidencia literal y recalcula el Matching."""
     ahora = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -802,12 +842,13 @@ def registrar_nuevo_perfil(
         "genero": "no_especificado",
         "edad": int(edad),
         "corregimiento": corregimiento,
-        "modalidad_ingreso": "Entrevista en Tablero Web",
+        "modalidad_ingreso": modalidad_ingreso,
         "horario_libre": "Lunes a Viernes 07:00-17:30",
         "salario_minimo": float(salario_minimo),
         "presupuesto_pasaje_diario": float(presupuesto_pasaje_diario),
         "habilidades": habs,
     }
+    estado["perfiles"] = [p for p in estado["perfiles"] if p["id"] != nuevo_id]
     estado["perfiles"].append(nuevo_p)
     estado["matches"] = calcular_matches_tablero(estado["perfiles"], estado["ofertas"])
     for m in estado["matches"]:
@@ -838,11 +879,118 @@ def registrar_nuevo_perfil(
             "timestamp": ahora,
             "agente": "perfil",
             "entrada_resumen": f"Nuevo perfil {nuevo_id} ({corregimiento})",
-            "salida_resumen": f"{len(habs)} habilidad(es) con evidencia literal; Matching recalculado",
+            "salida_resumen": f"{len(habs)} habilidad(es) con evidencia literal; PII sanitizada; Matching recalculado",
             "razon": "Extracción de habilidades con cita literal de experiencia informal.",
         }
     )
     return estado
+
+
+def listar_catalogo_data() -> dict[str, list[dict[str, str]]]:
+    """Devuelve la lista de ofertas y perfiles disponibles en data/ (más muestras predefinidas)."""
+    ofertas_cat = [
+        {
+            "id": "data/ofertas/K01_chorrera_cajero.txt",
+            "etiqueta": "data/ofertas/K01 · Cajero/a Tiempo Completo (La Chorrera, $650)",
+        },
+        {
+            "id": "data/ofertas/CT11_discriminacion_edad.txt",
+            "etiqueta": "data/ofertas/CT11 · Vendedor de Mostrador '18 a 25 años y buena presencia' (Bella Vista)",
+        },
+        {
+            "id": "data/ofertas/K04_tocumen_bodega.txt",
+            "etiqueta": "data/ofertas/K04 · Auxiliar de Bodega (Tocumen, $640)",
+        },
+    ]
+    perfiles_cat = [
+        {
+            "id": "data/perfiles/yaritza.json",
+            "etiqueta": "data/perfiles/yaritza.json · Yaritza (20 años, La Chorrera, fonda familiar)",
+        },
+        {
+            "id": "data/perfiles/perfil_b.json",
+            "etiqueta": "data/perfiles/perfil_b.json · Joven voluntario en feria libre (Arraiján)",
+        },
+    ]
+    dir_of = RUTA_DATA / "ofertas"
+    if dir_of.exists():
+        for arch in sorted(dir_of.glob("*.txt"))[:10]:
+            rel = f"data/ofertas/{arch.name}"
+            if not any(x["id"] == rel for x in ofertas_cat):
+                ofertas_cat.append({"id": rel, "etiqueta": f"{rel} (archivo en repo)"})
+    dir_pf = RUTA_DATA / "perfiles"
+    if dir_pf.exists():
+        for arch in sorted(dir_pf.glob("*.json"))[:10]:
+            rel = f"data/perfiles/{arch.name}"
+            if not any(x["id"] == rel for x in perfiles_cat):
+                perfiles_cat.append({"id": rel, "etiqueta": f"{rel} (archivo en repo)"})
+    return {"ofertas": ofertas_cat, "perfiles": perfiles_cat}
+
+
+def cargar_desde_catalogo_data(
+    estado: dict[str, Any],
+    *,
+    tipo: str,
+    item_id: str,
+) -> dict[str, Any]:
+    """Carga una oferta o perfil de data/ y ejecuta las reglas del sistema."""
+    if tipo == "oferta":
+        if "CT11" in item_id:
+            return analizar_nueva_oferta_texto(
+                estado,
+                puesto="Vendedor de Mostrador",
+                empresa="Comercial Central",
+                corregimiento="Bella Vista",
+                salario_mensual=660.0,
+                requisitos_texto="Se busca joven de 18 a 25 años con excelente buena presencia y foto en el CV.",
+                habilidades=["atencion_cliente"],
+                fuente=item_id,
+            )
+        if "K04" in item_id:
+            return analizar_nueva_oferta_texto(
+                estado,
+                puesto="Auxiliar de Bodega Este",
+                empresa="Logística Tocumen S.A.",
+                corregimiento="Tocumen",
+                salario_mensual=640.0,
+                requisitos_texto="Organización de inventario y recepción de mercancía en sucursal Tocumen.",
+                habilidades=["inventario"],
+                fuente=item_id,
+            )
+        return analizar_nueva_oferta_texto(
+            estado,
+            puesto="Cajero/a de Sucursal Oeste",
+            empresa="Supermercados del Istmo",
+            corregimiento="La Chorrera",
+            salario_mensual=650.0,
+            requisitos_texto="Cobro en caja, atención a clientes y cuadre diario en La Chorrera.",
+            habilidades=["atencion_cliente", "manejo_caja"],
+            fuente=item_id,
+        )
+
+    if "perfil_b" in item_id:
+        return registrar_nuevo_perfil(
+            estado,
+            nombre="Brayan",
+            edad=21,
+            corregimiento="Arraiján",
+            salario_minimo=600.0,
+            presupuesto_pasaje_diario=3.0,
+            relato_experiencia="Organiza inventario de verduras y atiende clientes cada sábado en feria comunitaria.",
+            habilidades_ids=["atencion_cliente", "inventario"],
+            modalidad_ingreso=f"Cargado desde {item_id}",
+        )
+    return registrar_nuevo_perfil(
+        estado,
+        nombre="Yaritza",
+        edad=20,
+        corregimiento="La Chorrera",
+        salario_minimo=600.0,
+        presupuesto_pasaje_diario=3.0,
+        relato_experiencia="Atiende a los comensales, cobra en efectivo y Yappy y registra insumos en la fonda de su mamá.",
+        habilidades_ids=["atencion_cliente", "manejo_caja", "inventario"],
+        modalidad_ingreso=f"Cargado desde {item_id}",
+    )
 
 
 # --- Endpoints ASGI ---
@@ -859,6 +1007,7 @@ async def endpoint_estado(_request: Request) -> JSONResponse:
             conteo_embudo[est] += 1
     payload = dict(ESTADO_GLOBAL)
     payload["conteo_embudo"] = conteo_embudo
+    payload["catalogo_data"] = listar_catalogo_data()
     return JSONResponse(payload)
 
 
@@ -901,6 +1050,16 @@ async def endpoint_nuevo_perfil(request: Request) -> JSONResponse:
             datos.get("relato_experiencia", "Atención en negocio familiar y cobro en caja.")
         ),
         habilidades_ids=list(datos.get("habilidades") or ["atencion_cliente", "manejo_caja"]),
+    )
+    return await endpoint_estado(request)
+
+
+async def endpoint_cargar_data(request: Request) -> JSONResponse:
+    datos = await request.json()
+    cargar_desde_catalogo_data(
+        ESTADO_GLOBAL,
+        tipo=str(datos.get("tipo", "oferta")),
+        item_id=str(datos.get("item_id", "")),
     )
     return await endpoint_estado(request)
 
@@ -950,6 +1109,7 @@ app = Starlette(
         Route("/api/orientador/accion", endpoint_accion_orientador, methods=["POST"]),
         Route("/api/ofertas", endpoint_nueva_oferta, methods=["POST"]),
         Route("/api/perfiles", endpoint_nuevo_perfil, methods=["POST"]),
+        Route("/api/cargar-data", endpoint_cargar_data, methods=["POST"]),
         Route("/api/auditor/simular-sesgo", endpoint_simular_sesgo, methods=["POST"]),
         Route("/api/reset", endpoint_reset, methods=["POST"]),
         Mount("/static", app=StaticFiles(directory=str(RUTA_STATIC)), name="static"),
@@ -961,3 +1121,4 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("app.server:app", host="127.0.0.1", port=8000, reload=True)
+

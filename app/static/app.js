@@ -86,6 +86,20 @@ function actualizarSelectorPerfiles() {
   if ([...select.options].some((o) => o.value === valorPrevio)) {
     select.value = valorPrevio;
   }
+
+  const cat = estadoActual.catalogo_data || { ofertas: [], perfiles: [] };
+  const selOf = document.getElementById("select-data-oferta");
+  if (selOf) {
+    selOf.innerHTML = (cat.ofertas || [])
+      .map((x) => `<option value="${escaparHtml(x.id)}">${escaparHtml(x.etiqueta)}</option>`)
+      .join("");
+  }
+  const selPf = document.getElementById("select-data-perfil");
+  if (selPf) {
+    selPf.innerHTML = (cat.perfiles || [])
+      .map((x) => `<option value="${escaparHtml(x.id)}">${escaparHtml(x.etiqueta)}</option>`)
+      .join("");
+  }
 }
 
 function renderizarListaCorta() {
@@ -501,5 +515,37 @@ document.addEventListener("DOMContentLoaded", () => {
     mostrarToast("Nuevo perfil joven registrado y Solver CP-SAT recalculado.");
   });
 
+  // Cargar oferta o perfil desde data/
+  const btnDataOf = document.getElementById("btn-cargar-data-oferta");
+  if (btnDataOf) {
+    btnDataOf.addEventListener("click", async () => {
+      const itemId = document.getElementById("select-data-oferta").value;
+      const resp = await fetch("/api/cargar-data", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tipo: "oferta", item_id: itemId }),
+      });
+      estadoActual = await resp.json();
+      renderizarTodo();
+      mostrarToast(`Oferta cargada desde ${itemId}`);
+    });
+  }
+
+  const btnDataPf = document.getElementById("btn-cargar-data-perfil");
+  if (btnDataPf) {
+    btnDataPf.addEventListener("click", async () => {
+      const itemId = document.getElementById("select-data-perfil").value;
+      const resp = await fetch("/api/cargar-data", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tipo: "perfil", item_id: itemId }),
+      });
+      estadoActual = await resp.json();
+      renderizarTodo();
+      mostrarToast(`Perfil cargado desde ${itemId}`);
+    });
+  }
+
   cargarEstado();
 });
+

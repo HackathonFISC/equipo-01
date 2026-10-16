@@ -87,6 +87,18 @@
         </div>
       </div>
 
+      <div class="info-banner" style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.75rem;">
+        <div>
+          <strong>📂 Cargar desde <code>data/</code>:</strong> Selecciona una oferta o perfil del repositorio para procesarlo en vivo.
+        </div>
+        <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;">
+          <select id="select-data-oferta" class="input-select"></select>
+          <button type="button" id="btn-cargar-data-oferta" class="btn btn-primary">Cargar Oferta</button>
+          <select id="select-data-perfil" class="input-select"></select>
+          <button type="button" id="btn-cargar-data-perfil" class="btn btn-primary">Cargar Perfil</button>
+        </div>
+      </div>
+
       <div id="contenedor-matches" class="cards-stack"></div>
 
       <details class="collapsible-form">
@@ -313,3 +325,4 @@
   <script src="/static/app.js"></script>
 </body>
 </html>
+
