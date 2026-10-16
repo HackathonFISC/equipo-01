@@ -3,24 +3,30 @@
 Modelo de lenguaje en el borde, código en el centro:
 - El código quita cédula, teléfono y dirección exacta por regex ANTES de armar el prompt;
   del domicilio solo se guarda el corregimiento.
-- El LLM propone habilidades (skill_id + frase literal que la respalda).
+- El LLM propone habilidades (skill_id + frase literal que la respalda) con el esquema
+  `PerfilExtraido` del contrato, a través de `puente.llm` (#45), la única puerta al modelo.
 - El código descarta toda habilidad cuya evidencia no aparezca literalmente en el texto del
   joven (tras normalizar espacios y mayúsculas) o cuyo skill_id no exista en la taxonomía.
-- Edad, corregimiento, horarios, salario mínimo y pasaje vienen de un formulario fijo; el LLM
-  no los extrae ni los adivina.
+- Edad, corregimiento, horarios, salario mínimo y pasaje vienen de un formulario fijo; si el LLM
+  los devuelve en `PerfilExtraido`, se ignoran y quedan anotados en la Decision. El código arma
+  el `Perfil` con las habilidades verificadas más los datos del formulario.
+- Las fotos de CV se leen con OCR local: la imagen (y la cédula) nunca llega al LLM.
 - La entrevista corre fuera del grafo (`entrevistar()`, o el modo terminal
   `uv run python -m puente.agents.perfil --entrevista`) y entra al grafo ya completa como un
   elemento de `entradas_perfil` (`entrada_entrevista()`), sin un `interrupt()` por pregunta.
 
 La taxonomía (#5) y el LLM entran por inyección de dependencias: los tests pasan falsos y
-no necesitan red, claves ni `puente.rules.taxonomia`.
+no necesitan red, claves, `puente.llm` ni `puente.rules.taxonomia`.
+
+Grabar y reproducir la entrevista de Yaritza (requiere `puente/llm.py` y una clave para grabar):
+    LLM_MODO=grabar uv run python -m puente.agents.perfil --desde tests/fixtures/perfiles_eval.json --id yaritza
+    LLM_MODO=reproducir uv run python -m puente.agents.perfil --desde tests/fixtures/perfiles_eval.json --id yaritza
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import unicodedata
 from collections.abc import Callable, Iterable
@@ -36,15 +42,21 @@ from puente.schemas import (
     HabilidadPerfil,
     Horario,
     Perfil,
+    PerfilExtraido,
 )
 
 AGENTE = "perfil"
-MODELO_POR_DEFECTO = "gemini-2.5-flash"
 MAX_PREGUNTAS = 5
 # Una evidencia de 1 o 2 palabras ("caja", "sí") aparece en casi cualquier texto y no respalda nada.
 MIN_CARACTERES_EVIDENCIA = 8
 
-LLM = Callable[[str], str]
+# llm(prompt, sistema=...) -> PerfilExtraido. También se acepta un dict o un texto JSON con esa forma
+# (respuestas grabadas, falsos de los tests); el código lo valida contra PerfilExtraido.
+LLM = Callable[..., PerfilExtraido | dict[str, Any] | str]
+# Campos de PerfilExtraido que manda el formulario fijo: si el LLM los trae, se ignoran.
+CAMPOS_DEL_FORMULARIO_EN_EXTRAIDO = (
+    "edad", "corregimiento", "ubicacion_texto", "salario_minimo", "horario_libre", "horario_clases",
+)
 Normalizador = Callable[[str, dict[str, dict]], str | None]
 
 # Solo habilidades: edad, corregimiento, horarios, salario y pasaje van en el formulario fijo.
@@ -150,7 +162,7 @@ def tiene_evidencia(evidencia: str, fuentes: Iterable[str]) -> bool:
 
 
 def filtrar_habilidades(
-    propuestas: list[dict[str, Any]],
+    propuestas: Iterable[HabilidadPerfil | dict[str, Any]],
     fuentes: list[str],
     taxonomia: dict[str, dict],
     normalizar: Normalizador,
@@ -160,6 +172,8 @@ def filtrar_habilidades(
     descartes: list[str] = []
     vistos: set[str] = set()
     for propuesta in propuestas:
+        if isinstance(propuesta, HabilidadPerfil):
+            propuesta = propuesta.model_dump()
         if not isinstance(propuesta, dict):
             descartes.append(f"propuesta no es un objeto: {propuesta!r}")
             continue
@@ -350,24 +364,27 @@ def medir_habilidades(pares: Iterable[tuple[Iterable[str], Iterable[str]]]) -> d
 # ---------------------------------------------------------------- LLM
 
 
-def llm_gemini(prompt: str) -> str:  # pragma: no cover - requiere red y GOOGLE_API_KEY
-    from langchain_google_genai import ChatGoogleGenerativeAI
+def llm_puente(prompt: str, *, sistema: str) -> PerfilExtraido:
+    """LLM por defecto: la capa común de #45. Import diferido para que los tests no la necesiten.
 
-    modelo = os.getenv("PUENTE_MODELO_LLM", MODELO_POR_DEFECTO)
-    respuesta = ChatGoogleGenerativeAI(model=modelo, temperature=0).invoke(prompt)
-    contenido = respuesta.content
-    if isinstance(contenido, list):
-        contenido = "".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in contenido)
-    return str(contenido)
+    Proveedor, modelo y modo (vivo, grabar, reproducir) se eligen por entorno en `puente.llm`.
+    Sus errores llegan como `ErrorLLM` (un RuntimeError) y el nodo los pasa a `errores`.
+    """
+    try:
+        from puente.llm import generar_estructurado
+    except ImportError as exc:
+        raise RuntimeError("falta puente/llm.py (#45): no hay LLM; usa --reproducir o un llm inyectado") from exc
+    return generar_estructurado(prompt, PerfilExtraido, sistema=sistema, agente=AGENTE, cache_sistema=True)
 
 
-def construir_prompt(texto: str, modo: str, taxonomia: dict[str, dict]) -> str:
+def construir_prompt(texto: str, modo: str, taxonomia: dict[str, dict]) -> tuple[str, str]:
+    """(sistema, prompt). El sistema es fijo por modo y taxonomía; solo el prompt lleva el texto del joven."""
     catalogo = "\n".join(
         f"- {sid}: {d.get('nombre_es', sid)}" + (f" (también: {', '.join(d['sinonimos'])})" if d.get("sinonimos") else "")
         for sid, d in sorted(taxonomia.items())
     )
     fuente = "el CV" if modo == "cv" else "las respuestas de la entrevista"
-    return f"""Eres el agente Perfil de Puente, un servicio de empleo juvenil en Panamá.
+    sistema = f"""Eres el agente Perfil de Puente, un servicio de empleo juvenil en Panamá.
 Lee {fuente} y lista las habilidades laborales de la persona, incluidas las informales
 (negocio familiar, voluntariado, oficios). No inventes nada.
 
@@ -376,25 +393,40 @@ Reglas:
 {catalogo}
 - Para cada habilidad copia en "evidencia" una frase LITERAL, sin cambiar palabras, de {fuente}.
 - Si no hay frase que la respalde, no la incluyas.
-- No extraigas edad, lugar, horarios ni dinero: esos datos llegan por un formulario aparte.
-
-Responde solo JSON con esta forma:
-{{"habilidades": [{{"skill_id": "...", "evidencia": "..."}}]}}
-
-Texto:
+- Llena solo "habilidades". Deja vacíos o nulos los demás campos (edad, lugar, horarios, dinero):
+  esos datos llegan por un formulario aparte."""
+    prompt = f"""Texto:
 <<<
 {texto}
 >>>"""
+    return sistema, prompt
 
 
-def _parsear_json(respuesta: str) -> dict[str, Any]:
-    inicio, fin = respuesta.find("{"), respuesta.rfind("}")
-    if inicio == -1 or fin <= inicio:
-        raise ValueError(f"el LLM no devolvió JSON: {respuesta[:120]!r}")
-    datos = json.loads(respuesta[inicio : fin + 1])
-    if not isinstance(datos, dict):
-        raise ValueError("el LLM devolvió JSON que no es un objeto")
-    return datos
+def _como_extraido(salida: PerfilExtraido | dict[str, Any] | str) -> PerfilExtraido:
+    """Valida la salida del LLM contra PerfilExtraido. ValueError si no tiene esa forma."""
+    if isinstance(salida, PerfilExtraido):
+        return salida
+    if isinstance(salida, str):
+        inicio, fin = salida.find("{"), salida.rfind("}")
+        if inicio == -1 or fin <= inicio:
+            raise ValueError(f"el LLM no devolvió JSON: {salida[:120]!r}")
+        try:
+            salida = json.loads(salida[inicio : fin + 1])
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"el LLM devolvió JSON inválido: {exc}") from exc
+    try:
+        return PerfilExtraido.model_validate(salida)
+    except ValidationError as exc:
+        raise ValueError(f"la salida del LLM no cumple PerfilExtraido: {exc.errors()[0]['msg']}") from exc
+
+
+def _ignorados_del_llm(extraido: PerfilExtraido) -> list[str]:
+    """Campos del formulario que el LLM llenó igual; no se usan, solo se anotan."""
+    return [
+        f"{campo}={valor!r}"
+        for campo in CAMPOS_DEL_FORMULARIO_EN_EXTRAIDO
+        if (valor := getattr(extraido, campo)) not in (None, [], "")
+    ]
 
 
 def _horarios(valor: Any, avisos: list[str]) -> list[Horario]:
@@ -417,7 +449,7 @@ def construir_perfil(
     *,
     taxonomia: dict[str, dict],
     normalizar: Normalizador,
-    llm: LLM = llm_gemini,
+    llm: LLM = llm_puente,
     corregimientos: Iterable[str] = CORREGIMIENTOS,
     ocr: Callable[[Path], str] | None = None,
 ) -> tuple[Perfil, Decision]:
@@ -425,7 +457,7 @@ def construir_perfil(
 
     `entrada` trae `id` y uno de: `cv_texto`, `cv_ruta` (PDF o foto) o `respuestas`
     (máximo 5, en el orden de PREGUNTAS_ENTREVISTA), más los campos del formulario
-    (CAMPOS_FORMULARIO). Del LLM solo se toman habilidades; lo demás que devuelva se ignora.
+    (CAMPOS_FORMULARIO). Del `PerfilExtraido` del LLM solo se toman habilidades; lo demás se ignora.
     Sin corregimiento en el formulario, el código lo busca en el texto del joven, nunca el LLM.
     """
     corregimientos = tuple(corregimientos)
@@ -450,8 +482,9 @@ def construir_perfil(
     else:
         raise ValueError(f"{pid}: sin CV ni respuestas de entrevista")
 
-    datos = _parsear_json(llm(construir_prompt(texto_llm, modo, taxonomia)))
-    habilidades, descartes = filtrar_habilidades(datos.get("habilidades") or [], fuentes, taxonomia, normalizar)
+    sistema, prompt = construir_prompt(texto_llm, modo, taxonomia)
+    extraido = _como_extraido(llm(prompt, sistema=sistema))
+    habilidades, descartes = filtrar_habilidades(extraido.habilidades, fuentes, taxonomia, normalizar)
 
     corregimiento = entrada.get("corregimiento") or detectar_corregimiento(original, corregimientos)
     edad = entrada.get("edad")
@@ -480,6 +513,8 @@ def construir_perfil(
     razon = f"{len(habilidades)} habilidades con evidencia literal"
     if descartes or avisos:
         razon += "; descartadas: " + "; ".join(descartes + avisos)
+    if ignorados := _ignorados_del_llm(extraido):
+        razon += "; ignorado del LLM (manda el formulario): " + ", ".join(ignorados)
     decision = Decision(
         agente=AGENTE,
         entrada_resumen=f"{pid} · {modo} · {len(original)} caracteres (PII quitada antes del LLM)",
@@ -492,7 +527,7 @@ def construir_perfil(
 def nodo_perfil(
     estado: EstadoPuente,
     *,
-    llm: LLM = llm_gemini,
+    llm: LLM = llm_puente,
     taxonomia: dict[str, dict] | None = None,
     normalizar: Normalizador | None = None,
     corregimientos: Iterable[str] = CORREGIMIENTOS,
@@ -538,16 +573,22 @@ def nodo_perfil(
 # ---------------------------------------------------------------- modo terminal (demo H12)
 
 
-def _respuesta_guardada(ruta: str | Path, pid: str) -> str:
-    """Respuesta del LLM grabada en JSON: el objeto de respuesta, un caso con `respuesta_llm`
-    o un archivo de casos (`casos`) del que se toma el caso con `entrada.id == pid`."""
+def _caso_de_archivo(ruta: str | Path, pid: str) -> dict[str, Any]:
+    """El JSON tal cual o, si es un archivo de casos (`casos`), el caso con `entrada.id == pid`."""
     datos = json.loads(Path(ruta).read_text(encoding="utf-8"))
-    if "casos" in datos:
-        caso = next((c for c in datos["casos"] if c.get("entrada", {}).get("id") == pid), None)
-        if caso is None:
-            raise ValueError(f"{ruta}: no hay un caso con id {pid!r}")
-        datos = caso
-    return json.dumps(datos.get("respuesta_llm", datos), ensure_ascii=False)
+    if "casos" not in datos:
+        return datos
+    caso = next((c for c in datos["casos"] if c.get("entrada", {}).get("id") == pid), None)
+    if caso is None:
+        raise ValueError(f"{ruta}: no hay un caso con id {pid!r}")
+    return caso
+
+
+def _respuesta_guardada(ruta: str | Path, pid: str) -> PerfilExtraido:
+    """Respuesta del LLM guardada en JSON: el objeto de respuesta, un caso con `respuesta_llm`
+    o un archivo de casos del que se toma el de `pid`."""
+    datos = _caso_de_archivo(ruta, pid)
+    return _como_extraido(datos.get("respuesta_llm", datos))
 
 
 def _cargar_taxonomia_cli(ruta: str | None, avisar: Callable[[str], Any]) -> tuple[dict[str, dict], Normalizador]:
@@ -572,19 +613,26 @@ def main(
     mostrar: Callable[[str], Any] = print,
     llm: LLM | None = None,
 ) -> int:
-    parser = argparse.ArgumentParser(prog="python -m puente.agents.perfil", description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(
+        prog="python -m puente.agents.perfil",
+        description=__doc__.splitlines()[0],
+        epilog="Sin --reproducir el LLM va por puente.llm: LLM_MODO=vivo|grabar|reproducir elige el modo.",
+    )
     parser.add_argument("--entrevista", action="store_true", help="formulario fijo + 5 preguntas por terminal")
     parser.add_argument("--id", default="joven", help="id del perfil (por defecto: joven)")
-    parser.add_argument("--desde", help="JSON de una entrada ya guardada con --guardar: no pregunta nada")
+    parser.add_argument(
+        "--desde", help="JSON de una entrada guardada con --guardar, o archivo de casos (toma el de --id): no pregunta nada"
+    )
     parser.add_argument("--guardar", help="escribe la entrada (elemento de entradas_perfil) en este JSON")
-    parser.add_argument("--reproducir", help="JSON con la respuesta grabada del LLM; sin red ni claves")
+    parser.add_argument("--reproducir", help="JSON con la respuesta guardada del LLM; sin red, claves ni puente.llm")
     parser.add_argument("--taxonomia", help="CSV de la taxonomía (por defecto data/taxonomia.csv)")
     args = parser.parse_args(argv)
     if not (args.entrevista or args.desde):
         parser.error("usa --entrevista o --desde RUTA")
 
     if args.desde:
-        entrada = json.loads(Path(args.desde).read_text(encoding="utf-8"))
+        datos = _caso_de_archivo(args.desde, args.id)
+        entrada = datos.get("entrada", datos)
     else:
         mostrar("Formulario")
         formulario = pedir_formulario(preguntar, mostrar)
@@ -598,14 +646,14 @@ def main(
     if llm is None and args.reproducir:
         grabada = _respuesta_guardada(args.reproducir, entrada["id"])
 
-        def llm(_prompt: str) -> str:
+        def llm(_prompt: str, **_: Any) -> PerfilExtraido:
             return grabada
     elif llm is None:
-        llm = llm_gemini
+        llm = llm_puente
     taxonomia, normalizar = _cargar_taxonomia_cli(args.taxonomia, mostrar)
     try:
         perfil, decision = construir_perfil(entrada, taxonomia=taxonomia, normalizar=normalizar, llm=llm)
-    except (ValueError, RuntimeError, OSError) as exc:
+    except (ValueError, RuntimeError, OSError) as exc:  # ErrorLLM es un RuntimeError
         mostrar(f"Error: {exc}")
         return 1
     mostrar("\nHabilidades con evidencia:")
