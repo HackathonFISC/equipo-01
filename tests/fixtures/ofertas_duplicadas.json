@@ -1,0 +1,56 @@
+{
+  "_nota": "Datos sintéticos para #43 (dedup por similitud). Empresas ficticias. Se reemplazan por los pares de #3 cuando el PR #27 llegue a main.",
+  "pares_duplicados": [
+    {
+      "nombre": "cajero_konzerta_vs_computrabajo",
+      "a": {
+        "texto": "Supermercado Ficticio La Económica busca Cajero(a) para sucursal de Los Andes. Requisitos: secundaria completa, manejo de caja y atención al cliente. Turno rotativo de lunes a sábado de 07:00 a 15:00. Salario B/. 650 mensuales más incentivos.",
+        "extraida": {"puesto": "Cajero(a)", "empresa": "Supermercado Ficticio La Económica", "corregimiento": "Los Andes", "salario_mensual": 650,
+                     "horario": {"dias": ["lunes", "martes", "miercoles", "jueves", "viernes", "sabado"], "hora_inicio": "07:00", "hora_fin": "15:00"},
+                     "habilidades": ["manejo de caja", "atención al cliente"], "requisitos_texto": "secundaria completa, manejo de caja y atención al cliente"}
+      },
+      "b": {
+        "texto": "SUPERMERCADO FICTICIO LA ECONOMICA busca cajero(a) para su sucursal de Los Andes.\nRequisitos: Secundaria completa, manejo de caja, atención al cliente.\nTurno rotativo lunes a sábado 07:00 a 15:00. Salario: B/.650 mensual + incentivos. ¡Postúlate ya!",
+        "extraida": {"puesto": "Cajero(a)", "empresa": "Supermercado Ficticio La Economica", "corregimiento": "Los Andes", "salario_mensual": 650,
+                     "horario": {"dias": ["lun", "mar", "mie", "jue", "vie", "sab"], "hora_inicio": "07:00", "hora_fin": "15:00"},
+                     "habilidades": ["manejo de caja"], "requisitos_texto": "Secundaria completa, manejo de caja, atención al cliente"}
+      }
+    },
+    {
+      "nombre": "mesero_facebook_vs_encuentra24",
+      "a": {
+        "texto": "Restaurante Ficticio El Fogón solicita mesero o mesera en Bella Vista. Experiencia mínima de 6 meses, trato amable con clientes. Horario de miércoles a domingo de 16:00 a 23:00. Pago B/. 300 quincenal más propinas.",
+        "extraida": {"puesto": "Mesero", "empresa": "Restaurante Ficticio El Fogón", "corregimiento": "Bella Vista", "salario_mensual": 600,
+                     "horario": {"dias": ["miercoles", "jueves", "viernes", "sabado", "domingo"], "hora_inicio": "16:00", "hora_fin": "23:00"},
+                     "habilidades": ["atención al cliente"], "requisitos_texto": "Experiencia mínima de 6 meses, trato amable con clientes"}
+      },
+      "b": {
+        "texto": "Restaurante Ficticio El Fogon solicita mesero o mesera - Bella Vista. Experiencia minima 6 meses y trato amable con los clientes. Horario: miércoles a domingo, 16:00 a 23:00. Pago de B/.300 quincenales + propinas.",
+        "extraida": {"puesto": "mesero", "empresa": "Restaurante Ficticio El Fogon", "corregimiento": "Bella Vista", "salario_mensual": 600,
+                     "horario": {"dias": ["miercoles", "jueves", "viernes", "sabado", "domingo"], "hora_inicio": "16:00", "hora_fin": "23:00"},
+                     "habilidades": ["atención al cliente"], "requisitos_texto": "Experiencia minima 6 meses y trato amable con los clientes"}
+      }
+    }
+  ],
+  "par_distinto": {
+    "nombre": "cajero_otra_empresa_misma_plantilla",
+    "a": {
+      "texto": "Farmacia Ficticia San Judas busca Cajero(a) en Juan Díaz. Requisitos: bachiller, manejo de caja. Lunes a viernes de 08:00 a 16:00. Salario B/. 700 mensuales.",
+      "extraida": {"puesto": "Cajero(a)", "empresa": "Farmacia Ficticia San Judas", "corregimiento": "Juan Díaz", "salario_mensual": 700,
+                   "horario": {"dias": ["lunes", "martes", "miercoles", "jueves", "viernes"], "hora_inicio": "08:00", "hora_fin": "16:00"},
+                   "habilidades": ["manejo de caja"], "requisitos_texto": "bachiller, manejo de caja"}
+    },
+    "b": {
+      "texto": "Ferretería Ficticia El Martillo busca Cajero(a) en Tocumen. Requisitos: bachiller, manejo de caja e inventario. Martes a sábado de 09:00 a 17:00. Salario B/. 620 mensuales.",
+      "extraida": {"puesto": "Cajero(a)", "empresa": "Ferretería Ficticia El Martillo", "corregimiento": "Tocumen", "salario_mensual": 620,
+                   "horario": {"dias": ["martes", "miercoles", "jueves", "viernes", "sabado"], "hora_inicio": "09:00", "hora_fin": "17:00"},
+                   "habilidades": ["manejo de caja"], "requisitos_texto": "bachiller, manejo de caja e inventario"}
+    }
+  },
+  "konzerta_sin_salario": {
+    "texto": "Konzerta · Empresa Ficticia Logística Istmo busca Auxiliar de bodega en Tocumen. Requisitos: bachiller, disponibilidad para turnos. Lunes a viernes de 06:00 a 14:00. Salario: no especificado.",
+    "extraida": {"puesto": "Auxiliar de bodega", "empresa": "Empresa Ficticia Logística Istmo", "corregimiento": "Tocumen", "salario_mensual": 600,
+                 "horario": {"dias": ["lunes", "martes", "miercoles", "jueves", "viernes"], "hora_inicio": "06:00", "hora_fin": "14:00"},
+                 "habilidades": ["inventario"], "requisitos_texto": "bachiller, disponibilidad para turnos"}
+  }
+}

@@ -1,11 +1,14 @@
-"""Agente Mercado: ofertas sucias -> Oferta validada, reglas de discriminación, deduplicación. Issue #5.
+"""Agente Mercado: ofertas sucias -> Oferta validada, reglas de discriminación, deduplicación. Issues #5 y #43.
 
 Reparto de trabajo (AGENTS.md, sección 2):
 - El LLM (Gemini, salida estructurada) solo lee la oferta y llena `OfertaExtraida`.
   El texto de la oferta va como dato entre delimitadores, nunca como instrucción.
 - El código decide todo lo demás: habilidades contra la taxonomía, legalidad con
-  `puente.rules.discriminacion` sobre el texto original, deduplicación por hash y
-  una `Decision` por cada oferta procesada.
+  `puente.rules.discriminacion` sobre el texto original, salario verificado contra el
+  texto (nunca inventado), deduplicación por similitud y una `Decision` por cada oferta
+  procesada y por cada fusión de duplicados.
+- Los PDF con capa de texto se leen con `pypdf` antes de llamar al LLM: el modelo recibe
+  texto delimitado y las reglas corren sobre ese texto, no sobre una transcripción.
 
 El extractor es inyectable (`Extractor`) para que los tests no dependan de red ni de claves.
 """
@@ -13,19 +16,22 @@ El extractor es inyectable (`Extractor`) para que los tests no dependan de red n
 from __future__ import annotations
 
 import base64
+import difflib
 import hashlib
 import mimetypes
 import os
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError
+from pypdf import PdfReader
 
 from puente.rules.discriminacion import esta_bloqueada, revisar_texto
 from puente.rules.taxonomia import RUTA_TAXONOMIA, cargar_taxonomia, normalizar_habilidad, normalizar_texto
-from puente.schemas import Decision, EstadoPuente, Oferta
+from puente.schemas import REQUIERE_CONFIRMACION, Decision, EstadoPuente, Oferta
 
 AGENTE = "mercado"
 MODELO_POR_DEFECTO = "gemini-2.5-flash"
@@ -33,6 +39,8 @@ CLAVE_ENTRADA = "ofertas_crudas"
 EXTENSIONES_IMAGEN = {".jpg", ".jpeg", ".png"}
 EXTENSIONES_ARCHIVO = EXTENSIONES_IMAGEN | {".pdf"}
 DELIMITADOR = "OFERTA"
+UMBRAL_SIMILITUD = 0.85
+MIN_CARACTERES_CAPA_TEXTO = 20
 
 
 # ---------------------------------------------------------------- entrada
@@ -55,6 +63,24 @@ class EntradaOferta:
         if self.ruta is None:
             return "text/plain"
         return mimetypes.guess_type(self.ruta.name)[0] or "application/octet-stream"
+
+
+def leer_capa_de_texto(ruta: Path) -> str:
+    """Texto de un PDF con capa de texto; "" si es escaneado o no se puede leer."""
+    try:
+        return "\n".join(pagina.extract_text() or "" for pagina in PdfReader(ruta).pages).strip()
+    except Exception:  # PDF dañado o cifrado: se manda como archivo y el LLM transcribe
+        return ""
+
+
+def _con_capa_de_texto(entrada: EntradaOferta) -> tuple[EntradaOferta, bool]:
+    """Si la entrada es un PDF con texto suficiente, la convierte en entrada de texto con la misma fuente."""
+    if not entrada.es_archivo or entrada.ruta.suffix.lower() != ".pdf":
+        return entrada, False
+    texto = leer_capa_de_texto(entrada.ruta)
+    if len("".join(texto.split())) < MIN_CARACTERES_CAPA_TEXTO:
+        return entrada, False
+    return EntradaOferta(texto=texto, fuente=entrada.fuente or str(entrada.ruta)), True
 
 
 def a_entrada(valor: Any) -> EntradaOferta:
@@ -150,6 +176,39 @@ def huella(texto: str, empresa: str, puesto: str) -> str:
     return hashlib.sha256(clave.encode("utf-8")).hexdigest()
 
 
+def similitud(a: str, b: str) -> float:
+    """Parecido entre dos textos normalizados (0 a 1), con `difflib`."""
+    return difflib.SequenceMatcher(None, normalizar_texto(a), normalizar_texto(b), autojunk=False).ratio()
+
+
+_NUMERO = re.compile(r"\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?(?!\d)|\d+(?:[.,]\d{1,2})?(?!\d)")
+
+
+def _numeros(texto: str) -> list[float]:
+    """Cantidades del texto: "1,200.00", "1.200", "650.50" y "650" se leen como números."""
+    valores = []
+    for crudo in _NUMERO.findall(texto):
+        miles = re.fullmatch(r"(\d{1,3}(?:[.,]\d{3})+)(?:[.,](\d{1,2}))?", crudo)
+        if miles:
+            valores.append(float(re.sub(r"[.,]", "", miles.group(1)) + "." + (miles.group(2) or "0")))
+        else:
+            valores.append(float(crudo.replace(",", ".")))
+    return valores
+
+
+def verificar_salario(salario: float | None, texto: str) -> tuple[float | None, str]:
+    """(salario aceptado, nota). El salario del LLM solo se acepta si su cifra está en el texto.
+
+    Se admite la cifra mensual tal cual o una quincenal (la mitad), que es como se paga en Panamá.
+    Si no aparece queda en None: la `Oferta` lo marca `no_publicado` y por confirmar (#42), nunca se inventa.
+    """
+    if salario is None or salario <= 0:
+        return None, ""
+    if any(abs(n - salario) <= 0.5 or abs(2 * n - salario) <= 1 for n in _numeros(texto)):
+        return salario, ""
+    return None, f"salario descartado: el extractor dio {salario:g} y esa cifra no aparece en la oferta"
+
+
 def mapear_habilidades(nombres: list[str], taxonomia: dict[str, dict]) -> tuple[list[str], list[str]]:
     """Devuelve (skill_id encontrados sin repetir, nombres descartados por no estar en la taxonomía)."""
     encontrados: list[str] = []
@@ -191,6 +250,7 @@ def _procesar_entrada(
 ) -> tuple[Oferta | None, str, Decision, str | None]:
     """Devuelve (oferta o None, texto para la huella, decisión, error)."""
     origen = entrada.fuente or ("texto" if not entrada.es_archivo else str(entrada.ruta))
+    entrada, capa_de_texto = _con_capa_de_texto(entrada)
     try:
         crudo = extraer(entrada)
         extraida = crudo if isinstance(crudo, OfertaExtraida) else OfertaExtraida.model_validate(crudo)
@@ -203,12 +263,17 @@ def _procesar_entrada(
     texto = entrada.texto if not entrada.es_archivo else extraida.texto_transcrito
     alertas, bloqueada = _aplicar_reglas(texto)
     habilidades, descartadas = mapear_habilidades(extraida.habilidades, taxonomia)
+    salario, nota_salario = verificar_salario(extraida.salario_mensual, texto)
     id_oferta = "of-" + huella(texto, extraida.empresa, extraida.puesto)[:10]
 
     razones = [_razon_reglas(alertas, bloqueada)]
     if descartadas:
         razones.append(f"habilidades descartadas por no estar en la taxonomía: {descartadas}")
-    if entrada.es_archivo:
+    if nota_salario:
+        razones.append(nota_salario)
+    if capa_de_texto:
+        razones.append("PDF con capa de texto: leído con pypdf antes del LLM; reglas sobre ese texto")
+    elif entrada.es_archivo:
         razones.append("reglas aplicadas sobre la transcripción del archivo")
 
     try:
@@ -218,8 +283,8 @@ def _procesar_entrada(
             empresa=extraida.empresa,
             corregimiento=extraida.corregimiento,
             # Lo que la oferta no publica queda en None y por confirmar, no se descarta (#42).
-            salario_mensual=extraida.salario_mensual or None,
-            salario_tipo=None if extraida.salario_mensual else "no_publicado",
+            salario_mensual=salario,
+            salario_tipo=None if salario else "no_publicado",
             horario=extraida.horario.model_dump() if any(extraida.horario.model_dump().values()) else None,
             horario_tipo=None if any(extraida.horario.model_dump().values()) else "no_publicado",
             habilidades=habilidades,
@@ -238,6 +303,8 @@ def _procesar_entrada(
         return None, texto, decision, error
 
     estado = "bloqueada" if bloqueada else "publicable"
+    if oferta.por_confirmar():
+        razones.append(f"{REQUIERE_CONFIRMACION}: {oferta.por_confirmar()}")
     decision = Decision(
         agente=AGENTE,
         entrada_resumen=_resumen(texto or origen),
@@ -257,6 +324,26 @@ def _revisar_existente(oferta: Oferta) -> tuple[Oferta, str]:
     return oferta.model_copy(update={"alertas": oferta.alertas + nuevas, "bloqueada": oferta.bloqueada or bloqueada}), oferta.requisitos_texto
 
 
+def razon_duplicada(oferta: Oferta, texto: str, previa: Oferta, texto_previo: str) -> str | None:
+    """Motivo de la fusión si `oferta` duplica a `previa`; None si son distintas.
+
+    Duplicada = mismo puesto normalizado y textos con similitud >= UMBRAL_SIMILITUD: entre
+    portales la misma oferta casi nunca trae el mismo texto. Sin texto en alguna de las dos
+    no hay con qué comparar y se exige la misma huella (texto, empresa y puesto).
+    """
+    if normalizar_texto(oferta.puesto) != normalizar_texto(previa.puesto):
+        return None
+    if not texto.strip() or not texto_previo.strip():
+        if huella(texto, oferta.empresa, oferta.puesto) == huella(texto_previo, previa.empresa, previa.puesto):
+            return f"fusionada con {previa.id}: mismo puesto y empresa, sin texto que comparar"
+        return None
+    parecido = similitud(texto, texto_previo)
+    if parecido < UMBRAL_SIMILITUD:
+        return None
+    return (f"fusionada con {previa.id}: similitud {parecido:.2f} >= {UMBRAL_SIMILITUD} "
+            f"sobre el texto normalizado y mismo puesto «{oferta.puesto}»")
+
+
 def procesar_ofertas(
     entradas: list[Any],
     *,
@@ -264,7 +351,7 @@ def procesar_ofertas(
     taxonomia: dict[str, dict] | None = None,
     existentes: list[Oferta | dict] | None = None,
 ) -> Resultado:
-    """Extrae, valida, aplica reglas y deduplica. Las ofertas existentes van primero y ganan ante duplicados."""
+    """Extrae, valida, aplica reglas y deduplica por similitud. Las existentes van primero y ganan ante duplicados."""
     errores: list[str] = []
     if taxonomia is None:
         taxonomia, error = _taxonomia_por_defecto()
@@ -273,16 +360,16 @@ def procesar_ofertas(
 
     ofertas: list[Oferta] = []
     decisiones: list[Decision] = []
-    vistas: dict[str, str] = {}
+    vistas: list[tuple[Oferta, str]] = []
 
     def admitir(oferta: Oferta, texto: str) -> None:
-        clave = huella(texto, oferta.empresa, oferta.puesto)
-        if clave in vistas:
-            decisiones.append(Decision(agente=AGENTE, entrada_resumen=_resumen(texto or oferta.puesto),
-                                       salida_resumen=f"duplicada de {vistas[clave]}",
-                                       razon="mismo texto normalizado, empresa y puesto"))
-            return
-        vistas[clave] = oferta.id
+        for previa, texto_previo in vistas:
+            razon = razon_duplicada(oferta, texto, previa, texto_previo)
+            if razon:
+                decisiones.append(Decision(agente=AGENTE, entrada_resumen=_resumen(texto or oferta.puesto),
+                                           salida_resumen=f"duplicada de {previa.id}", razon=razon))
+                return
+        vistas.append((oferta, texto))
         ofertas.append(oferta)
 
     for previa in existentes or []:
