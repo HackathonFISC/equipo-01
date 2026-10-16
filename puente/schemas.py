@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, TypedDict
+from typing import Annotated, Any, TypedDict
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AfterValidator, BaseModel, Field, field_validator
 
 PATRON_HORA = r"^([01]\d|2[0-3]):[0-5]\d$"
 DIAS_VALIDOS = ("lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo")
@@ -99,31 +99,31 @@ class Perfil(BaseModel):
         return _lista_de_horarios(valor)
 
 
-class Desglose(BaseModel):
-    """Componentes del puntaje. Acepta claves extra del solver (viable, motivo_descarte, ...)."""
+CLAVES_DESGLOSE = ("cobertura", "minutos_traslado", "pasaje_diario", "penalizacion")
 
-    model_config = ConfigDict(extra="allow")
 
-    cobertura: float = 0.0
-    minutos_traslado: float = 0.0
-    pasaje_diario: float = 0.0
-    penalizacion: float = 0.0
+def _validar_desglose(desglose: dict[str, Any]) -> dict[str, Any]:
+    """Exige las claves numéricas del puntaje; las demás (viable, motivo_descarte, ...) pasan tal cual."""
+    faltan = [c for c in CLAVES_DESGLOSE if c not in desglose]
+    if faltan:
+        raise ValueError(f"al desglose le faltan claves: {faltan}")
+    no_numericas = [
+        c for c in CLAVES_DESGLOSE if isinstance(desglose[c], bool) or not isinstance(desglose[c], (int, float))
+    ]
+    if no_numericas:
+        raise ValueError(f"claves del desglose que deben ser numéricas: {no_numericas}")
+    return desglose
 
-    def __getitem__(self, clave: str) -> Any:
-        try:
-            return getattr(self, clave)
-        except AttributeError as exc:
-            raise KeyError(clave) from exc
 
-    def get(self, clave: str, defecto: Any = None) -> Any:
-        return getattr(self, clave, defecto)
+# Es un dict y no un modelo para que `isinstance(desglose, dict)` y `.get()` funcionen en todos los agentes.
+Desglose = Annotated[dict[str, Any], AfterValidator(_validar_desglose)]
 
 
 class Match(BaseModel):
     perfil_id: str
     oferta_id: str = Field(description=f'id de la oferta o "{SIN_OFERTA}"')
     puntaje: int | float = Field(description="Puede ser negativo")
-    desglose: Desglose = Field(default_factory=Desglose)
+    desglose: Desglose
     brechas: list[str] = Field(default_factory=list, description="skill_id que faltan")
     explicacion: str = ""
 

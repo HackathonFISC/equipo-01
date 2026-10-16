@@ -131,10 +131,29 @@ def test_match_como_lo_construye_el_solver():
         explicacion="Sin oferta compatible",
     )
     assert match.puntaje == -40 and isinstance(match.puntaje, int)
-    assert match.desglose.viable is False
     assert match.desglose["motivo_descarte"] == "horario"
-    assert match.desglose.get("no_existe", "x") == "x"
     assert match.model_dump()["desglose"]["pasaje_mensual"] == 55.0
+
+
+def test_desglose_es_dict_para_el_auditor():
+    """El auditor (#24) solo lee `viable` si `isinstance(desglose, dict)`."""
+    desglose = {"cobertura": 0, "minutos_traslado": 0, "pasaje_diario": 0, "penalizacion": 0, "viable": False}
+    match = Match(perfil_id="p1", oferta_id="o1", puntaje=0, desglose=desglose)
+    assert isinstance(match.desglose, dict)
+    assert match.desglose.get("viable", True) is False
+
+
+@pytest.mark.parametrize(
+    "desglose",
+    [
+        {"cobertura": 1.0, "minutos_traslado": 30, "pasaje_diario": 1.0},
+        {"cobertura": "alta", "minutos_traslado": 30, "pasaje_diario": 1.0, "penalizacion": 0},
+        {"cobertura": True, "minutos_traslado": 30, "pasaje_diario": 1.0, "penalizacion": 0},
+    ],
+)
+def test_desglose_exige_claves_numericas(desglose):
+    with pytest.raises(ValidationError):
+        Match(perfil_id="p1", oferta_id="o1", puntaje=0, desglose=desglose)
 
 
 def test_solver_lee_horarios():
