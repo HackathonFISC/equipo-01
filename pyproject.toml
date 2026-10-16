@@ -15,11 +15,13 @@ dependencies = [
     "pydantic",
     "python-dotenv",
     "pyyaml",
+    "starlette",
     "streamlit",
+    "uvicorn",
 ]
 
 [dependency-groups]
-dev = ["pytest"]
+dev = ["httpx", "pytest"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
