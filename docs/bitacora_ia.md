@@ -54,3 +54,4 @@ Cada uso de IA se anota en el momento: hora, quién, herramienta, qué se pidió
 | 2026-10-16 18:28 | jesus12ga | Claude Code · workflow implementar-issues (Opus 5.5) | #12 · especificación del issue #12 | Pendiente de revisión humana en el PR |
 | 2026-10-16 18:28 | jesus12ga | Claude Code · workflow implementar-issues (Sonnet 5.5) | #12 · grupo db: estado consentido, tabla descartes, volcado idempotente y lecturas para el tablero | Pendiente de revisión humana en el PR |
 | 2026-10-16 18:29 | jesus12ga | Claude Code · workflow implementar-issues (Sonnet 5.5) | #12 · grupo agenda: elegir_franja con clases, horario libre y margen de traslado | Pendiente de revisión humana en el PR |
+| 2026-10-16 18:29 | jesus12ga | Claude Code · workflow implementar-issues (Sonnet 5.5) | #12 · grupo cv-ciego: CV sin edad, género ni corregimiento | Pendiente de revisión humana en el PR |
