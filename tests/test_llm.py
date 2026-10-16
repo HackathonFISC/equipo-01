@@ -642,3 +642,42 @@ def test_sdk_real_refusal_con_texto_usa_el_respaldo(monkeypatch):
 def test_sdk_real_texto_libre():
     cliente = _sdk_con_respuesta("end_turn", "Hola Yaritza")
     assert generar_texto("Saluda", cliente=cliente) == "Hola Yaritza"
+
+
+def _dotenv_falso(monkeypatch, **valores):
+    """Imita dotenv.load_dotenv: vuelca en el entorno lo que traería un .env, sin pisar lo ya definido."""
+    import os
+
+    import dotenv
+
+    def cargar(*args, **kwargs):
+        for nombre, valor in valores.items():
+            if nombre not in os.environ:
+                monkeypatch.setenv(nombre, valor)
+        return True
+
+    monkeypatch.setattr(dotenv, "load_dotenv", cargar)
+    monkeypatch.setattr(llm, "_dotenv_cargado", False)
+
+
+def test_dotenv_rige_la_primera_llamada_en_reproducir(monkeypatch):
+    # Regresión: configuracion() leía el entorno antes de cargar .env y la primera llamada iba en vivo (causa sin_clave).
+    _dotenv_falso(monkeypatch, LLM_MODO="reproducir", PUENTE_MODELO_LLM="claude-sonnet-5-5")
+    with pytest.raises(ErrorLLM) as info:
+        generar_texto("hola", agente="perfil")
+    assert info.value.causa == "grabacion_faltante"
+    assert info.value.modelo == "claude-sonnet-5-5"
+
+
+def test_dotenv_rige_modelo_y_modo_en_vivo(monkeypatch):
+    _dotenv_falso(monkeypatch, LLM_MODO="vivo", PUENTE_MODELO_LLM="claude-sonnet-5-5", ANTHROPIC_API_KEY="clave-de-prueba")
+    cliente = ClienteAnthropic(respuesta(parsed=Salida(respuesta="ok")))
+    llm._clientes["anthropic"] = cliente
+    assert generar_estructurado("x", Salida, agente="mercado").respuesta == "ok"
+    assert cliente.kwargs["model"] == "claude-sonnet-5-5"
+
+
+def test_configuracion_carga_dotenv_una_sola_vez(monkeypatch):
+    _dotenv_falso(monkeypatch, LLM_MODO="grabar")
+    assert configuracion()["modo"] == "grabar"
+    assert llm._dotenv_cargado is True

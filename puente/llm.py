@@ -104,6 +104,7 @@ def _modelo_para(proveedor: str, valor: str | None) -> str:
 
 def configuracion() -> dict[str, str]:
     """Configuración vigente leída del entorno. Valida proveedor y modo."""
+    _cargar_dotenv()  # antes de cualquier os.getenv: el .env rige también la primera llamada (tablero, CLI)
     proveedor = (os.getenv("LLM_PROVEEDOR") or "anthropic").strip().lower()
     if proveedor not in PROVEEDORES:
         raise ErrorLLM(
