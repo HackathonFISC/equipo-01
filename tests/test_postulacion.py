@@ -8,6 +8,7 @@ import pytest
 from puente.agents.postulacion import postular, registrar_entrevista
 from puente.tools import db
 from puente.tools._contratos import Habilidad, Horario, Match, Oferta, Perfil
+from puente.tools.telegram import ResultadoEnvio
 
 PANAMA = timezone(timedelta(hours=-5))
 INICIO = datetime(2026, 10, 20, 10, 0, tzinfo=PANAMA)  # SINTÉTICO: fecha de prueba
@@ -162,11 +163,149 @@ def test_oferta_bloqueada_no_se_postula(conn, tmp_path):
     assert conn.execute("SELECT COUNT(*) FROM postulaciones").fetchone()[0] == 0
 
 
-def test_no_se_postula_dos_veces(conn, tmp_path, monkeypatch):
-    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
-    _correr(conn, tmp_path)
+def test_doble_ejecucion_no_repite_nada(conn, tmp_path, monkeypatch, enviador):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID_EMPRESA", "c")
+    primera = _correr(conn, tmp_path, enviar=enviador)
+    (pid,) = primera.postulaciones
+    historial = db.historial(conn, pid)
+    archivos = sorted(p.name for p in (tmp_path / "outbox").iterdir())
+
+    segunda = _correr(conn, tmp_path, enviar=enviador)
+
+    assert segunda.postulaciones == [pid]
+    assert segunda.envios == [] and segunda.archivos == []
+    assert len(enviador.mensajes) == 1  # no se vuelve a escribir a la empresa
+    assert conn.execute("SELECT COUNT(*) FROM postulaciones").fetchone()[0] == 1
+    assert db.historial(conn, pid) == historial
+    assert sorted(p.name for p in (tmp_path / "outbox").iterdir()) == archivos
+    (decision,) = segunda.decisiones
+    assert "ya postulada" in decision.razon.lower()
+    assert conn.execute("SELECT COUNT(*) FROM decisiones").fetchone()[0] == ACCIONES + 1
+
+
+def test_doble_ejecucion_solo_manda_los_nuevos(conn, tmp_path, monkeypatch, enviador):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID_EMPRESA", "c")
+    _correr(conn, tmp_path, [_match("p1", "o1")], enviar=enviador)
+    r = _correr(conn, tmp_path, [_match("p1", "o1"), _match("p2", "o1")], enviar=enviador)
+
+    assert len(r.postulaciones) == 2 and len(enviador.mensajes) == 2
+    segundo = enviador.mensajes[1][2]
+    assert "Marcos Ficticio" in segundo and "Yaritza Ficticia" not in segundo
+    assert all(db.obtener_postulacion(conn, p)["estado"] == "enviado" for p in r.postulaciones)
+
+
+def test_fecha_mal_configurada_falla_antes_de_cualquier_efecto(conn, tmp_path, monkeypatch, enviador):
+    monkeypatch.setenv("PUENTE_ENTREVISTA_INICIO", "mañana")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID_EMPRESA", "c")
+    args = ([_match()], {"p1": _perfil()}, {"o1": _oferta()})
+    with pytest.raises(ValueError, match="PUENTE_ENTREVISTA_INICIO"):
+        postular(*args, conn=conn, outbox=tmp_path / "outbox", enviar=enviador)
+    for tabla in ("postulaciones", "decisiones", "perfiles", "ofertas"):
+        assert conn.execute(f"SELECT COUNT(*) FROM {tabla}").fetchone()[0] == 0
+    assert not (tmp_path / "outbox").exists() and enviador.mensajes == []
+
+    # Con la fecha corregida, el reintento sobre la misma base funciona.
+    monkeypatch.setenv("PUENTE_ENTREVISTA_INICIO", "2026-10-20T10:00")
+    r = postular(*args, conn=conn, outbox=tmp_path / "outbox", enviar=enviador)
+    assert db.obtener_postulacion(conn, r.postulaciones[0])["estado"] == "enviado"
+
+
+def test_inicio_entrevista_que_no_es_fecha_falla_sin_efectos(conn, tmp_path):
     with pytest.raises(ValueError):
-        _correr(conn, tmp_path)
+        postular([_match()], {"p1": _perfil()}, {"o1": _oferta()}, conn=conn,
+                 outbox=tmp_path / "outbox", inicio_entrevista=lambda m: "mañana")
+    assert conn.execute("SELECT COUNT(*) FROM postulaciones").fetchone()[0] == 0
+
+
+def test_reintento_tras_envio_fallido_completa_hasta_enviado(conn, tmp_path, monkeypatch, enviador):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID_EMPRESA", "c")
+    with monkeypatch.context() as parche:
+        parche.setattr(
+            "puente.agents.postulacion.enviar_lista_corta",
+            lambda *a, **k: ResultadoEnvio("outbox", False, None, "No se pudo escribir el respaldo"),
+        )
+        r1 = _correr(conn, tmp_path)
+    (pid,) = r1.postulaciones
+    assert db.obtener_postulacion(conn, pid)["estado"] == "aprobado"
+
+    r2 = _correr(conn, tmp_path, enviar=enviador)
+
+    assert r2.postulaciones == [pid]
+    assert db.obtener_postulacion(conn, pid)["estado"] == "enviado"
+    assert len(enviador.mensajes) == 1
+    assert conn.execute("SELECT COUNT(*) FROM postulaciones").fetchone()[0] == 1
+    estados = [(h["estado_anterior"], h["estado_nuevo"]) for h in db.historial(conn, pid)]
+    assert estados == [(None, "preseleccionado"), ("preseleccionado", "aprobado"), ("aprobado", "enviado")]
+    assert len(list((tmp_path / "outbox").glob("cv_*.pdf"))) == 1
+
+
+def test_reintento_tras_fallo_al_generar_el_cv(conn, tmp_path, monkeypatch, enviador):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID_EMPRESA", "c")
+
+    def falla(*a, **k):
+        raise OSError("disco lleno")
+
+    with monkeypatch.context() as parche:
+        parche.setattr("puente.agents.postulacion.generar_cv", falla)
+        with pytest.raises(OSError):
+            _correr(conn, tmp_path, enviar=enviador)
+    (fila,) = conn.execute("SELECT id, estado FROM postulaciones").fetchall()
+    assert fila["estado"] == "aprobado" and enviador.mensajes == []
+
+    r = _correr(conn, tmp_path, enviar=enviador)
+    assert r.postulaciones == [fila["id"]]
+    assert db.obtener_postulacion(conn, fila["id"])["estado"] == "enviado"
+    assert len(enviador.mensajes) == 1 and list((tmp_path / "outbox").glob("cv_*.pdf"))
+
+
+@pytest.mark.parametrize("estado_previo", ["perfil_listo", "preseleccionado"])
+def test_retoma_postulacion_que_no_llego_a_aprobado(conn, tmp_path, monkeypatch, enviador, estado_previo):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID_EMPRESA", "c")
+    db.guardar_perfil(conn, _perfil())
+    db.guardar_oferta(conn, _oferta())
+    pid = db.crear_postulacion(conn, "p1", "o1", estado_previo)
+
+    r = _correr(conn, tmp_path, enviar=enviador)
+
+    assert r.postulaciones == [pid]
+    assert db.obtener_postulacion(conn, pid)["estado"] == "enviado"
+    assert [h["estado_nuevo"] for h in db.historial(conn, pid)][-2:] == ["aprobado", "enviado"]
+
+
+@pytest.mark.parametrize("estado", ["entrevista", "no_seleccionado"])
+def test_postulacion_mas_adelantada_se_salta(conn, tmp_path, enviador, estado):
+    db.guardar_perfil(conn, _perfil())
+    db.guardar_oferta(conn, _oferta())
+    pid = db.crear_postulacion(conn, "p1", "o1")
+    for siguiente in ["aprobado", "enviado", estado]:
+        db.cambiar_estado(conn, pid, siguiente, "prueba")
+    r = _correr(conn, tmp_path, enviar=enviador)
+    assert r.postulaciones == [pid] and enviador.mensajes == []
+    assert db.obtener_postulacion(conn, pid)["estado"] == estado
+
+
+def test_ics_y_mensaje_presentan_la_fecha_como_provisional(conn, tmp_path, monkeypatch, enviador):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID_EMPRESA", "c")
+    r = _correr(conn, tmp_path, enviar=enviador)
+
+    (archivo_ics,) = (tmp_path / "outbox").glob("*.ics")
+    (evento,) = ics.Calendar(archivo_ics.read_text(encoding="utf-8")).events
+    assert evento.name == "Propuesta de entrevista: Cajera - Super Demo"
+    assert "Fecha provisional, por confirmar con la empresa" in evento.description
+
+    texto = enviador.mensajes[0][2]
+    assert "Fecha provisional, por confirmar con la empresa" in texto
+    assert "Entrevista propuesta: 2026-10-20 10:00" in texto
+
+    razon_ics = next(d.razon for d in r.decisiones if d.salida_resumen.endswith(".ics"))
+    assert "provisional" in razon_ics and "por confirmar" in razon_ics
 
 
 def test_registrar_entrevista(conn, tmp_path, monkeypatch):

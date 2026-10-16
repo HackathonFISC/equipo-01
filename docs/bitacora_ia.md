@@ -9,3 +9,4 @@ Cada uso de IA se anota en el momento: hora, quién, herramienta, qué se pidió
 | 14:15 | Jesus | Claude (Claude Code) | Esqueleto del repo (issue #1): `pyproject.toml`, carpetas con módulos vacíos documentados, `.env.example`, plantillas de issue, prueba de importación | Pendiente de revisión en el PR |
 | 2026-10-16 15:16 | jesus12ga | Claude Code · workflow implementar-issues (Opus 5.5) | #7 · especificación del issue #7 | Pendiente de revisión humana en el PR |
 | 2026-10-16 15:16 | jesus12ga | Claude Code · workflow implementar-issues (Sonnet 5.5) | #7 · Implementar herramientas de Postulación (db, pdf, telegram, calendario, agente) con stub de contratos y pruebas sin red | Pendiente de revisión humana en el PR |
+| 2026-10-16 15:26 | jesus12ga | Claude Code · workflow implementar-issues (Sonnet 5.5) | #7 · corrección de la revisión | Pendiente de revisión humana en el PR |

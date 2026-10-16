@@ -6,7 +6,7 @@ from pathlib import Path
 
 from fpdf import FPDF
 
-from puente.tools._contratos import Habilidad, Oferta, Perfil
+from puente.tools._contratos import Habilidad, Oferta, Perfil, evidencia_de, skill_id_de
 
 # Cédulas panameñas (8-123-4567, PE-1-234, E-8-12345) y teléfonos (+507 6123-4567, 6123-4567).
 _PATRON_CEDULA = re.compile(r"\b(?:PE|E|N|AV|PI)-\d{1,4}-\d{1,6}\b|\b\d{1,2}-\d{1,4}-\d{1,6}\b")
@@ -39,11 +39,14 @@ def a_latin1(texto: str) -> str:
 
 
 def habilidades_para_cv(perfil: Perfil, oferta: Oferta) -> list[Habilidad]:
-    """Solo habilidades con evidencia no vacía; primero las que pide la oferta."""
-    con_evidencia = [h for h in perfil.habilidades if (h.evidencia or "").strip()]
+    """Solo habilidades con evidencia no vacía; primero las que pide la oferta.
+
+    Cada habilidad puede ser un modelo o un dict (ver ``skill_id_de`` y ``evidencia_de``).
+    """
+    con_evidencia = [h for h in perfil.habilidades if evidencia_de(h).strip()]
     pedidas = set(oferta.habilidades)
-    pedidas_primero = [h for h in con_evidencia if h.skill_id in pedidas]
-    resto = [h for h in con_evidencia if h.skill_id not in pedidas]
+    pedidas_primero = [h for h in con_evidencia if skill_id_de(h) in pedidas]
+    resto = [h for h in con_evidencia if skill_id_de(h) not in pedidas]
     return pedidas_primero + resto
 
 
@@ -78,8 +81,8 @@ def generar_cv(perfil: Perfil, oferta: Oferta, destino_dir: Path) -> Path:
     habilidades = habilidades_para_cv(perfil, oferta)
     if habilidades:
         for h in habilidades:
-            linea(h.skill_id, estilo="B")
-            linea(f"Evidencia: {h.evidencia.strip()}")
+            linea(skill_id_de(h), estilo="B")
+            linea(f"Evidencia: {evidencia_de(h).strip()}")
             pdf.ln(1)
     else:
         linea("Sin habilidades con evidencia registrada.")
