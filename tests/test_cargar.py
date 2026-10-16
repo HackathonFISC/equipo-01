@@ -245,6 +245,18 @@ def test_releer_vuelve_a_pedir_todo_al_llm_y_lo_activa_el_modo_grabar(conn, carp
     assert extractor.llamadas == 4 and _puestos(conn) == ["Ayudante de cocina", "Cajera", "Vendedor"]
 
 
+def test_releer_con_el_llm_caido_conserva_las_extracciones_guardadas(conn, carpetas):
+    ofertas, _ = carpetas
+    _cargar(conn, carpetas, ExtractorFalso())
+
+    resumen = cargar.cargar_ofertas(
+        conn, ofertas, extraer=ExtractorFalso(falla_con="vendedor_sin_salario.txt"), taxonomia=TAXONOMIA, releer=True
+    )
+
+    assert _puestos(conn) == ["Ayudante de cocina", "Cajera", "Vendedor"]
+    assert any("vendedor_sin_salario.txt" in e and "guardada" in e for e in resumen.errores)
+
+
 def test_perfil_invalido_se_reporta_y_no_detiene_la_carga(conn, carpetas):
     _, perfiles = carpetas
     (perfiles / "menor.json").write_text(json.dumps(_perfil("menor", edad=17)), encoding="utf-8")

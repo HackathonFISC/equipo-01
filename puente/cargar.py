@@ -136,7 +136,13 @@ def cargar_ofertas(
             resumen.desde_cargas += 1
             return json.loads(previa[1])
         resumen.llamadas_llm += 1
-        extraida = extraer(entrada)  # si falla, Mercado lo registra y el archivo se reintenta la próxima vez
+        try:
+            extraida = extraer(entrada)
+        except Exception as exc:
+            if previa and previa[0] == sha:  # al releer, un fallo del LLM no tumba la extracción buena guardada
+                resumen.errores.append(f"carga: no se pudo releer {entrada.fuente} ({exc}); se usa la extracción guardada")
+                return json.loads(previa[1])
+            raise  # Mercado lo registra y el archivo se reintenta la próxima vez
         datos = extraida.model_dump() if hasattr(extraida, "model_dump") else dict(extraida)
         with conn:  # se guarda de inmediato: una llamada pagada no se repite aunque algo falle después
             conn.execute(
