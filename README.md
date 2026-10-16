@@ -45,11 +45,13 @@ Qué partes se hicieron con IA, con qué herramienta y qué se modificó a mano.
 
 ## Flujo de trabajo
 
+Protocolo completo para humanos y agentes de IA (Claude Code, Codex, Antigravity): [`AGENTS.md`](AGENTS.md). Resumen:
+
 1. Cada tarea es un issue (plantilla *Tarea*); cada fallo, un issue con la plantilla *Fallo*.
-2. Una rama por issue: `issue-N-descripcion`. Nadie empuja directo a `main`.
-3. PR con `Closes #N`; otro integrante o Claude lo revisa antes de fusionar.
+2. Antes de trabajar se reclama el issue con `scripts/reclamar.sh N descripcion`, que lo marca `estado: en proceso` y crea la rama `issue-N-descripcion` con su worktree. Si ya está en proceso, se toma otro. Nadie empuja directo a `main`.
+3. PR con `Closes #N` (`scripts/entregar.sh N`); otro integrante o Claude lo revisa antes de fusionar.
 4. Claude revisa issues y PRs; sus correcciones van en su propia rama `claude/issue-N-...` con un PR aparte, sin tocar ramas ajenas.
-5. Todo uso de IA se anota en `docs/bitacora_ia.md` en el momento.
+5. Todo uso de IA se anota en `docs/bitacora_ia.md` en el momento con `scripts/bitacora.sh N "qué se pidió" "qué se cambió a mano"`; el hook pre-commit no deja commitear código sin su fila.
 6. Hora 23:30: tag `final-24h`. Después de eso no se empuja nada.
 
 ---

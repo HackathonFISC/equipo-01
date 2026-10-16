@@ -2,3 +2,5 @@
 *.png binary
 *.jpg binary
 *.pdf binary
+# La bitácora de IA se mezcla por unión: varias ramas pueden añadir filas a la vez sin conflictos.
+docs/bitacora_ia.md merge=union
