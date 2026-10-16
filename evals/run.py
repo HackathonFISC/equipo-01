@@ -6,8 +6,9 @@ evals/resultados.md junto con el registro de fallos.
 
 - Los casos de categorías con LLM (extracción de ofertas y perfil sin CV) se corren 3 veces y se reporta la
   tasa de acierto. Sin GOOGLE_API_KEY esos casos quedan "omitido".
-- Si el módulo o la función que ejecuta un caso todavía no está fusionado (a la fecha #4 y #8 ya están en
-  main; faltan #5, #6 y #9), el caso queda "pendiente (#N sin fusionar)" y no rompe el runner.
+- Cada categoría se mide con un adaptador `_ejecutar_*` escrito contra la API real del agente (#4, #5, #6, #8
+  y #9). Si el módulo o la función todavía no está fusionado, el caso queda "pendiente (#N sin fusionar)" y
+  no rompe el runner. Una salida con forma inesperada es un error de contrato (TypeError), no un fallo del caso.
 - Este módulo no llama al LLM: solo lo hacen los agentes de #5 y #6 a través de sus ejecutores. Nunca
   reescribe casos.yaml: los fallos se anotan a mano en el campo "fallos" de cada caso.
 """
@@ -39,14 +40,22 @@ REPOSITORIO = "HackathonFISC/equipo-01"
 ETIQUETA_FALLO = "bug"
 HUSO_PANAMA = timezone(timedelta(hours=-5), "America/Panama")  # Panamá no usa horario de verano
 
-# Dónde vive cada función que ejecuta un caso: (módulo, función, issue). Los nombres de #5, #6 y #9 todavía
-# no están definidos en sus issues; al fusionarse, se ajustan aquí y en ningún otro lugar.
-MERCADO_EXTRAER = ("puente.agents.mercado", "extraer_oferta", 5)
-DISCRIMINACION_EVALUAR = ("puente.rules.discriminacion", "evaluar_requisitos", 5)
-PERFIL_EXTRAER = ("puente.agents.perfil", "extraer_perfil", 6)
-GUARDRAILS_VALIDAR = ("puente.guardrails", "validar_entrada", 9)
+# Dónde vive cada función que ejecuta un caso: (módulo, función, issue). Los nombres y las formas de entrada y
+# salida son los de las APIs fusionadas de #5 (Mercado y reglas), #6 (Perfil) y #9 (guardrails); si cambian,
+# se ajustan aquí y en los adaptadores `_ejecutar_*`, y en ningún otro lugar.
+MERCADO_PROCESAR = ("puente.agents.mercado", "procesar_ofertas", 5)  # (entradas, *, extraer, taxonomia) -> Resultado
+DISCRIMINACION_REVISAR = ("puente.rules.discriminacion", "revisar_texto", 5)  # (texto) -> list[Hallazgo]
+DISCRIMINACION_BLOQUEADA = ("puente.rules.discriminacion", "esta_bloqueada", 5)  # (hallazgos) -> bool
+TAXONOMIA_CARGAR = ("puente.rules.taxonomia", "cargar_taxonomia", 5)  # () -> {skill_id: {...}}
+TAXONOMIA_NORMALIZAR = ("puente.rules.taxonomia", "normalizar_habilidad", 5)  # (texto, taxonomia) -> skill_id | None
+PERFIL_CONSTRUIR = ("puente.agents.perfil", "construir_perfil", 6)  # (entrada, *, taxonomia, normalizar, llm) -> (Perfil, Decision)
+GUARDRAILS_EVALUAR = ("puente.guardrails", "evaluar_entrada", 9)  # (entrada) -> list[ResultadoGuardrail]
 SOLVER_ASIGNAR = ("puente.solver.asignacion", "asignar", 4)
 AUDITOR_AUDITAR = ("puente.agents.auditor", "auditar_lista_corta", 8)
+
+# Reglas de discriminación -> artículo de la Ley 11 de 2005 (solo las que bloquean) o alerta (las que no).
+ARTICULO_POR_REGLA = {"edad": "art. 2", "sexo": "art. 1"}
+ALERTA_POR_REGLA = {"buena_presencia": "presencia", "foto": "foto", "estado_civil": "estado_civil"}
 
 ESTADOS = ("ok", "fallo", "pendiente", "omitido")
 CAMPOS_EXTRACCION = ("puesto", "empresa", "corregimiento", "salario_mensual", "habilidades")
@@ -104,6 +113,16 @@ def cargar_casos(ruta: Path = RUTA_CASOS) -> dict:
         if not isinstance(info.get("usa_llm"), bool):
             raise ValueError(f"categoría {nombre}: 'usa_llm' debe ser true o false")
 
+    taxonomia = datos.get("taxonomia")
+    if taxonomia is not None:
+        if not isinstance(taxonomia, dict) or not taxonomia:
+            raise ValueError("casos.yaml: 'taxonomia' debe ser un mapa skill_id -> {nombre_es, sinonimos}")
+        for skill_id, info in taxonomia.items():
+            if not isinstance(info, dict) or not str(info.get("nombre_es") or "").strip():
+                raise ValueError(f"taxonomía {skill_id}: falta nombre_es")
+            if not isinstance(info.get("sinonimos", []), list):
+                raise ValueError(f"taxonomía {skill_id}: 'sinonimos' debe ser una lista")
+
     casos = datos.get("casos")
     if not isinstance(casos, list) or not casos:
         raise ValueError("casos.yaml: falta 'casos' con al menos un caso")
@@ -133,13 +152,16 @@ def cargar_casos(ruta: Path = RUTA_CASOS) -> dict:
 
 # --------------------------------------------------------------------------------- utilidades
 def _a_dict(objeto: Any) -> dict:
+    """Mapa, modelo Pydantic u objeto con atributos como dict. Cualquier otra forma (lista, tupla, None, texto)
+    es un contrato roto de la dependencia: se lanza TypeError para que el caso cuente como fallo con ese
+    detalle, en vez de compararlo contra un dict vacío y dar un 'fallo' falso."""
     if isinstance(objeto, dict):
         return objeto
     if hasattr(objeto, "model_dump"):
         return objeto.model_dump()
     if hasattr(objeto, "__dict__"):
         return dict(vars(objeto))
-    return {}
+    raise TypeError(f"salida con forma inesperada: {type(objeto).__name__}")
 
 
 def _sin_tildes(texto: Any) -> str:
@@ -492,27 +514,70 @@ def _matching_con_sesgo_genero(entrada: dict) -> Callable[[list, list], list[dic
     return matching
 
 
-def _ejecutar_extraccion(caso: dict) -> dict:
-    oferta = _a_dict(_resolver(MERCADO_EXTRAER)(caso["entrada"]["texto"]))
+def _lista(valor: Any) -> list:
+    """Exige una lista o tupla; cualquier otra forma es un contrato roto de la dependencia."""
+    if not isinstance(valor, (list, tuple)):
+        raise TypeError(f"salida con forma inesperada: {type(valor).__name__}")
+    return list(valor)
+
+
+def _ejecutar_extraccion(caso: dict, *, taxonomia: dict | None = None, extraer: Callable[..., Any] | None = None) -> dict:
+    """#5: procesar_ofertas([texto]) -> Resultado con .ofertas; se mide la primera Oferta.
+
+    Sin `extraer` usa el extractor real (Gemini); sin `taxonomia`, la de data/taxonomia.csv.
+    """
+    procesar = _resolver(MERCADO_PROCESAR)
+    argumentos: dict[str, Any] = {}
+    if extraer is not None:
+        argumentos["extraer"] = extraer
+    if taxonomia is not None:
+        argumentos["taxonomia"] = taxonomia
+    resultado = _a_dict(procesar([caso["entrada"]["texto"]], **argumentos))
+    ofertas = _lista(resultado.get("ofertas"))
+    if not ofertas:
+        errores = "; ".join(str(e) for e in _planos(resultado.get("errores"))) or "sin detalle"
+        raise ValueError(f"mercado no devolvió ninguna oferta ({errores})")
+    oferta = _a_dict(ofertas[0])
     return {campo: oferta.get(campo) for campo in CAMPOS_EXTRACCION}
 
 
 def _ejecutar_discriminacion(caso: dict) -> dict:
-    resultado = _a_dict(_resolver(DISCRIMINACION_EVALUAR)(caso["entrada"]["texto"]))
-    alertas = _planos(resultado.get("alertas"))
-    reglas = _planos(resultado.get("reglas")) + _planos(resultado.get("regla")) + _planos(resultado.get("articulos"))
-    if not reglas:
-        reglas = [a for a in alertas if _regla_normalizada(a)]
-    return {
-        "bloqueada": bool(resultado.get("bloqueada")),
-        "reglas": sorted({r for item in reglas for r in _regla_normalizada(item)}),
-        "alertas": _alertas_normalizadas(alertas),
-    }
+    """#5: revisar_texto(texto) -> list[Hallazgo]; esta_bloqueada(hallazgos) decide el bloqueo.
+
+    Cada hallazgo trae `regla` (edad, sexo, buena_presencia, foto, estado_civil): edad y sexo se traducen al
+    artículo de la Ley 11 de 2005 que bloquea; las demás son alertas.
+    """
+    hallazgos = _lista(_resolver(DISCRIMINACION_REVISAR)(caso["entrada"]["texto"]))
+    bloqueada = bool(_resolver(DISCRIMINACION_BLOQUEADA)(hallazgos))
+    reglas: set[str] = set()
+    alertas: set[str] = set()
+    for hallazgo in hallazgos:
+        regla = str(_a_dict(hallazgo).get("regla") or "")
+        if regla in ARTICULO_POR_REGLA:
+            reglas.add(ARTICULO_POR_REGLA[regla])
+        else:
+            alertas.add(ALERTA_POR_REGLA.get(regla, f"otra:{regla}"))
+    return {"bloqueada": bloqueada, "reglas": sorted(reglas), "alertas": sorted(alertas)}
 
 
-def _ejecutar_perfil(caso: dict) -> dict:
-    perfil = _a_dict(_resolver(PERFIL_EXTRAER)(caso["entrada"]["texto"]))
-    pares = _habilidades_con_evidencia(perfil.get("habilidades"))
+def _ejecutar_perfil(caso: dict, *, taxonomia: dict | None = None, llm: Callable[[str], str] | None = None) -> dict:
+    """#6: construir_perfil(entrada, taxonomia=, normalizar=, llm=) -> (Perfil, Decision).
+
+    La entrevista del caso entra como `cv_texto`; `entrada.formulario` aporta los datos que el agente exige y
+    que no salen del texto (edad, corregimiento). Sin `llm` usa Gemini; sin `taxonomia`, la de data/taxonomia.csv.
+    """
+    construir = _resolver(PERFIL_CONSTRUIR)
+    normalizar = _resolver(TAXONOMIA_NORMALIZAR)
+    if taxonomia is None:
+        taxonomia = _resolver(TAXONOMIA_CARGAR)()
+    entrada = {**(caso["entrada"].get("formulario") or {}), "id": caso["id"], "cv_texto": caso["entrada"]["texto"]}
+    argumentos: dict[str, Any] = {"taxonomia": taxonomia, "normalizar": normalizar}
+    if llm is not None:
+        argumentos["llm"] = llm
+    resultado = construir(entrada, **argumentos)
+    if not isinstance(resultado, tuple) or not resultado:
+        raise TypeError(f"salida con forma inesperada: {type(resultado).__name__}")
+    pares = _habilidades_con_evidencia(_a_dict(resultado[0]).get("habilidades"))
     return {"habilidades": [{"skill_id": skill, "evidencia": evidencia} for skill, evidencia in pares]}
 
 
@@ -526,7 +591,7 @@ def _ejecutar_matching(caso: dict) -> dict:
     for match in matches:
         d = _a_dict(match)
         perfil_id, oferta_id = str(d.get("perfil_id")), d.get("oferta_id")
-        desglose = _a_dict(d.get("desglose"))
+        desglose = _a_dict(d.get("desglose") or {})
         if perfil_id not in asignacion or oferta_id in (None, "", "SIN_OFERTA") or desglose.get("viable") is False:
             continue  # el solver también devuelve una fila (viable: false) por cada perfil sin vacante
         todas.setdefault(perfil_id, []).append(str(oferta_id))
@@ -550,24 +615,44 @@ def _ejecutar_sesgo(caso: dict) -> dict:
 
 
 def _ejecutar_guardrails(caso: dict) -> dict:
-    validar = _resolver(GUARDRAILS_VALIDAR)
+    """#9: evaluar_entrada(entrada) -> list[ResultadoGuardrail] (ok, marcas, motivo, respuesta).
+
+    Un caso de tipo 'archivo' entra como {'archivo': {nombre, tamano_bytes}}; uno de texto, con sus claves
+    (texto, edad, salario). Veredicto: ok=False con respuesta fija -> fuera_de_alcance; ok=False sin ella ->
+    rechazar; solo marcas (inyección, alcance dudoso) -> marcar; nada de eso -> aceptar. El texto marcado sigue
+    como dato mientras no haya rechazo.
+    """
+    evaluar = _resolver(GUARDRAILS_EVALUAR)
+    datos = {clave: valor for clave, valor in caso["entrada"].items() if clave != "tipo"}
+    entrada = {"archivo": datos} if caso["entrada"].get("tipo") == "archivo" else datos
     with _espiar_llm() as espia:
-        resultado = validar(caso["entrada"])
-    d = _a_dict(resultado)
-    veredicto = d.get("veredicto", resultado if isinstance(resultado, str) else None)
-    return {
-        "veredicto": getattr(veredicto, "value", veredicto),
-        "sigue_como_dato": d.get("sigue_como_dato"),
-        "llamo_llm": espia["llamadas"] > 0 or bool(d.get("llamo_llm")),
-    }
+        resultados = _lista(evaluar(entrada))
+    items = [_a_dict(r) for r in resultados]
+    if any("ok" not in d for d in items):
+        raise TypeError("salida con forma inesperada: ResultadoGuardrail sin 'ok'")
+    rechazos = [d for d in items if not d["ok"]]
+    marcas = [m for d in items for m in _planos(d.get("marcas"))]
+    if rechazos:
+        veredicto = "fuera_de_alcance" if any(d.get("respuesta") for d in rechazos) else "rechazar"
+    else:
+        veredicto = "marcar" if marcas else "aceptar"
+    return {"veredicto": veredicto, "sigue_como_dato": not rechazos, "llamo_llm": espia["llamadas"] > 0}
 
 
-def ejecutores_por_defecto() -> dict[str, Ejecutor]:
-    """Un ejecutor por categoría. Resuelven sus dependencias al ejecutarse, no al importar este módulo."""
+def ejecutores_por_defecto(
+    taxonomia: dict | None = None,
+    *,
+    extraer: Callable[..., Any] | None = None,
+    llm: Callable[[str], str] | None = None,
+) -> dict[str, Ejecutor]:
+    """Un ejecutor por categoría. Resuelven sus dependencias al ejecutarse, no al importar este módulo.
+
+    `taxonomia` es la de casos.yaml (en línea); `extraer` y `llm` sustituyen al Gemini real (pruebas).
+    """
     return {
-        "extraccion_ofertas": _ejecutar_extraccion,
+        "extraccion_ofertas": functools.partial(_ejecutar_extraccion, taxonomia=taxonomia, extraer=extraer),
         "requisitos_discriminatorios": _ejecutar_discriminacion,
-        "perfil_sin_cv": _ejecutar_perfil,
+        "perfil_sin_cv": functools.partial(_ejecutar_perfil, taxonomia=taxonomia, llm=llm),
         "matching_factible": _ejecutar_matching,
         "sesgo_contrafactual": _ejecutar_sesgo,
         "guardrails": _ejecutar_guardrails,
@@ -590,7 +675,7 @@ def correr(
     """Ejecuta todos los casos. Las categorías con LLM se corren `repeticiones` veces; el resto, una."""
     if usar_llm is None:
         usar_llm = bool(os.getenv("GOOGLE_API_KEY"))
-    ejecutores = ejecutores_por_defecto() if ejecutores is None else ejecutores
+    ejecutores = ejecutores_por_defecto(casos.get("taxonomia")) if ejecutores is None else ejecutores
     categorias = casos["categorias"]
     resultados: list[ResultadoCaso] = []
     for caso in casos["casos"]:
@@ -610,6 +695,8 @@ def correr(
         for _ in range(corridas):
             try:
                 observado = ejecutor(caso)
+                if not isinstance(observado, dict):
+                    raise TypeError(f"salida con forma inesperada: {type(observado).__name__}")
             except DependenciaPendiente as error:
                 pendiente = error
                 break

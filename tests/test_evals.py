@@ -512,7 +512,7 @@ def test_registro_de_fallos_y_casos_intactos(tmp_path, casos, monkeypatch, capsy
             observado["bloqueada"] = False
         return observado
 
-    monkeypatch.setattr(run, "ejecutores_por_defecto", lambda: {"requisitos_discriminatorios": doble})
+    monkeypatch.setattr(run, "ejecutores_por_defecto", lambda *a, **k: {"requisitos_discriminatorios": doble})
     salida = tmp_path / "resultados.md"
     assert run.main(["--casos", str(copia), "--salida", str(salida), "--sin-llm"]) == 0
     assert copia.read_bytes() == antes  # el runner nunca reescribe casos.yaml
@@ -629,44 +629,6 @@ def test_ejecutor_de_sesgo_inyecta_el_matching_sesgado_solo_cuando_el_caso_lo_pi
     assert puntajes(hombre) == [85]  # 100 % de cobertura menos 15 min de traslado
 
 
-def test_ejecutor_de_discriminacion_normaliza_la_respuesta(casos, monkeypatch):
-    resultado = SimpleNamespace(
-        bloqueada=True,
-        alertas=["Ley 11 de 2005, artículo 2: límite de edad 18 a 25", "alerta de buena presencia (no bloquea)"],
-    )
-    monkeypatch.setattr(run, "_resolver", lambda destino: lambda texto: resultado)
-    caso = _caso(casos, "DIS-01")
-    observado = run._ejecutar_discriminacion(caso)
-    assert observado == {"bloqueada": True, "reglas": ["art. 2"], "alertas": ["presencia"]}
-    assert run.comparar(caso["categoria"], caso["esperado"], observado)
-
-
-def test_ejecutores_de_extraccion_y_perfil_leen_modelos_pydantic(casos, monkeypatch):
-    from puente.schemas import HabilidadPerfil, Horario, Oferta, Perfil
-
-    oferta = Oferta(
-        id="o1", puesto="Cajero/a", empresa="Super Rio Ficticio S.A.", corregimiento="La Chorrera", salario_mensual=520,
-        horario=Horario(dias=["lunes"], hora_inicio="08:00", hora_fin="16:00"), habilidades=["manejo_caja", "atencion_cliente"],
-    )
-    monkeypatch.setattr(run, "_resolver", lambda destino: lambda texto: oferta)
-    ext = _caso(casos, "EXT-01")
-    assert run.comparar("extraccion_ofertas", ext["esperado"], run._ejecutar_extraccion(ext))
-
-    per = _caso(casos, "PER-01")
-    perfil = Perfil(
-        id="p", nombre="Yaritza Ficticia", edad=20, corregimiento="La Chorrera", salario_minimo=300, presupuesto_pasaje_diario=2,
-        habilidades=[
-            HabilidadPerfil(skill_id="atencion_cliente", evidencia="Atiendo a los clientes"),
-            HabilidadPerfil(skill_id="manejo_caja", evidencia="cobro en caja"),
-            HabilidadPerfil(skill_id="inventario", evidencia="control del inventario"),
-        ],
-    )
-    monkeypatch.setattr(run, "_resolver", lambda destino: lambda texto: perfil)
-    resultados = run.correr(_solo(casos, "PER-01"), ejecutores={"perfil_sin_cv": run._ejecutar_perfil}, usar_llm=True)
-    assert [(r.estado, r.corridas, r.aciertos) for r in resultados] == [("ok", 3, 3)]
-    assert per["esperado"]["habilidades"] == ["atencion_cliente", "manejo_caja", "inventario"]
-
-
 def test_espia_cuenta_las_llamadas_al_llm_y_se_restaura():
     from langchain_core.language_models.chat_models import BaseChatModel
     from langchain_core.language_models.fake_chat_models import FakeListChatModel
@@ -682,23 +644,292 @@ def test_espia_cuenta_las_llamadas_al_llm_y_se_restaura():
     assert espia["llamadas"] == 1
 
 
-def test_ejecutor_de_guardrails_detecta_si_se_llamo_al_llm(casos, monkeypatch):
+# ---------------------------------------------------------------------------- adaptadores contra las APIs reales de #5, #6 y #9
+# Las dependencias de #5, #6 y #9 ya están fusionadas: estos adaptadores se prueban contra sus funciones reales,
+# con dobles solo donde habría LLM (extraer y llm), que tienen la forma de las APIs reales.
+def _oferta_extraida(**cambios):
+    from puente.agents.mercado import HorarioExtraido, OfertaExtraida
+
+    datos = {
+        "puesto": "Cajero/a",
+        "empresa": "Super Rio Ficticio S.A.",
+        "corregimiento": "La Chorrera",
+        "salario_mensual": 520.0,
+        "horario": HorarioExtraido(dias=["lunes", "martes"], hora_inicio="08:00", hora_fin="16:00"),
+        "habilidades": ["cobrar en caja", "atender a los clientes"],
+        "requisitos_texto": "cobrar en caja",
+    }
+    return OfertaExtraida(**{**datos, **cambios})
+
+
+def test_taxonomia_en_linea_cubre_los_skill_id_esperados(casos):
+    esperados = set()
+    for caso in casos["casos"]:
+        if caso["categoria"] in ("extraccion_ofertas", "perfil_sin_cv"):
+            esperados |= set(caso["esperado"]["habilidades"]) | set(caso["esperado"].get("no_incluir", []))
+    assert esperados <= set(casos["taxonomia"])
+
+
+def test_extraccion_usa_procesar_ofertas_y_mide_la_primera_oferta(casos):
+    recibidos = []
+
+    def extraer(entrada):
+        recibidos.append(entrada.texto)
+        return _oferta_extraida()
+
+    ejecutor = run.ejecutores_por_defecto(casos["taxonomia"], extraer=extraer)["extraccion_ofertas"]
+    caso = _caso(casos, "EXT-01")
+    observado = ejecutor(caso)
+    assert recibidos == [caso["entrada"]["texto"]]
+    assert observado["salario_mensual"] == 520 and observado["habilidades"] == ["manejo_caja", "atencion_cliente"]
+    assert run.comparar("extraccion_ofertas", caso["esperado"], observado)
+
+
+def test_extraccion_acepta_la_salida_en_dict_y_detecta_un_campo_mal_extraido(casos):
+    def extraer(entrada):
+        return {**_oferta_extraida().model_dump(), "salario_mensual": 5000}  # la inyección del texto funcionó
+
+    ejecutor = run.ejecutores_por_defecto(casos["taxonomia"], extraer=extraer)["extraccion_ofertas"]
+    resultados = run.correr(_solo(casos, "EXT-01"), ejecutores={"extraccion_ofertas": ejecutor}, usar_llm=True)
+    assert [(r.estado, r.aciertos, r.corridas) for r in resultados] == [("fallo", 0, 3)]
+    assert "salario_mensual" in resultados[0].detalle
+
+
+def test_extraccion_sin_oferta_valida_es_fallo_con_el_motivo(casos):
+    extraer = lambda entrada: _oferta_extraida(salario_mensual=None)  # noqa: E731
+    ejecutor = run.ejecutores_por_defecto(casos["taxonomia"], extraer=extraer)["extraccion_ofertas"]
+    resultados = run.correr(_solo(casos, "EXT-01"), ejecutores={"extraccion_ofertas": ejecutor}, usar_llm=True, repeticiones=1)
+    assert resultados[0].estado == "fallo"
+    assert "ValueError" in resultados[0].detalle and "ninguna oferta" in resultados[0].detalle
+
+
+def test_discriminacion_contra_revisar_texto_real(casos):
+    ejecutor = run.ejecutores_por_defecto()["requisitos_discriminatorios"]
+    for caso in casos["casos"]:
+        if caso["categoria"] == "requisitos_discriminatorios":
+            observado = ejecutor(caso)
+            assert run.comparar(caso["categoria"], caso["esperado"], observado), (caso["id"], observado)
+    assert ejecutor(_caso(casos, "DIS-01")) == {"bloqueada": True, "reglas": ["art. 2"], "alertas": ["presencia"]}
+    assert ejecutor(_caso(casos, "DIS-06"))["reglas"] == ["art. 1", "art. 2"]
+
+
+def test_discriminacion_traduce_hallazgos_con_la_forma_de_la_api(casos, monkeypatch):
+    hallazgos = [
+        SimpleNamespace(regla="edad", frase="18 a 25 años", bloquea=True),
+        SimpleNamespace(regla="buena_presencia", frase="buena presencia", bloquea=False),
+        SimpleNamespace(regla="regla_nueva", frase="x", bloquea=False),
+    ]
+    destinos = {
+        run.DISCRIMINACION_REVISAR[1]: lambda texto: hallazgos,
+        run.DISCRIMINACION_BLOQUEADA[1]: lambda lista: any(h.bloquea for h in lista),
+    }
+    monkeypatch.setattr(run, "_resolver", lambda destino: destinos[destino[1]])
+    observado = run._ejecutar_discriminacion(_caso(casos, "DIS-01"))
+    assert observado == {"bloqueada": True, "reglas": ["art. 2"], "alertas": ["otra:regla_nueva", "presencia"]}
+    assert not run.comparar("requisitos_discriminatorios", _caso(casos, "DIS-01")["esperado"], observado)  # alerta espuria
+
+
+def test_a_dict_rechaza_las_formas_no_soportadas():
+    from puente.rules.discriminacion import Hallazgo
+
+    hallazgo = Hallazgo("edad", "18 a 25 años", True)
+    assert run._a_dict(hallazgo)["regla"] == "edad"
+    assert run._a_dict({"a": 1}) == {"a": 1}
+    for forma in ([hallazgo], (hallazgo,), None, "texto", 3):
+        with pytest.raises(TypeError, match="salida con forma inesperada"):
+            run._a_dict(forma)
+
+
+def test_salida_con_forma_inesperada_es_fallo_de_contrato_y_no_un_fallo_falso(casos, monkeypatch):
+    from puente.guardrails import validar_texto
+
+    # Una dependencia que devuelve un solo objeto (y no la lista) o un dict (y no la lista de Hallazgo).
+    monkeypatch.setattr(run, "_resolver", lambda destino: lambda entrada: validar_texto("hola"))
+    grd = run.correr(_solo(casos, "GRD-01"), ejecutores={"guardrails": run._ejecutar_guardrails}, usar_llm=False)[0]
+    assert grd.estado == "fallo" and "TypeError" in grd.detalle and "forma inesperada" in grd.detalle
+
+    monkeypatch.setattr(run, "_resolver", lambda destino: lambda *a, **k: {"bloqueada": True})
+    ejecutores = {"requisitos_discriminatorios": run._ejecutar_discriminacion}
+    dis = run.correr(_solo(casos, "DIS-01"), ejecutores=ejecutores, usar_llm=False)[0]
+    assert dis.estado == "fallo" and "TypeError" in dis.detalle and "forma inesperada" in dis.detalle
+
+    def lista(caso):
+        return [{"bloqueada": True}]
+
+    otro = run.correr(_solo(casos, "DIS-01"), ejecutores={"requisitos_discriminatorios": lista}, usar_llm=False)[0]
+    assert otro.estado == "fallo" and "forma inesperada: list" in otro.detalle  # el propio ejecutor devolvió una lista
+
+
+def test_lista_vacia_de_hallazgos_no_es_error_de_contrato(casos, monkeypatch):
+    destinos = {run.DISCRIMINACION_REVISAR[1]: lambda texto: [], run.DISCRIMINACION_BLOQUEADA[1]: lambda lista: False}
+    monkeypatch.setattr(run, "_resolver", lambda destino: destinos[destino[1]])
+    ejecutores = {"requisitos_discriminatorios": run._ejecutar_discriminacion}
+    resultados = run.correr(_solo(casos, "DIS-01"), ejecutores=ejecutores, usar_llm=False)
+    # Lista vacía es una salida válida: el caso falla por lo que mide (no bloqueó), no por el contrato.
+    assert resultados[0].estado == "fallo" and "TypeError" not in resultados[0].detalle
+    assert "bloqueada" in resultados[0].detalle
+
+
+def _llm_de_perfil(*habilidades):
+    import json
+
+    return lambda prompt: json.dumps({"habilidades": [{"skill_id": s, "evidencia": e} for s, e in habilidades]})
+
+
+def test_perfil_contra_construir_perfil_real_con_llm_doble(casos):
+    llm = _llm_de_perfil(
+        ("atencion_cliente", "Atiendo a los clientes"),
+        ("manejo_caja", "cobro en caja"),
+        ("inventario", "el control del inventario"),
+    )
+    ejecutor = run.ejecutores_por_defecto(casos["taxonomia"], llm=llm)["perfil_sin_cv"]
+    caso = _caso(casos, "PER-01")
+    observado = ejecutor(caso)
+    assert [h["skill_id"] for h in observado["habilidades"]] == ["atencion_cliente", "manejo_caja", "inventario"]
+    resultados = run.correr(_solo(casos, "PER-01"), ejecutores={"perfil_sin_cv": ejecutor}, usar_llm=True)
+    assert [(r.estado, r.corridas, r.aciertos) for r in resultados] == [("ok", 3, 3)]
+
+
+def test_perfil_descarta_evidencia_inventada_y_quita_pii_antes_del_llm(casos):
+    prompts = []
+    respuesta = _llm_de_perfil(
+        ("limpieza", "Limpio casas y oficinas los sábados"),
+        ("trabajo_equipo", "trabajo en equipo con mi prima"),
+        ("manejo_caja", "sabe cobrar en la caja registradora"),  # inventada: no es literal
+    )
+
+    def llm(prompt):
+        prompts.append(prompt)
+        return respuesta(prompt)
+
+    caso = _caso(casos, "PER-04")
+    observado = run.ejecutores_por_defecto(casos["taxonomia"], llm=llm)["perfil_sin_cv"](caso)
+    assert {h["skill_id"] for h in observado["habilidades"]} == {"limpieza", "trabajo_equipo"}
+    assert run.comparar("perfil_sin_cv", caso["esperado"], {"texto_fuente": caso["entrada"]["texto"], **observado})
+    for dato in ("8-000-0000", "6000-0000"):  # la cédula y el teléfono no llegan al prompt
+        assert dato not in prompts[0]
+
+
+def test_perfil_mide_una_habilidad_que_solo_se_desea(casos):
+    llm = _llm_de_perfil(("manejo_caja", "Me gustaría aprender a manejar la caja"), ("limpieza", "Limpio casas y oficinas"))
+    caso = _caso(casos, "PER-04")
+    ejecutor = run.ejecutores_por_defecto(casos["taxonomia"], llm=llm)["perfil_sin_cv"]
+    resultados = run.correr(_solo(casos, "PER-04"), ejecutores={"perfil_sin_cv": ejecutor}, usar_llm=True, repeticiones=1)
+    assert resultados[0].estado == "fallo" and "sobra manejo_caja" in resultados[0].detalle
+    assert caso["esperado"]["no_incluir"] == ["manejo_caja"]
+
+
+def test_perfil_exige_la_tupla_de_construir_perfil(casos, monkeypatch):
+    destinos = {
+        run.PERFIL_CONSTRUIR[1]: lambda entrada, **kw: {"habilidades": []},
+        run.TAXONOMIA_NORMALIZAR[1]: lambda texto, taxonomia: None,
+    }
+    monkeypatch.setattr(run, "_resolver", lambda destino: destinos[destino[1]])
+    with pytest.raises(TypeError, match="forma inesperada: dict"):
+        run._ejecutar_perfil(_caso(casos, "PER-01"), taxonomia=casos["taxonomia"])
+
+
+def test_perfil_manda_el_formulario_y_la_entrevista_como_cv_texto(casos, monkeypatch):
+    from puente.schemas import Perfil
+
+    recibido = {}
+
+    def construir(entrada, **kwargs):
+        recibido.update(entrada=entrada, kwargs=kwargs)
+        perfil = Perfil(id="x", nombre="n", edad=20, corregimiento="La Chorrera", salario_minimo=0, presupuesto_pasaje_diario=0)
+        return perfil, None
+
+    destinos = {run.PERFIL_CONSTRUIR[1]: construir, run.TAXONOMIA_NORMALIZAR[1]: lambda texto, taxonomia: None}
+    monkeypatch.setattr(run, "_resolver", lambda destino: destinos[destino[1]])
+    caso = _caso(casos, "PER-02")
+    assert run._ejecutar_perfil(caso, taxonomia=casos["taxonomia"], llm=print) == {"habilidades": []}
+    assert recibido["entrada"] == {**caso["entrada"]["formulario"], "id": "PER-02", "cv_texto": caso["entrada"]["texto"]}
+    assert set(recibido["kwargs"]) == {"taxonomia", "normalizar", "llm"}
+
+
+def test_guardrails_contra_evaluar_entrada_real(casos):
+    ejecutor = run.ejecutores_por_defecto()["guardrails"]
+    for caso in casos["casos"]:
+        if caso["categoria"] == "guardrails":
+            observado = ejecutor(caso)
+            assert run.comparar("guardrails", caso["esperado"], observado), (caso["id"], observado)
+    assert ejecutor(_caso(casos, "GRD-01")) == {"veredicto": "rechazar", "sigue_como_dato": False, "llamo_llm": False}
+    assert ejecutor(_caso(casos, "GRD-02"))["sigue_como_dato"] is True
+    aceptado = {"entrada": {"tipo": "texto", "texto": "Busco trabajo de cajero en La Chorrera"}}
+    assert ejecutor(aceptado)["veredicto"] == "aceptar"
+
+
+def test_guardrails_envuelve_el_archivo_y_traduce_el_veredicto(casos, monkeypatch):
+    recibidas = []
+    respuestas = {}
+
+    def evaluar(entrada):
+        recibidas.append(entrada)
+        return respuestas["valor"]
+
+    monkeypatch.setattr(run, "_resolver", lambda destino: evaluar)
+    ok = SimpleNamespace(ok=True, marcas=[], motivo="bien", respuesta=None)
+    respuestas["valor"] = [SimpleNamespace(ok=False, marcas=[], motivo="grande", respuesta=None)]
+    assert run._ejecutar_guardrails(_caso(casos, "GRD-01"))["veredicto"] == "rechazar"
+    assert recibidas[0] == {"archivo": {"nombre": "cv_ficticio.pdf", "tamano_bytes": 52428800}}
+
+    respuestas["valor"] = [ok, SimpleNamespace(ok=True, marcas=["inyeccion:ignora"], motivo="m", respuesta=None)]
+    marcado = {"veredicto": "marcar", "sigue_como_dato": True, "llamo_llm": False}
+    assert run._ejecutar_guardrails(_caso(casos, "GRD-02")) == marcado
+    assert recibidas[1] == {"texto": _caso(casos, "GRD-02")["entrada"]["texto"]}
+
+    respuestas["valor"] = [SimpleNamespace(ok=False, marcas=[], motivo="fuera", respuesta="Solo atiendo empleo y formación.")]
+    assert run._ejecutar_guardrails(_caso(casos, "GRD-03"))["veredicto"] == "fuera_de_alcance"
+
+    respuestas["valor"] = [ok]
+    assert run._ejecutar_guardrails(_caso(casos, "GRD-03"))["veredicto"] == "aceptar"
+
+    respuestas["valor"] = [{"motivo": "sin ok"}]
+    with pytest.raises(TypeError, match="sin 'ok'"):
+        run._ejecutar_guardrails(_caso(casos, "GRD-03"))
+
+
+def test_guardrails_detecta_si_se_llamo_al_llm(casos, monkeypatch):
     from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
-    def validar_sin_llm(entrada):
-        return {"veredicto": "rechazar"}
+    def sin_llm(entrada):
+        return [SimpleNamespace(ok=False, marcas=[], motivo="grande", respuesta=None)]
 
-    monkeypatch.setattr(run, "_resolver", lambda destino: validar_sin_llm)
+    monkeypatch.setattr(run, "_resolver", lambda destino: sin_llm)
     grd01 = _caso(casos, "GRD-01")
     observado = run._ejecutar_guardrails(grd01)
     assert observado["llamo_llm"] is False
     assert run.comparar("guardrails", grd01["esperado"], observado)
 
-    def validar_llamando_al_llm(entrada):
+    def llamando_al_llm(entrada):
         FakeListChatModel(responses=["x"]).invoke("hola")
-        return "rechazar"
+        return sin_llm(entrada)
 
-    monkeypatch.setattr(run, "_resolver", lambda destino: validar_llamando_al_llm)
+    monkeypatch.setattr(run, "_resolver", lambda destino: llamando_al_llm)
     observado = run._ejecutar_guardrails(grd01)
     assert observado["llamo_llm"] is True
     assert not run.comparar("guardrails", grd01["esperado"], observado)
+
+
+def test_correr_pasa_la_taxonomia_del_yaml_a_los_ejecutores_por_defecto(casos, monkeypatch):
+    recibido = {}
+
+    def falso(taxonomia=None, **kwargs):
+        recibido["taxonomia"] = taxonomia
+        return {}
+
+    monkeypatch.setattr(run, "ejecutores_por_defecto", falso)
+    run.correr(_solo(casos, "EXT-01"), usar_llm=True)
+    assert recibido["taxonomia"] == casos["taxonomia"]
+
+
+def test_cargar_casos_valida_la_taxonomia_en_linea(tmp_path):
+    def con(taxonomia):
+        datos = _yaml_minimo()
+        datos["taxonomia"] = taxonomia
+        return _escribir_yaml(tmp_path / "t.yaml", datos)
+
+    assert "a" in run.cargar_casos(con({"a": {"nombre_es": "A", "sinonimos": ["aa"]}}))["taxonomia"]
+    for malo in ([], {}, {"a": "texto"}, {"a": {"sinonimos": []}}, {"a": {"nombre_es": "A", "sinonimos": "aa"}}):
+        with pytest.raises(ValueError, match="taxonom"):
+            run.cargar_casos(con(malo))
