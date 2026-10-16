@@ -1,0 +1,90 @@
+{
+  "_nota": "Caso sintético de la demo (#10). Todas las personas y empresas son ficticias. `ofertas` y `perfiles` simulan lo que ya está en puente.db; `entradas_perfil` es la entrevista de Yaritza (forma de #6/#39) con las habilidades ya verificadas, porque el nodo Perfil es un stub en la Fase 1.",
+  "thread_id": "yaritza",
+  "tipo_entrada": "perfil",
+  "ofertas": [
+    {
+      "id": "of-cajero-vista-alegre",
+      "puesto": "Cajero(a) de minisúper",
+      "empresa": "Minisúper Ficticio El Ahorro",
+      "corregimiento": "Vista Alegre",
+      "salario_mensual": 650,
+      "horario": {"dias": ["lunes", "martes", "miercoles", "jueves", "viernes"], "hora_inicio": "07:00", "hora_fin": "13:00"},
+      "habilidades": ["manejo_caja", "atencion_cliente"],
+      "requisitos_texto": "Manejo de caja y atención al cliente."
+    },
+    {
+      "id": "of-ayudante-cocina-chorrera",
+      "puesto": "Ayudante de cocina",
+      "empresa": "Fonda Ficticia La Esquina",
+      "corregimiento": "Barrio Colón",
+      "salario_mensual": 450,
+      "horario": {"dias": ["sabado", "domingo"], "hora_inicio": "07:00", "hora_fin": "15:00"},
+      "habilidades": ["cocina", "atencion_cliente"],
+      "requisitos_texto": "Manipulación de alimentos y servicio al cliente."
+    },
+    {
+      "id": "of-cajera-bloqueada",
+      "puesto": "Cajera",
+      "empresa": "Supermercado Ficticio Los Pinos",
+      "corregimiento": "Vista Alegre",
+      "salario_mensual": 600,
+      "horario": {"dias": ["lunes", "martes", "miercoles", "jueves", "viernes"], "hora_inicio": "14:00", "hora_fin": "22:00"},
+      "habilidades": ["manejo_caja"],
+      "requisitos_texto": "Buena presencia, de 18 a 25 años, manejo de caja.",
+      "alertas": ["edad: \"de 18 a 25 años\" (límite de edad, Ley 11 de 2005 art. 2)"],
+      "bloqueada": true
+    }
+  ],
+  "perfiles": [
+    {
+      "id": "carlos",
+      "nombre": "Carlos Ficticio",
+      "genero": "M",
+      "edad": 22,
+      "corregimiento": "Vista Alegre",
+      "salario_minimo": 450,
+      "presupuesto_pasaje_diario": 3.0,
+      "habilidades": [
+        {"skill_id": "manejo_caja", "evidencia": "cobraba en la caja del abarrote"},
+        {"skill_id": "atencion_cliente", "evidencia": "atendía a los clientes del abarrote"}
+      ]
+    },
+    {
+      "id": "maria",
+      "nombre": "María Ficticia",
+      "genero": "F",
+      "edad": 24,
+      "corregimiento": "Barrio Colón",
+      "salario_minimo": 400,
+      "presupuesto_pasaje_diario": 2.5,
+      "habilidades": [
+        {"skill_id": "cocina", "evidencia": "cocino para los eventos de la iglesia"}
+      ]
+    }
+  ],
+  "entradas_perfil": [
+    {
+      "id": "yaritza",
+      "nombre": "Yaritza Ficticia",
+      "genero": "F",
+      "edad": 20,
+      "corregimiento": "Barrio Colón",
+      "salario_minimo": 400,
+      "presupuesto_pasaje_diario": 3.0,
+      "horario_clases": [{"dias": ["lunes", "martes", "miercoles", "jueves", "viernes"], "hora_inicio": "18:00", "hora_fin": "22:00"}],
+      "respuestas": [
+        "Tengo 20 años y vivo en La Chorrera.",
+        "Estudio de noche, de lunes a viernes de 6 a 10 de la noche. En el día ayudo en la fonda.",
+        "Atiendo la fonda de mi mamá todas las mañanas. Atiendo a los clientes y les tomo el pedido, cobro y doy el vuelto.",
+        "No he hecho voluntariado.",
+        "Sé usar el celular y ayudo a cocinar el almuerzo. Necesito ganar al menos 400 al mes."
+      ],
+      "habilidades": [
+        {"skill_id": "atencion_cliente", "evidencia": "Atiendo a los clientes y les tomo el pedido"},
+        {"skill_id": "manejo_caja", "evidencia": "cobro y doy el vuelto"},
+        {"skill_id": "cocina", "evidencia": "ayudo a cocinar el almuerzo"}
+      ]
+    }
+  ]
+}
