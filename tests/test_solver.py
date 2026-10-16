@@ -1,19 +1,30 @@
-"""Pruebas unitarias y de aceptación para puente.solver.asignacion y puente.rules.traslados (Issue #4)."""
+"""Pruebas unitarias y de aceptación para puente.solver.asignacion y puente.rules.traslados (Issues #4 y #48)."""
 
 from __future__ import annotations
 
 import time
+import pytest
 
 from puente.rules.traslados import (
     CORREGIMIENTOS_PANAMA,
+    InfoTraslado,
     cargar_traslados,
+    construir_matriz_default,
     obtener_traslado,
 )
+from puente.schemas import SIN_OFERTA
 from puente.solver.asignacion import (
     ConfigSolver,
     asignar,
+    asignar_orden_simple,
     evaluar_factibilidad_par,
 )
+
+
+@pytest.fixture
+def fixture_traslados() -> dict[tuple[str, str], InfoTraslado]:
+    """Fixture explícito de matriz de traslados de prueba (#48)."""
+    return construir_matriz_default()
 
 
 def _perfil_yaritza() -> dict:
@@ -43,8 +54,8 @@ def _perfil_yaritza() -> dict:
     }
 
 
-def test_matriz_traslados_completa():
-    """Verifica que la matriz de traslados cubra todos los pares de los 12 corregimientos."""
+def test_matriz_traslados_csv_medido_y_error_si_falta():
+    """Verifica que cargar_traslados() lea data/traslados.csv (#51) y falle con error claro si falta el archivo (#48)."""
     traslados = cargar_traslados()
     for orig in CORREGIMIENTOS_PANAMA:
         for dest in CORREGIMIENTOS_PANAMA:
@@ -52,10 +63,14 @@ def test_matriz_traslados_completa():
             assert info is not None, f"Falta traslado entre {orig} y {dest}"
             assert info.minutos_hora_pico > 0
             assert info.pasaje_ida_usd > 0
+            assert info.fuente and info.fuente != "fixture_prueba"
+
+    with pytest.raises(FileNotFoundError):
+        cargar_traslados("data/archivo_inexistente_traslados.csv")
 
 
 def test_yaritza_tocumen_descartada_por_traslado_y_pasaje():
-    """Criterio 1: Yaritza — la oferta de Tocumen queda descartada con motivo de traslado o pasaje."""
+    """Criterio #4 y #48: Yaritza — Tocumen queda descartada con SIN_OFERTA y motivo de traslado y pasaje."""
     yaritza = _perfil_yaritza()
     oferta_tocumen = {
         "id": "OF-TOCUMEN-01",
@@ -72,17 +87,18 @@ def test_yaritza_tocumen_descartada_por_traslado_y_pasaje():
         "bloqueada": False,
     }
 
-    # Caso A: Solo se evalúa la oferta de Tocumen -> sin vacante viable, devuelve motivo explícito
+    # Caso A: Solo se evalúa la oferta de Tocumen -> sin vacante viable, devuelve SIN_OFERTA y motivo explícito
     matches_solo_tocumen = asignar([yaritza], [oferta_tocumen])
     assert len(matches_solo_tocumen) == 1
     m_tocumen = matches_solo_tocumen[0]
     assert m_tocumen.perfil_id == "PERFIL-YARITZA"
+    assert m_tocumen.oferta_id == SIN_OFERTA
     assert m_tocumen.puntaje == 0
     assert m_tocumen.desglose.get("viable") is False
     texto_motivo = (
         f"{m_tocumen.explicacion} {m_tocumen.desglose.get('motivo_descarte', '')}"
     ).lower()
-    assert "traslado 95 min > 60" in texto_motivo or "pasaje" in texto_motivo
+    assert "traslado 95 min > 60" in texto_motivo
 
     # Caso B: Se evalúa Tocumen junto con una oferta viable en La Chorrera
     oferta_chorrera = {
@@ -103,15 +119,222 @@ def test_yaritza_tocumen_descartada_por_traslado_y_pasaje():
     assert len(matches_mixto) == 1
     m_viable = matches_mixto[0]
     assert m_viable.oferta_id == "OF-CHORRERA-01"
-    # Puntaje calculado a mano: cobertura 3/3 = 100%, traslado interno La Chorrera = 15 min -> 100 - 15 = 85
-    assert m_viable.puntaje == 85
+    # Puntaje (#48): cobertura 3/3 = 100% (los minutos de traslado filtran y desempatan sin restar puntaje)
+    assert m_viable.puntaje == 100
     assert "OF-TOCUMEN-01" in m_viable.desglose.get("ofertas_descartadas", {})
     assert "traslado 95 min > 60" in m_viable.desglose["ofertas_descartadas"]["OF-TOCUMEN-01"]
 
 
-def test_tres_escenarios_calculados_a_mano_sin_violaciones():
-    """Criterio 2: 0 violaciones de restricciones duras en 3 escenarios con solución calculada a mano."""
-    traslados = cargar_traslados()
+def test_ningun_joven_aparece_en_mas_de_2_listas_cortas(fixture_traslados):
+    """Criterio 1 (#48): Por defecto (max_vacantes_por_perfil=2), ningún joven aparece en más de 2 listas cortas."""
+    yaritza = _perfil_yaritza()
+    ofertas = [
+        {
+            "id": f"OF-CHO-{k}",
+            "puesto": f"Puesto {k}",
+            "empresa": f"Empresa {k}",
+            "corregimiento": "La Chorrera",
+            "salario_mensual": 650.0 + k * 20,
+            "horario": {
+                "dias": ["lunes", "martes", "miercoles", "jueves", "viernes"],
+                "hora_inicio": "08:00",
+                "hora_fin": "16:00",
+            },
+            "habilidades": ["atencion_cliente", "manejo_caja"],
+            "bloqueada": False,
+        }
+        for k in range(1, 6)  # 5 vacantes todas viables para Yaritza
+    ]
+    res = asignar([yaritza], ofertas, fixture_traslados)
+    viables = [m for m in res if m.desglose.get("viable") is True]
+    assert len(viables) == 2
+
+
+def test_escenario_competencia_cpsat_supera_orden_simple(fixture_traslados):
+    """Criterio 2 (#48): En el escenario de competencia, CP-SAT da una solución distinta, y mejor, que el orden simple."""
+    # Configuración: 1 plaza por vacante (k=1) y tope por defecto de 2 vacantes por joven
+    cfg = ConfigSolver(max_candidatos_por_vacante=1, max_vacantes_por_perfil=2)
+
+    # 3 vacantes en La Chorrera (O1, O2, O3)
+    ofertas = [
+        {
+            "id": "O1",
+            "puesto": "Caja y Ventas",
+            "empresa": "Comercio 1",
+            "corregimiento": "La Chorrera",
+            "salario_mensual": 650.0,
+            "horario": {"dias": ["lunes", "martes", "miercoles", "jueves", "viernes"], "hora_inicio": "08:00", "hora_fin": "16:00"},
+            "habilidades": ["s1", "s2", "s3", "s4"],
+        },
+        {
+            "id": "O2",
+            "puesto": "Atención y Caja",
+            "empresa": "Comercio 2",
+            "corregimiento": "La Chorrera",
+            "salario_mensual": 650.0,
+            "horario": {"dias": ["lunes", "martes", "miercoles", "jueves", "viernes"], "hora_inicio": "08:00", "hora_fin": "16:00"},
+            "habilidades": ["s1", "s2", "s3", "s4"],
+        },
+        {
+            "id": "O3",
+            "puesto": "Inventario Nocturno",
+            "empresa": "Comercio 3",
+            "corregimiento": "La Chorrera",
+            "salario_mensual": 650.0,
+            "horario": {"dias": ["lunes", "martes", "miercoles", "jueves", "viernes"], "hora_inicio": "14:00", "hora_fin": "20:00"},
+            "habilidades": ["s1", "s2", "s3", "s4"],
+        },
+    ]
+
+    # J1 tiene disponibilidad completa (sin clases nocturnas) y cubre 100% en O1/O2 y 75% en O3
+    # J2 estudia de noche (18:00-22:00, por lo que O3 es inviable para J2) y cubre 75% en O1 y O2
+    perfiles = [
+        {
+            "id": "J1",
+            "corregimiento": "La Chorrera",
+            "salario_minimo": 600.0,
+            "presupuesto_pasaje_diario": 3.00,
+            "habilidades": ["s1", "s2", "s3", "s4"],
+        },
+        {
+            "id": "J2",
+            "corregimiento": "La Chorrera",
+            "horario_clases": [{"dias": ["lunes", "martes", "miercoles", "jueves", "viernes"], "hora_inicio": "18:00", "hora_fin": "22:00"}],
+            "salario_minimo": 600.0,
+            "presupuesto_pasaje_diario": 3.00,
+            "habilidades": ["s1", "s2", "s3"],
+        },
+    ]
+
+    # Orden simple voraz por vacante (O1 -> O2 -> O3):
+    # En O1 gana J1 (100 > 75), en O2 gana J1 (100 > 75) agotando su tope de 2 vacantes;
+    # en O3 J1 ya agotó su tope y J2 tiene cruce de horario, dejando O3 vacante y a J2 sin empleo (2 matches, suma=200).
+    res_simple = asignar_orden_simple(perfiles, ofertas, fixture_traslados, cfg)
+    viables_simple = [m for m in res_simple if m.desglose.get("viable")]
+
+    # CP-SAT global: asigna J1 a O3 + una de {O1, O2} y J2 a la otra de {O1, O2} -> 3 matches viables, suma=275!
+    res_cpsat = asignar(perfiles, ofertas, fixture_traslados, cfg)
+    viables_cpsat = [m for m in res_cpsat if m.desglose.get("viable")]
+
+    parejas_simple = {(m.perfil_id, m.oferta_id) for m in viables_simple}
+    parejas_cpsat = {(m.perfil_id, m.oferta_id) for m in viables_cpsat}
+    suma_simple = sum(m.puntaje for m in viables_simple)
+    suma_cpsat = sum(m.puntaje for m in viables_cpsat)
+
+    assert parejas_cpsat != parejas_simple
+    assert len(viables_cpsat) == 3 > len(viables_simple) == 2
+    assert suma_cpsat == 275 > suma_simple == 200
+
+
+def test_oferta_sin_salario_ni_horario_no_se_descarta_y_requiere_confirmacion(fixture_traslados):
+    """Criterio 3 (#48): Una oferta sin salario publicado no se descarta: queda con requiere_confirmacion y penalización."""
+    yaritza = _perfil_yaritza()
+    oferta_konzerta = {
+        "id": "OF-KONZERTA-SIN-SALARIO",
+        "puesto": "Dependiente de Mostrador",
+        "empresa": "Fonda Central (datos de prueba)",
+        "corregimiento": "La Chorrera",
+        "salario_mensual": None,
+        "salario_tipo": "no_publicado",
+        "horario": None,
+        "horario_tipo": "no_publicado",
+        "habilidades": ["atencion_cliente", "manejo_caja", "inventario"],
+        "bloqueada": False,
+    }
+    res = asignar([yaritza], [oferta_konzerta], fixture_traslados)
+    assert len(res) == 1
+    m = res[0]
+    assert m.oferta_id == "OF-KONZERTA-SIN-SALARIO"
+    assert m.desglose["viable"] is True
+    assert "salario" in m.desglose["requiere_confirmacion"]
+    assert "horario" in m.desglose["requiere_confirmacion"]
+    # Cobertura 100% - 20 pts (10 por salario + 10 por horario) = 80
+    assert m.desglose["penalizacion"] == 20
+    assert m.puntaje == 80
+
+
+def test_mismo_puntaje_entre_jovenes_de_distinto_corregimiento_y_desempate_propio(fixture_traslados):
+    """Requisito #48: Los minutos de traslado filtran y desempatan, pero no restan puntaje entre jóvenes."""
+    joven_chorrera = {
+        "id": "P-CHORRERA",
+        "corregimiento": "La Chorrera",
+        "salario_minimo": 600.0,
+        "presupuesto_pasaje_diario": 4.00,
+        "habilidades": ["atencion_cliente", "manejo_caja"],
+    }
+    joven_calidonia = {
+        "id": "P-CALIDONIA",
+        "corregimiento": "Calidonia",
+        "salario_minimo": 600.0,
+        "presupuesto_pasaje_diario": 4.00,
+        "habilidades": ["atencion_cliente", "manejo_caja"],
+    }
+    oferta_calidonia = {
+        "id": "OF-CALIDONIA",
+        "corregimiento": "Calidonia",
+        "salario_mensual": 750.0,
+        "habilidades": ["atencion_cliente", "manejo_caja"],
+    }
+    res = asignar([joven_chorrera, joven_calidonia], [oferta_calidonia], fixture_traslados)
+    por_id = {m.perfil_id: m for m in res}
+    # Con habilidades iguales, el joven de La Chorrera tiene el mismo puntaje (100) que el de Calidonia
+    assert por_id["P-CHORRERA"].puntaje == 100
+    assert por_id["P-CALIDONIA"].puntaje == 100
+
+    # Pero para un mismo joven con tope=1 entre dos vacantes de igual cobertura, desempata la más cercana
+    oferta_chorrera = {
+        "id": "OF-CHORRERA",
+        "corregimiento": "La Chorrera",
+        "salario_mensual": 750.0,
+        "habilidades": ["atencion_cliente", "manejo_caja"],
+    }
+    res_desempate = asignar(
+        [joven_chorrera],
+        [oferta_calidonia, oferta_chorrera],
+        fixture_traslados,
+        ConfigSolver(max_vacantes_por_perfil=1),
+    )
+    assert len(res_desempate) == 1
+    assert res_desempate[0].oferta_id == "OF-CHORRERA"
+
+
+def test_excluidos_plazas_y_parejas_fijas(fixture_traslados):
+    """Requisito #48: Respetar Oferta.plazas, no asignar excluidos y mantener parejas_fijas."""
+    perfiles = [
+        {"id": f"P{i}", "corregimiento": "La Chorrera", "salario_minimo": 600.0, "presupuesto_pasaje_diario": 3.0, "habilidades": ["s1"]}
+        for i in range(1, 6)
+    ]
+    oferta_dos_plazas = {
+        "id": "OF-PLAZAS-2",
+        "corregimiento": "La Chorrera",
+        "salario_mensual": 700.0,
+        "plazas": 2,
+        "habilidades": ["s1"],
+    }
+    # Con k=2 por plaza y plazas=2, caben 4 candidatos; si excluimos a P1, P1 queda descartado con SIN_OFERTA
+    cfg = ConfigSolver(max_candidatos_por_vacante=2, max_vacantes_por_perfil=2)
+    res = asignar(
+        perfiles,
+        [oferta_dos_plazas],
+        fixture_traslados,
+        cfg,
+        excluidos=[{"perfil_id": "P1", "oferta_id": "OF-PLAZAS-2", "origen": "orientador", "motivo": "quitar candidato"}],
+        parejas_fijas=[("P5", "OF-PLAZAS-2")],
+    )
+    viables = [m for m in res if m.desglose.get("viable")]
+    assert len(viables) == 4
+    ids_viables = {m.perfil_id for m in viables}
+    assert "P1" not in ids_viables
+    assert "P5" in ids_viables
+
+    descarte_p1 = next(m for m in res if m.perfil_id == "P1")
+    assert descarte_p1.oferta_id == SIN_OFERTA
+    assert descarte_p1.desglose["viable"] is False
+
+
+def test_tres_escenarios_calculados_a_mano_sin_violaciones(fixture_traslados):
+    """Criterio 2 (#4): 0 violaciones de restricciones duras en 3 escenarios con solución calculada a mano."""
+    traslados = fixture_traslados
     cfg = ConfigSolver(
         max_minutos_traslado=60,
         max_porcentaje_salario_pasaje=0.15,
@@ -122,8 +345,6 @@ def test_tres_escenarios_calculados_a_mano_sin_violaciones():
     # --- ESCENARIO 1: Filtros de restricciones duras (traslado, pasaje 15%, horario clases, salario, bloqueada) ---
     yaritza = _perfil_yaritza()
     ofertas_esc1 = [
-        # 1. Viable en Vista Alegre (traslado 20 min, pasaje $0.75 ida -> $1.50/día, $33/mes <= 15% de $650 = $97.50)
-        # Cobertura: 2/4 = 50% -> 50 - 20 = 30 pts
         {
             "id": "OF-VIABLE-VA",
             "puesto": "Auxiliar de Tienda",
@@ -134,7 +355,6 @@ def test_tres_escenarios_calculados_a_mano_sin_violaciones():
             "habilidades": ["atencion_cliente", "manejo_caja", "excel_basico", "facturacion"],
             "bloqueada": False,
         },
-        # 2. Inviable por cruce de horario con clases nocturnas (14:00 a 20:00 cruza con 18:00-22:00)
         {
             "id": "OF-CRUCE-HORARIO",
             "puesto": "Cajera Turno Tarde-Noche",
@@ -145,7 +365,6 @@ def test_tres_escenarios_calculados_a_mano_sin_violaciones():
             "habilidades": ["atencion_cliente", "manejo_caja"],
             "bloqueada": False,
         },
-        # 3. Inviable por salario menor al mínimo del perfil ($550 < $600)
         {
             "id": "OF-SALARIO-BAJO",
             "puesto": "Ayudante General",
@@ -156,7 +375,6 @@ def test_tres_escenarios_calculados_a_mano_sin_violaciones():
             "habilidades": ["inventario"],
             "bloqueada": False,
         },
-        # 4. Inviable por estar bloqueada por discriminación
         {
             "id": "OF-BLOQUEADA",
             "puesto": "Recepcionista",
@@ -167,7 +385,6 @@ def test_tres_escenarios_calculados_a_mano_sin_violaciones():
             "habilidades": ["atencion_cliente"],
             "bloqueada": True,
         },
-        # 5. Inviable por pasaje > 15% del salario (La Chorrera -> Calidonia: 55 min <= 60, pero pasaje $1.85 ida -> $3.70/día -> $81.40/mes > $3.00/día presupuesto)
         {
             "id": "OF-PASAJE-ALTO",
             "puesto": "Dependiente",
@@ -183,11 +400,10 @@ def test_tres_escenarios_calculados_a_mano_sin_violaciones():
     res1 = asignar([yaritza], ofertas_esc1, traslados, cfg)
     assert len(res1) == 1
     assert res1[0].oferta_id == "OF-VIABLE-VA"
-    assert res1[0].puntaje == 30  # 50% cobertura (50) - 20 min (20) = 30
+    assert res1[0].puntaje == 50  # 50% cobertura (2/4 habilidades)
     assert res1[0].brechas == ["excel_basico", "facturacion"]
 
     # --- ESCENARIO 2: Capacidad máxima k=3 candidatos por vacante ---
-    # 5 candidatos en Bella Vista compiten por 1 oferta en Bella Vista (15 min traslado)
     oferta_bv = {
         "id": "OF-BV-UNICA",
         "puesto": "Auxiliar Administrativo",
@@ -199,18 +415,18 @@ def test_tres_escenarios_calculados_a_mano_sin_violaciones():
         "bloqueada": False,
     }
     perfiles_esc2 = [
-        {"id": "P1", "corregimiento": "Bella Vista", "salario_minimo": 600.0, "presupuesto_pasaje_diario": 3.0, "habilidades": ["s1"]},               # 25 - 15 = 10
-        {"id": "P2", "corregimiento": "Bella Vista", "salario_minimo": 600.0, "presupuesto_pasaje_diario": 3.0, "habilidades": ["s1", "s2", "s3", "s4"]}, # 100 - 15 = 85
-        {"id": "P3", "corregimiento": "Bella Vista", "salario_minimo": 600.0, "presupuesto_pasaje_diario": 3.0, "habilidades": ["s1", "s2", "s3"]},       # 75 - 15 = 60
-        {"id": "P4", "corregimiento": "Bella Vista", "salario_minimo": 600.0, "presupuesto_pasaje_diario": 3.0, "habilidades": []},                     # 0 - 15 = -15
-        {"id": "P5", "corregimiento": "Bella Vista", "salario_minimo": 600.0, "presupuesto_pasaje_diario": 3.0, "habilidades": ["s1", "s2"]},             # 50 - 15 = 35
+        {"id": "P1", "corregimiento": "Bella Vista", "salario_minimo": 600.0, "presupuesto_pasaje_diario": 3.0, "habilidades": ["s1"]},
+        {"id": "P2", "corregimiento": "Bella Vista", "salario_minimo": 600.0, "presupuesto_pasaje_diario": 3.0, "habilidades": ["s1", "s2", "s3", "s4"]},
+        {"id": "P3", "corregimiento": "Bella Vista", "salario_minimo": 600.0, "presupuesto_pasaje_diario": 3.0, "habilidades": ["s1", "s2", "s3"]},
+        {"id": "P4", "corregimiento": "Bella Vista", "salario_minimo": 600.0, "presupuesto_pasaje_diario": 3.0, "habilidades": []},
+        {"id": "P5", "corregimiento": "Bella Vista", "salario_minimo": 600.0, "presupuesto_pasaje_diario": 3.0, "habilidades": ["s1", "s2"]},
     ]
     res2 = asignar(perfiles_esc2, [oferta_bv], traslados, cfg)
     asignados_esc2 = [m for m in res2 if m.desglose.get("viable") is True]
     assert len(asignados_esc2) == 3
     assert {m.perfil_id for m in asignados_esc2} == {"P2", "P3", "P5"}
     puntajes_por_id = {m.perfil_id: m.puntaje for m in asignados_esc2}
-    assert puntajes_por_id == {"P2": 85, "P3": 60, "P5": 35}
+    assert puntajes_por_id == {"P2": 100, "P3": 75, "P5": 50}
 
     # --- ESCENARIO 3: Optimización global 1-a-1 (max_candidatos_por_vacante=1, max_vacantes_por_perfil=1) ---
     cfg_1a1 = ConfigSolver(max_candidatos_por_vacante=1, max_vacantes_por_perfil=1)
@@ -219,16 +435,13 @@ def test_tres_escenarios_calculados_a_mano_sin_violaciones():
         {"id": "O2", "corregimiento": "La Chorrera", "salario_mensual": 700.0, "habilidades": ["a"]},
     ]
     perfiles_esc3 = [
-        # PA tiene ["a", "b"]: en O1 saca 100-15=85, en O2 saca 100-15=85
         {"id": "PA", "corregimiento": "La Chorrera", "salario_minimo": 600.0, "presupuesto_pasaje_diario": 3.0, "habilidades": ["a", "b"]},
-        # PB solo tiene ["a"]: en O1 saca 50-15=35, en O2 saca 100-15=85
         {"id": "PB", "corregimiento": "La Chorrera", "salario_minimo": 600.0, "presupuesto_pasaje_diario": 3.0, "habilidades": ["a"]},
     ]
-    # Óptimo a mano: PA -> O1 (85) y PB -> O2 (85), suma = 170 (si PA tomara O2, PB->O1 daría 85+35=120)
     res3 = asignar(perfiles_esc3, ofertas_esc3, traslados, cfg_1a1)
     mapa_esc3 = {m.perfil_id: (m.oferta_id, m.puntaje) for m in res3}
-    assert mapa_esc3["PA"] == ("O1", 85)
-    assert mapa_esc3["PB"] == ("O2", 85)
+    assert mapa_esc3["PA"] == ("O1", 100)
+    assert mapa_esc3["PB"] == ("O2", 100)
 
     # Verificar 0 violaciones de restricciones duras en todas las asignaciones viables de los 3 escenarios
     for lista_res, lista_perfiles, lista_ofertas, conf in [
@@ -241,6 +454,7 @@ def test_tres_escenarios_calculados_a_mano_sin_violaciones():
         conteo_por_oferta: dict[str, int] = {}
         for m in lista_res:
             if not m.desglose.get("viable"):
+                assert m.oferta_id == SIN_OFERTA
                 continue
             conteo_por_oferta[m.oferta_id] = conteo_por_oferta.get(m.oferta_id, 0) + 1
             ev = evaluar_factibilidad_par(p_map[m.perfil_id], o_map[m.oferta_id], traslados, conf)
@@ -250,8 +464,8 @@ def test_tres_escenarios_calculados_a_mano_sin_violaciones():
             assert cnt <= conf.max_candidatos_por_vacante, f"Oferta {oid} excedió cupo k"
 
 
-def test_determinismo_misma_entrada_misma_salida():
-    """Criterio 3: Misma entrada, misma salida (num_workers=1, semilla fija)."""
+def test_determinismo_misma_entrada_misma_salida(fixture_traslados):
+    """Criterio 3 (#4): Misma entrada, misma salida (num_workers=1, semilla fija)."""
     perfiles = [
         {
             "id": f"P-{i:02d}",
@@ -273,7 +487,7 @@ def test_determinismo_misma_entrada_misma_salida():
     ]
 
     corridas = [
-        [(m.perfil_id, m.oferta_id, m.puntaje, m.brechas) for m in asignar(perfiles, ofertas)]
+        [(m.perfil_id, m.oferta_id, m.puntaje, m.brechas) for m in asignar(perfiles, ofertas, fixture_traslados)]
         for _ in range(5)
     ]
     for corrida in corridas[1:]:
@@ -281,7 +495,7 @@ def test_determinismo_misma_entrada_misma_salida():
 
 
 def test_rendimiento_20_ofertas_por_10_perfiles_menos_de_2s():
-    """Criterio 4: Resuelve 20 ofertas × 10 perfiles en menos de 2 s."""
+    """Criterio 4 (#4): Resuelve 20 ofertas × 10 perfiles en menos de 2 s."""
     traslados = cargar_traslados()
     perfiles = [
         {
@@ -318,8 +532,8 @@ def test_rendimiento_20_ofertas_por_10_perfiles_menos_de_2s():
     assert len(matches) >= 10
 
 
-def test_nodo_matching_y_redactor_llm():
-    """Verifica que puente.agents.matching llama al solver CP-SAT y registra Decision en EstadoPuente."""
+def test_nodo_matching_y_plantilla_deterministica():
+    """Verifica que puente.agents.matching llama al solver CP-SAT, respeta excluidos y registra Decision."""
     from puente.agents.matching import nodo_matching
 
     yaritza = _perfil_yaritza()
@@ -336,16 +550,13 @@ def test_nodo_matching_y_redactor_llm():
         "perfiles": [yaritza],
         "ofertas": [oferta],
         "decisiones": [],
-        "redactor_matching_llm": lambda m: f"Explicación redactada para {m.perfil_id} ({m.puntaje} pts)",
     }
     nuevo = nodo_matching(estado)
     assert len(nuevo["lista_corta"]) == 1
     m0 = nuevo["lista_corta"][0]
-    assert m0.puntaje == 85
-    assert "Explicación redactada para PERFIL-YARITZA" in m0.explicacion
+    assert m0.puntaje == 100
+    assert "Asignado a OF-CHORRERA-01" in m0.explicacion
     assert len(nuevo["decisiones"]) == 1
     d0 = nuevo["decisiones"][0]
     agente_d0 = d0["agente"] if isinstance(d0, dict) else d0.agente
     assert agente_d0 == "matching"
-
-
