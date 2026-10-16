@@ -11,3 +11,5 @@ Cada uso de IA se anota en el momento: hora, quién, herramienta, qué se pidió
 | 2026-10-16 15:14 | Cornelio-Guerra | Claude Code (nube) | #2 · contratos Pydantic en puente/schemas.py y pruebas de validación y compatibilidad con #22 y #24 | qué se cambió a mano: nada todavía |
 | 2026-10-16 15:14 | Cornelio-Guerra | Claude Code (nube) | #2 · grafo LangGraph con nodos vacíos que pasan el estado | qué se cambió a mano: nada todavía |
 | 2026-10-16 15:29 | Cornelio-Guerra | Claude Code (nube) | #2 · desglose de Match como dict validado para que el auditor (#24) lea viable; tests reales de #22 y #24 corridos contra schemas.py (9 passed) | qué se cambió a mano: nada todavía |
+| 2026-10-16 15:41 | jesus12ga | Claude Code · workflow implementar-issues (Opus 5.5) | #13 · especificación del issue #13 | Pendiente de revisión humana en el PR |
+| 2026-10-16 15:42 | jesus12ga | Claude Code · workflow implementar-issues (Sonnet 5.5) | #13 · 24 casos de eval con esperado escrito antes de correr, en 6 categorías y con datos sintéticos en línea (evals/casos.yaml); esperados de matching calculados a mano | Pendiente de revisión humana en el PR |
