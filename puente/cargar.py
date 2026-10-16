@@ -1,14 +1,18 @@
 """Carga inicial: ofertas y perfiles de `data/` en `puente.db` para el Matching. Issue #46.
 
-`uv run python -m puente.cargar` pasa cada oferta de `data/ofertas/` por el agente Mercado
+`uv run python -m puente.cargar` pasa todas las ofertas de `data/ofertas/` por el agente Mercado
 (extracción, reglas de la Ley 11 y deduplicación) y guarda cada `Oferta`, con `bloqueada` y
 `alertas`, más los perfiles sintéticos de `data/perfiles/`. Las decisiones de Mercado quedan
 en la tabla `decisiones`.
 
-Es idempotente: la tabla `cargas` anota cada archivo de oferta ya procesado con el hash de su
-contenido, y una segunda corrida no vuelve a llamar al LLM ni duplica nada. Un archivo cuyo
-contenido cambió se vuelve a procesar; uno cuya extracción falló se reintenta en la siguiente
-corrida. Los duplicados se detectan dentro de cada corrida, por eso la primera carga va completa.
+Es idempotente y no repite gasto de LLM: la tabla `cargas` guarda la extracción de cada archivo
+junto al hash de su contenido. Cada corrida pasa el conjunto completo por Mercado, pero solo
+llama al LLM para los archivos nuevos, cambiados o cuya extracción falló antes; el resto sale de
+`cargas`. Así la deduplicación, las reglas y la taxonomía siempre se aplican sobre todo el
+conjunto, y el resultado no depende de en qué corrida entró cada archivo. Las ofertas que
+dejaron de salir (archivo cambiado, borrado o ahora duplicado) se quitan de la base, salvo que
+ya tengan postulaciones: esas se reportan en cada corrida. Una carpeta sin ofertas no borra
+nada. `--releer` (o `LLM_MODO=grabar`) vuelve a pedir todas las extracciones al LLM.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ import argparse
 import hashlib
 import inspect
 import json
+import os
 import sqlite3
 import sys
 from collections.abc import Callable
@@ -31,22 +36,26 @@ AGENTE = "carga"
 CARPETA_OFERTAS = Path("data/ofertas")
 CARPETA_PERFILES = Path("data/perfiles")
 EXTENSIONES_OFERTA = {".txt"} | mercado.EXTENSIONES_ARCHIVO
-SIN_OFERTA = "sin oferta: duplicada o descartada, ver decisiones"
 
+# `cargas`: la extracción de cada archivo con el hash de su contenido (no se borra: es gasto de LLM ya hecho).
+# `cargas_ofertas`: las ofertas de la base que salieron de la carga, incluidas las retenidas por postulaciones.
 _ESQUEMA_CARGAS = """
 CREATE TABLE IF NOT EXISTS cargas (
     archivo TEXT PRIMARY KEY,
     sha256 TEXT NOT NULL,
-    resultado TEXT NOT NULL,
+    extraccion_json TEXT NOT NULL,
     timestamp TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS cargas_ofertas (
+    oferta_id TEXT PRIMARY KEY
 );
 """
 
 
 @dataclass
 class Resumen:
-    ofertas_procesadas: int = 0
-    ofertas_ya_cargadas: int = 0
+    llamadas_llm: int = 0
+    desde_cargas: int = 0
     perfiles_nuevos: int = 0
     errores: list[str] = field(default_factory=list)
 
@@ -67,63 +76,90 @@ def _entrada(ruta: Path) -> dict:
     return {"ruta": ruta, "fuente": ruta.name}
 
 
+def _quitar_obsoletas(conn: sqlite3.Connection, ids: set[str], errores: list[str]) -> set[str]:
+    """Borra las ofertas que la carga ya no produce y devuelve las retenidas por tener postulaciones."""
+    retenidas = set()
+    for oferta_id in sorted(ids):
+        if conn.execute("SELECT 1 FROM postulaciones WHERE oferta_id = ?", (oferta_id,)).fetchone():
+            errores.append(f"carga: {oferta_id} ya no sale de los archivos pero tiene postulaciones; no se borra")
+            retenidas.add(oferta_id)
+            continue
+        with conn:
+            conn.execute("DELETE FROM ofertas WHERE id = ?", (oferta_id,))
+    return retenidas
+
+
+def _registrar_decisiones_nuevas(conn: sqlite3.Connection, decisiones: list[Decision]) -> None:
+    """Cada corrida repite las decisiones de Mercado sobre el conjunto; solo se guardan las que no estaban."""
+    ya = {tuple(f) for f in conn.execute("SELECT agente, entrada_resumen, salida_resumen, razon FROM decisiones")}
+    for decision in decisiones:
+        clave = (decision.agente, decision.entrada_resumen, decision.salida_resumen, decision.razon)
+        if clave not in ya:
+            db.registrar_decision(conn, decision)
+            ya.add(clave)
+
+
 def cargar_ofertas(
     conn: sqlite3.Connection,
     carpeta: Path = CARPETA_OFERTAS,
     *,
     extraer: Callable | None = None,
     taxonomia: dict[str, dict] | None = None,
+    releer: bool | None = None,
 ) -> Resumen:
-    """Procesa con Mercado los archivos nuevos o cambiados de `carpeta` y los guarda en la base."""
+    """Pasa todas las ofertas de `carpeta` por Mercado, con el LLM solo para lo que no está en `cargas`.
+
+    `releer=True` vuelve a pedir todo al LLM; por defecto se activa con `LLM_MODO=grabar` (#45) para
+    que la grabación cubra todas las ofertas.
+    """
     resumen = Resumen()
     if not carpeta.is_dir():
         resumen.errores.append(f"carga: no existe la carpeta de ofertas {carpeta}")
         return resumen
     conn.executescript(_ESQUEMA_CARGAS)
-    ya_cargados = dict(conn.execute("SELECT archivo, sha256 FROM cargas").fetchall())
-
-    pendientes: list[tuple[Path, str]] = []
-    for ruta in _archivos_de_ofertas(carpeta):
-        sha = hashlib.sha256(ruta.read_bytes()).hexdigest()
-        if ya_cargados.get(ruta.name) == sha:
-            resumen.ofertas_ya_cargadas += 1
-        else:
-            pendientes.append((ruta, sha))
-    if not pendientes:
+    propias = {f[0] for f in conn.execute("SELECT oferta_id FROM cargas_ofertas")}
+    archivos = _archivos_de_ofertas(carpeta)
+    if not archivos:
+        if propias:
+            resumen.errores.append(f"carga: {carpeta} no tiene ofertas y la base sí; no se borra nada")
         return resumen
-
+    if releer is None:
+        releer = os.getenv("LLM_MODO") == "grabar"
+    guardadas = {f[0]: (f[1], f[2]) for f in conn.execute("SELECT archivo, sha256, extraccion_json FROM cargas")}
+    sha_por_archivo = {ruta.name: hashlib.sha256(ruta.read_bytes()).hexdigest() for ruta in archivos}
     extraer = extraer or _extractor_por_defecto()
-    fallidos: set[str] = set()
 
-    def extraer_y_anotar(entrada):
-        try:
-            return extraer(entrada)
-        except Exception:
-            fallidos.add(entrada.fuente)  # Mercado registra el error; aquí solo se anota para reintentar
-            raise
+    def extraer_o_reusar(entrada):
+        sha = sha_por_archivo[entrada.fuente]
+        previa = guardadas.get(entrada.fuente)
+        if not releer and previa and previa[0] == sha:
+            resumen.desde_cargas += 1
+            return json.loads(previa[1])
+        resumen.llamadas_llm += 1
+        extraida = extraer(entrada)  # si falla, Mercado lo registra y el archivo se reintenta la próxima vez
+        datos = extraida.model_dump() if hasattr(extraida, "model_dump") else dict(extraida)
+        with conn:  # se guarda de inmediato: una llamada pagada no se repite aunque algo falle después
+            conn.execute(
+                "INSERT INTO cargas (archivo, sha256, extraccion_json, timestamp) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(archivo) DO UPDATE SET sha256 = excluded.sha256, "
+                "extraccion_json = excluded.extraccion_json, timestamp = excluded.timestamp",
+                (entrada.fuente, sha, json.dumps(datos, ensure_ascii=False), db._ahora()),
+            )
+        return datos
 
     resultado = mercado.procesar_ofertas(
-        [_entrada(ruta) for ruta, _ in pendientes], extraer=extraer_y_anotar, taxonomia=taxonomia
+        [_entrada(ruta) for ruta in archivos], extraer=extraer_o_reusar, taxonomia=taxonomia
     )
+    resumen.errores.extend(resultado.errores)
+
+    nuevas = {o.id for o in resultado.ofertas}
+    retenidas = _quitar_obsoletas(conn, propias - nuevas, resumen.errores)
     for oferta in resultado.ofertas:
         db.guardar_oferta(conn, oferta)
-    for decision in resultado.decisiones:
-        db.registrar_decision(conn, decision)
-
-    por_fuente = {oferta.fuente: oferta.id for oferta in resultado.ofertas}
-    ahora = db._ahora()
+    _registrar_decisiones_nuevas(conn, resultado.decisiones)
     with conn:
-        for ruta, sha in pendientes:
-            if ruta.name in fallidos:
-                continue
-            conn.execute(
-                "INSERT INTO cargas (archivo, sha256, resultado, timestamp) VALUES (?, ?, ?, ?) "
-                "ON CONFLICT(archivo) DO UPDATE SET sha256 = excluded.sha256, "
-                "resultado = excluded.resultado, timestamp = excluded.timestamp",
-                (ruta.name, sha, por_fuente.get(ruta.name, SIN_OFERTA), ahora),
-            )
-    resumen.ofertas_procesadas = len(pendientes) - len(fallidos)
-    resumen.errores.extend(resultado.errores)
+        conn.execute("DELETE FROM cargas_ofertas")
+        conn.executemany("INSERT INTO cargas_ofertas (oferta_id) VALUES (?)", [(i,) for i in sorted(nuevas | retenidas)])
     return resumen
 
 
@@ -140,6 +176,7 @@ def cargar_perfiles(conn: sqlite3.Connection, carpeta: Path = CARPETA_PERFILES) 
         resumen.errores.append(f"carga: no existe la carpeta de perfiles {carpeta}")
         return resumen
     previos = {p.id: p for p in db.listar_perfiles(conn)}
+    vistos: dict[str, str] = {}
     nuevos: list[str] = []
     for ruta in sorted(carpeta.glob("*.json")):
         try:
@@ -149,6 +186,10 @@ def cargar_perfiles(conn: sqlite3.Connection, carpeta: Path = CARPETA_PERFILES) 
             resumen.errores.append(f"carga: perfil inválido en {ruta.name}: {' '.join(primera)}")
             continue
         for perfil in perfiles:
+            if perfil.id in vistos:
+                resumen.errores.append(f"carga: id {perfil.id} repetido en {ruta.name}; se queda el de {vistos[perfil.id]}")
+                continue
+            vistos[perfil.id] = ruta.name
             if previos.get(perfil.id) != perfil:
                 db.guardar_perfil(conn, perfil)
                 nuevos.append(perfil.id)
@@ -159,7 +200,7 @@ def cargar_perfiles(conn: sqlite3.Connection, carpeta: Path = CARPETA_PERFILES) 
             entrada_resumen=f"perfiles sintéticos de {carpeta}",
             salida_resumen=f"{len(nuevos)} perfiles nuevos o cambiados: {nuevos}",
             razon="perfiles listos para el Matching, sin pasar por el LLM"
-                  + (f" · {len(resumen.errores)} archivos inválidos descartados" if resumen.errores else ""),
+                  + (f" · {len(resumen.errores)} errores de archivo" if resumen.errores else ""),
         ))
     return resumen
 
@@ -169,11 +210,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ofertas", type=Path, default=CARPETA_OFERTAS, help="carpeta de ofertas (por defecto data/ofertas)")
     parser.add_argument("--perfiles", type=Path, default=CARPETA_PERFILES, help="carpeta de perfiles (por defecto data/perfiles)")
     parser.add_argument("--db", type=Path, default=None, help="base SQLite (por defecto $PUENTE_DB o puente.db)")
+    parser.add_argument("--releer", action="store_true", default=None,
+                        help="vuelve a pedir todas las extracciones al LLM (activo con LLM_MODO=grabar)")
     args = parser.parse_args(argv)
 
     conn = db.conectar(args.db)
     try:
-        ofertas = cargar_ofertas(conn, args.ofertas)
+        ofertas = cargar_ofertas(conn, args.ofertas, releer=args.releer)
         perfiles = cargar_perfiles(conn, args.perfiles)
         todas = db.listar_ofertas(conn, no_bloqueadas=False)
         en_base = len(db.listar_perfiles(conn))
@@ -181,12 +224,14 @@ def main(argv: list[str] | None = None) -> int:
         conn.close()
 
     bloqueadas = sum(o.bloqueada for o in todas)
-    print(f"ofertas: {ofertas.ofertas_procesadas} procesadas, {ofertas.ofertas_ya_cargadas} ya cargadas"
+    print(f"ofertas: {ofertas.llamadas_llm} leídas con el LLM, {ofertas.desde_cargas} desde cargas"
           f" · en la base: {len(todas)} ({bloqueadas} bloqueadas)")
     print(f"perfiles: {perfiles.perfiles_nuevos} nuevos o cambiados · en la base: {en_base}")
     errores = ofertas.errores + perfiles.errores
     for error in errores:
         print(f"  ! {error}")
+    if ofertas.errores and ofertas.desde_cargas:
+        print("  Las extracciones guardadas en cargas no se vuelven a pedir al LLM; para eso, --releer.")
     return 1 if errores else 0
 
 
