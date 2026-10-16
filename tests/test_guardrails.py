@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import pickle
+import sqlite3
 
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
@@ -457,3 +458,41 @@ def test_ocultar_trazas_langsmith(monkeypatch):
     ocultar_trazas_langsmith()
     assert os.environ["LANGSMITH_HIDE_INPUTS"] == "true"
     assert os.environ["LANGSMITH_HIDE_OUTPUTS"] == "false"  # respeta lo que puso el equipo
+
+
+def _volcar_sqlite(ruta) -> bytes:
+    """Todas las celdas de todas las tablas, como bytes (los checkpoints viven en el WAL)."""
+    with sqlite3.connect(ruta) as conexion:
+        tablas = [t for (t,) in conexion.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+        celdas = [c for t in tablas for fila in conexion.execute(f'SELECT * FROM "{t}"') for c in fila]
+    return b"".join(c if isinstance(c, bytes) else str(c).encode() for c in celdas)
+
+
+def test_cedula_no_llega_al_sqlite_del_grafo_real(tmp_path):
+    """Lo mismo con el grafo de #10 y su checkpointer SQLite; Perfil es un falso que llama al LLM."""
+    from puente import graph as g
+
+    vistos: list[str] = []
+
+    def perfil_falso(estado: dict) -> dict:
+        vistos.extend(e.get("cv_texto", "") for e in estado.get("entradas_perfil") or [])
+        return g.stub_perfil(estado)
+
+    thread, estado = g.cargar_caso()
+    estado["entradas_perfil"] = [
+        {**e, "cv_texto": TEXTO_CON_PII} for e in estado["entradas_perfil"]
+    ]
+    ruta = tmp_path / "checkpoints.db"
+    grafo = g.construir_grafo(
+        nodos={"perfil": perfil_falso}, checkpointer=g.checkpointer_sqlite(ruta)
+    )
+    config = g.config_caso(thread)
+    grafo.invoke(limpiar_entrada(estado), config)
+
+    assert vistos and all(CEDULA not in t and "[CEDULA]" in t for t in vistos)
+    valores = grafo.get_state(config).values
+    assert CEDULA not in repr(valores["decisiones"])
+    crudo = _volcar_sqlite(ruta)
+    for dato in (CEDULA, TELEFONO, CALLE):
+        assert dato.encode() not in crudo
+    assert b"[CEDULA]" in crudo  # el checkpoint sí se escribió, con el texto limpio
