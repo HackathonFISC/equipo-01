@@ -417,7 +417,7 @@ def test_checkpointer_una_conexion_por_ruta_y_fuera_de_puente_db(tmp_path):
 
 
 def test_demo_por_consola_automatica(tmp_path, capsys):
-    final = g.main(["--demo", "yaritza", "--checkpoints", str(tmp_path / "cp.db"), "--auto", "quitar:carlos,aprobar"])
+    final = g.main(["--demo", "yaritza", "--checkpoints", str(tmp_path / "cp.db"), "--auto", "quitar:carlos,aprobar,aprobar"])
     salida = capsys.readouterr().out
     assert "LLM grabado" in salida
     assert "⏸  Aprobación pendiente" in salida
@@ -427,8 +427,8 @@ def test_demo_por_consola_automatica(tmp_path, capsys):
 
 
 def test_demo_por_consola_interactiva(tmp_path):
-    # Cajero: aprobar a Carlos con consentimiento. Cocina: rechazar.
-    respuestas = iter(["aprobar", "Orientadora Ficticia", "", "s", "rechazar", "Orientadora Ficticia", ""])
+    # Cajero (Carlos, María, Yaritza): aprobar solo a Carlos con consentimiento. Cocina: rechazar.
+    respuestas = iter(["aprobar", "Orientadora Ficticia", "", "s", "n", "n", "rechazar", "Orientadora Ficticia", ""])
     lineas = []
     final = g.main(
         ["--checkpoints", str(tmp_path / "cp.db"), "--thread", "interactiva"],
@@ -527,12 +527,19 @@ def test_fase2_quitar_recalcula_con_el_solver_y_entra_el_siguiente(ruta_cp, caso
     assert solicitud["vacantes_pendientes"] == [COCINA]
 
 
-def test_fase2_quitar_al_unico_candidato_deja_la_vacante_sin_lista(ruta_cp, caso):
+def test_fase2_quitar_saca_al_candidato_solo_de_esa_vacante(ruta_cp, caso):
     thread, estado = caso
     grafo = _grafo_real(ruta_cp, llm_perfil=_llm_yaritza(estado))
     config = _arrancar(grafo, estado, thread)
+    antes = [c["perfil_id"] for c in aprobacion_pendiente(grafo, config)["candidatos"]]
+    assert "carlos" in antes
+
     _responder(grafo, config, accion="quitar", oferta_id=CAJERO, perfil_id="carlos")
-    assert aprobacion_pendiente(grafo, config)["vacantes_pendientes"] == [COCINA]
+    solicitud = aprobacion_pendiente(grafo, config)
+    assert solicitud["oferta_id"] == CAJERO  # el orientador vuelve a la misma vacante
+    assert [c["perfil_id"] for c in solicitud["candidatos"]] == [p for p in antes if p != "carlos"]
+    lista = grafo.get_state(config).values["lista_corta"]
+    assert any(m.perfil_id == "carlos" and m.oferta_id == COCINA for m in lista)
 
 
 def _oferta_cruda(texto, **extraida):

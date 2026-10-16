@@ -144,14 +144,18 @@ def _lista_corta_de(estado: dict, oferta_id: str) -> list:
 
 
 def vacantes_pendientes(estado: dict) -> list[str]:
-    """Vacantes con lista corta que el orientador todavía no decidió, en orden de aparición."""
+    """Vacantes con lista corta que el orientador todavía no decidió, en el orden de `ofertas`.
+
+    Ese orden no depende del solver: tras quitar un candidato, el orientador vuelve a ver la misma vacante.
+    """
     resueltas = set(estado.get("vacantes_resueltas") or [])
-    pendientes: list[str] = []
+    con_lista: list[str] = []
     for m in estado.get("lista_corta") or []:
         oid = _campo(m, "oferta_id")
-        if oid not in resueltas and oid not in pendientes:
-            pendientes.append(oid)
-    return pendientes
+        if oid not in resueltas and oid not in con_lista:
+            con_lista.append(oid)
+    orden = {_campo(o, "id"): i for i, o in enumerate(estado.get("ofertas") or [])}
+    return sorted(con_lista, key=lambda oid: orden.get(oid, len(orden)))
 
 
 # ---------------------------------------------------------------- guardrails y router
