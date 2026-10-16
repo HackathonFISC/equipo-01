@@ -57,6 +57,10 @@ volver a grabar. Para calcularlo a mano: `puente.llm.clave_grabacion(...)`.
 
 ## Cómo regrabar el caso de Yaritza (lo hace una persona, con clave)
 
+**Requisito previo:** los PRs de adopción de `puente/llm.py` en `mercado.py`, `perfil.py` y `formacion.py` (#43, #44 y
+formación) deben estar en `main`. Mientras esos agentes sigan instanciando su propio cliente, `puente.graph` no pasa por
+`llm.py` y no graba nada.
+
 Requiere `ANTHROPIC_API_KEY` en tu `.env` (la entrega @Cornelio-Guerra por privado) y que #44 (Perfil v2),
 #10 (grafo) y `data/perfiles/yaritza.json` ya estén en `main`.
 

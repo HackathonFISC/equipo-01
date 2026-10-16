@@ -40,6 +40,7 @@ def entorno(monkeypatch, tmp_path):
         monkeypatch.delenv(nombre, raising=False)
     monkeypatch.setenv("LANGSMITH_TRACING", "false")
     monkeypatch.setenv("LLM_DIR_GRABACIONES", str(tmp_path / "grabaciones"))
+    monkeypatch.setattr(llm, "_dotenv_cargado", True)  # que un .env real de la máquina no meta claves en estas pruebas
     llm.reiniciar_uso()
     llm._clientes.clear()
     yield
@@ -48,26 +49,26 @@ def entorno(monkeypatch, tmp_path):
 
 
 def respuesta(parsed=None, texto="", stop="end_turn", entrada=100, salida=50, detalle=None):
+    """Mensaje como lo devuelve messages.create; la salida estructurada viaja como JSON en un bloque de texto."""
+    if parsed is not None:
+        texto = parsed.model_dump_json()
     return SimpleNamespace(
         stop_reason=stop,
         stop_details=detalle,
-        parsed_output=parsed,
         content=[SimpleNamespace(type="text", text=texto)] if texto else [],
         usage=SimpleNamespace(input_tokens=entrada, output_tokens=salida),
     )
 
 
 class ClienteAnthropic:
-    """Imita messages.parse / messages.create (y la versión beta) y guarda los argumentos recibidos."""
+    """Imita messages.create (y la versión beta) y guarda los argumentos recibidos."""
 
     def __init__(self, *respuestas, error=None):
         self.respuestas = list(respuestas)
         self.error = error
         self.llamadas: list[tuple[str, dict]] = []
-        self.messages = SimpleNamespace(parse=self._llamar("parse"), create=self._llamar("create"))
-        self.beta = SimpleNamespace(
-            messages=SimpleNamespace(parse=self._llamar("beta.parse"), create=self._llamar("beta.create"))
-        )
+        self.messages = SimpleNamespace(create=self._llamar("create"))
+        self.beta = SimpleNamespace(messages=SimpleNamespace(create=self._llamar("beta.create")))
 
     def _llamar(self, nombre):
         def f(**kwargs):
@@ -127,13 +128,15 @@ def test_api_publica_estructurado_y_texto():
     resultado = generar_estructurado("Extrae", Salida, sistema="Eres un extractor", agente="mercado", cliente=cliente)
     assert resultado == Salida(respuesta="ok", puntos=3)
     nombre, kw = cliente.llamadas[0]
-    assert nombre == "parse"
+    assert nombre == "create"
     assert kw["model"] == "claude-opus-5-5"
-    assert kw["output_format"] is Salida
-    assert kw["output_config"] == {"effort": "low"}
+    assert kw["output_config"] == {
+        "effort": "low",
+        "format": {"type": "json_schema", "schema": anthropic.transform_schema(Salida)},
+    }
     assert kw["system"] == "Eres un extractor"
     assert kw["messages"] == [{"role": "user", "content": [{"type": "text", "text": "Extrae"}]}]
-    for prohibido in ("tool_choice", "temperature", "top_p", "top_k", "thinking", "tools"):
+    for prohibido in ("tool_choice", "temperature", "top_p", "top_k", "thinking", "tools", "output_format"):
         assert prohibido not in kw
 
     texto = ClienteAnthropic(
@@ -151,7 +154,7 @@ def test_api_publica_estructurado_y_texto():
     nombre, kw = texto.llamadas[0]
     assert nombre == "create"
     assert kw["output_config"] == {"effort": "medium"} and kw["max_tokens"] == 100
-    assert "output_format" not in kw and "system" not in kw
+    assert "system" not in kw
 
 
 def test_sistema_con_cache_control_si_se_pide():
@@ -223,26 +226,18 @@ def test_contador_acumula_por_agente_y_se_reinicia():
 # ---------------------------------------------------------------- stop_reason y errores
 
 
-class RespuestaExplosiva(SimpleNamespace):
-    @property
-    def parsed_output(self):
-        raise AssertionError("no se debe leer parsed_output")
-
-
-def test_refusal_y_max_tokens_levantan_error_sin_leer_la_salida():
-    uso = SimpleNamespace(input_tokens=1, output_tokens=1)
-    rechazo = RespuestaExplosiva(
-        stop_reason="refusal",
-        stop_details=SimpleNamespace(category="cyber", explanation="no puedo ayudar"),
-        content=[],
-        usage=uso,
+def test_refusal_y_max_tokens_levantan_error_antes_de_validar_la_salida():
+    rechazo = respuesta(
+        texto="No puedo ayudar con eso.",
+        stop="refusal",
+        detalle=SimpleNamespace(category="cyber", explanation="no puedo ayudar"),
     )
     with pytest.raises(ErrorLLM, match="rechazó") as info:
         generar_estructurado("x", Salida, agente="perfil", cliente=ClienteAnthropic(rechazo))
     assert info.value.causa == "refusal" and info.value.agente == "perfil"
     assert "cyber" in str(info.value) and "claude-opus-5-5" in str(info.value)
 
-    cortado = RespuestaExplosiva(stop_reason="max_tokens", stop_details=None, content=[], usage=uso)
+    cortado = respuesta(texto='{"respuesta": "cort', stop="max_tokens")
     with pytest.raises(ErrorLLM, match="límite de tokens") as info:
         generar_estructurado("x", Salida, cliente=ClienteAnthropic(cortado))
     assert info.value.causa == "max_tokens"
@@ -312,14 +307,46 @@ def test_errores_del_sdk_se_traducen(error, causa, texto):
 
 
 def test_salida_invalida_y_sin_salida():
-    with pytest.raises(Exception) as validacion:
-        Salida.model_validate({"respuesta": 1})
-    with pytest.raises(ErrorLLM) as info:
-        generar_estructurado("x", Salida, cliente=ClienteAnthropic(error=validacion.value))
-    assert info.value.causa == "salida_invalida"
+    for texto in ('{"respuesta": 1}', "esto no es json"):
+        with pytest.raises(ErrorLLM) as info:
+            generar_estructurado("x", Salida, cliente=ClienteAnthropic(respuesta(texto=texto)))
+        assert info.value.causa == "salida_invalida" and "esquema Salida" in str(info.value)
     with pytest.raises(ErrorLLM) as info:
         generar_estructurado("x", Salida, cliente=ClienteAnthropic(respuesta(parsed=None)))
     assert info.value.causa == "sin_salida"
+
+
+def test_error_inesperado_del_cliente_llega_como_errorllm_sin_detalles():
+    with pytest.raises(ErrorLLM) as info:
+        generar_estructurado("x", Salida, agente="perfil", cliente=ClienteAnthropic(error=TypeError("sk-ant-secreto")))
+    assert info.value.causa == "error_proveedor" and info.value.agente == "perfil"
+    assert "TypeError" in str(info.value) and "secreto" not in str(info.value)
+
+
+def test_sin_clave_en_vivo_da_errorllm_para_anthropic_y_gemini(monkeypatch):
+    monkeypatch.setattr(anthropic, "Anthropic", lambda **kw: pytest.fail("no debe construirse sin clave"))
+    with pytest.raises(ErrorLLM, match="ANTHROPIC_API_KEY") as info:
+        generar_estructurado("x", Salida, agente="mercado")
+    assert info.value.causa == "sin_clave" and info.value.agente == "mercado" and info.value.proveedor == "anthropic"
+    with pytest.raises(ErrorLLM) as info:
+        generar_texto("x", agente="perfil")
+    assert info.value.causa == "sin_clave"
+
+    monkeypatch.setenv("LLM_PROVEEDOR", "gemini")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    with pytest.raises(ErrorLLM, match="GOOGLE_API_KEY") as info:
+        generar_estructurado("x", Salida, agente="formacion")
+    assert info.value.causa == "sin_clave" and info.value.proveedor == "gemini"
+    assert llm.uso_por_agente() == {}
+
+
+def test_sin_clave_no_afecta_a_reproducir_ni_a_clientes_inyectados(monkeypatch):
+    cliente = ClienteAnthropic(respuesta(parsed=Salida(respuesta="ok")))
+    assert generar_estructurado("x", Salida, cliente=cliente).respuesta == "ok"  # clave ausente, cliente inyectado
+    monkeypatch.setenv("LLM_MODO", "reproducir")
+    with pytest.raises(ErrorLLM) as info:
+        generar_estructurado("sin grabar", Salida)
+    assert info.value.causa == "grabacion_faltante"  # nunca pide clave en reproducir
 
 
 def test_cliente_real_se_crea_perezoso_con_reintentos_y_timeout(monkeypatch):
@@ -330,6 +357,7 @@ def test_cliente_real_se_crea_perezoso_con_reintentos_y_timeout(monkeypatch):
         creados.append(kwargs)
         return doble
 
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "clave-de-prueba-no-real")
     monkeypatch.setattr(anthropic, "Anthropic", falso)
     assert creados == []  # importar y configurar no crea clientes
     generar_estructurado("a", Salida)
@@ -341,11 +369,11 @@ def test_fallbacks_del_servidor_apagado_por_defecto_y_activable(monkeypatch):
     assert llm.FALLBACKS_SERVIDOR_ACTIVO is False
     cliente = ClienteAnthropic(respuesta(parsed=Salida(respuesta="ok")))
     generar_estructurado("x", Salida, cliente=cliente)
-    assert cliente.llamadas[0][0] == "parse" and "fallbacks" not in cliente.kwargs
+    assert cliente.llamadas[0][0] == "create" and "fallbacks" not in cliente.kwargs
     monkeypatch.setenv("PUENTE_LLM_FALLBACKS", "true")
     generar_estructurado("y", Salida, cliente=cliente)
     nombre, kw = cliente.llamadas[1]
-    assert nombre == "beta.parse" and kw["fallbacks"] == "default" and kw["betas"] == [llm.BETA_FALLBACKS]
+    assert nombre == "beta.create" and kw["fallbacks"] == "default" and kw["betas"] == [llm.BETA_FALLBACKS]
 
 
 # ---------------------------------------------------------------- modelo y proveedor por entorno
@@ -378,6 +406,19 @@ def test_modelo_y_proveedor_por_entorno(monkeypatch):
     monkeypatch.delenv("PUENTE_MODELO_LLM")
     assert configuracion()["modelo"] == "gemini-2.5-flash"
     assert generar_texto("hola", cliente=ClienteGemini(texto="respuesta")) == "respuesta"
+
+
+def test_modelo_de_otra_familia_se_cambia_por_el_del_proveedor(monkeypatch):
+    # Quien solo cambia LLM_PROVEEDOR no manda un id de Claude a Gemini ni uno de Gemini a Claude.
+    monkeypatch.setenv("PUENTE_MODELO_LLM", "claude-opus-5-5")
+    monkeypatch.setenv("LLM_PROVEEDOR", "gemini")
+    assert configuracion()["modelo"] == "gemini-2.5-flash"
+    monkeypatch.setenv("PUENTE_MODELO_LLM", "gemini-2.5-flash")
+    monkeypatch.setenv("LLM_PROVEEDOR", "anthropic")
+    assert configuracion()["modelo"] == "claude-opus-5-5"
+    monkeypatch.setenv("PUENTE_MODELO_LLM", "gemini-otro")
+    monkeypatch.setenv("LLM_PROVEEDOR", "gemini")
+    assert configuracion()["modelo"] == "gemini-otro"
 
 
 def test_gemini_envia_archivos_y_texto_en_bloques(monkeypatch):
@@ -537,3 +578,67 @@ def test_reproducir_grabacion_danada(monkeypatch, tmp_path):
     with pytest.raises(ErrorLLM) as info:
         generar_estructurado("p", Salida)
     assert info.value.causa == "grabacion_invalida"
+
+
+# ---------------------------------------------------------------- SDK real de anthropic con transporte simulado (sin red)
+
+
+def _sdk_con_respuesta(stop_reason, texto, peticiones=None):
+    """anthropic.Anthropic real, con httpx2.MockTransport: el SDK arma y lee los mensajes como en producción."""
+
+    def manejador(peticion):
+        if peticiones is not None:
+            peticiones.append(json.loads(peticion.content))
+        cuerpo = {
+            "id": "msg_prueba",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-5-5",
+            "content": [{"type": "text", "text": texto}] if texto else [],
+            "stop_reason": stop_reason,
+            "stop_sequence": None,
+            "usage": {"input_tokens": 120, "output_tokens": 30},
+        }
+        if stop_reason == "refusal":
+            cuerpo["stop_details"] = {"type": "refusal", "category": "cyber", "explanation": "no puedo ayudar"}
+        return httpx2.Response(200, json=cuerpo)
+
+    return anthropic.Anthropic(
+        api_key="prueba", max_retries=0, http_client=httpx2.Client(transport=httpx2.MockTransport(manejador))
+    )
+
+
+def test_sdk_real_salida_estructurada_valida_y_cuenta_uso():
+    peticiones = []
+    cliente = _sdk_con_respuesta("end_turn", '{"respuesta": "ok", "puntos": 4}', peticiones)
+    resultado = generar_estructurado("Extrae", Salida, agente="mercado", cliente=cliente)
+    assert resultado == Salida(respuesta="ok", puntos=4)
+    cuerpo = peticiones[0]
+    assert cuerpo["output_config"]["effort"] == "low" and cuerpo["output_config"]["format"]["type"] == "json_schema"
+    assert "tool_choice" not in cuerpo and "temperature" not in cuerpo and "thinking" not in cuerpo
+    assert llm.uso_por_agente()["mercado"]["tokens_entrada"] == 120
+
+
+def test_sdk_real_max_tokens_con_json_cortado_da_causa_max_tokens():
+    cliente = _sdk_con_respuesta("max_tokens", '{"respuesta": "cort')
+    with pytest.raises(ErrorLLM, match="max_tokens") as info:
+        generar_estructurado("x", Salida, agente="perfil", cliente=cliente)
+    assert info.value.causa == "max_tokens"  # no "salida_invalida": el orientador debe subir max_tokens
+
+
+def test_sdk_real_refusal_con_texto_usa_el_respaldo(monkeypatch):
+    monkeypatch.setenv("LLM_PROVEEDOR_RESPALDO", "gemini")
+    principal = _sdk_con_respuesta("refusal", "No puedo ayudar con eso, lo siento.")
+    respaldo = ClienteGemini(salida=Salida(respuesta="desde gemini"))
+    resultado = generar_estructurado("x", Salida, agente="perfil", cliente=principal, cliente_respaldo=respaldo)
+    assert resultado.respuesta == "desde gemini" and len(respaldo.mensajes) == 1
+
+    monkeypatch.delenv("LLM_PROVEEDOR_RESPALDO")
+    with pytest.raises(ErrorLLM, match="cyber") as info:
+        generar_estructurado("x", Salida, cliente=principal)
+    assert info.value.causa == "refusal"
+
+
+def test_sdk_real_texto_libre():
+    cliente = _sdk_con_respuesta("end_turn", "Hola Yaritza")
+    assert generar_texto("Saluda", cliente=cliente) == "Hola Yaritza"

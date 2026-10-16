@@ -13,6 +13,10 @@ Configuración (se lee en cada llamada; cambiar `.env` basta):
 - `LLM_PROVEEDOR_RESPALDO` y `LLM_MODELO_RESPALDO` (opcionales): un solo reintento si el modelo rechaza (refusal).
 - `PUENTE_LLM_FALLBACKS` (`false` por defecto): respaldo del servidor de Anthropic (beta). Sin verificar con clave.
 
+La salida estructurada usa `messages.create` con `output_config.format` (esquema Pydantic transformado por
+`anthropic.transform_schema`) y valida el JSON aquí, después de revisar `stop_reason`: así un corte por `max_tokens`
+o un rechazo con texto no llegan como un error de esquema.
+
 Reglas del API de Claude Opus 5.5 que este módulo respeta: sin `temperature`/`top_p`/`top_k`, sin `tool_choice`
 forzado, sin `thinking` (el razonamiento no se apaga), sin prefill; el esfuerzo va en `output_config`.
 
@@ -51,8 +55,8 @@ PRECIOS: dict[str, tuple[float, float]] = {
     "claude-sonnet-5-5": (2.0, 10.0),
 }
 
-# Respaldo del servidor ante rechazos (beta). Solo se verificó que la firma de `client.beta.messages.parse`
-# acepta `fallbacks` y `betas`; que funcione junto con `parse()` NO está comprobado con clave real.
+# Respaldo del servidor ante rechazos (beta). Solo se verificó que la firma de `client.beta.messages.create`
+# acepta `fallbacks` y `betas`; que funcione con salida estructurada NO está comprobado con clave real.
 # Por eso queda apagado: se activa con PUENTE_LLM_FALLBACKS=true una vez que un humano lo verifique.
 FALLBACKS_SERVIDOR_ACTIVO = False
 BETA_FALLBACKS = "server-side-fallback-2026-07-01"
@@ -75,7 +79,7 @@ class ErrorLLM(RuntimeError):
     """Fallo de la capa de LLM, con el mensaje listo para mostrar al orientador.
 
     `causa`: refusal, max_tokens, timeout, conexion, limite, estado_http, salida_invalida, sin_salida,
-    grabacion_faltante, grabacion_invalida, proveedor_desconocido, modo_desconocido, archivo, mime, error_proveedor.
+    sin_clave, grabacion_faltante, grabacion_invalida, proveedor_desconocido, modo_desconocido, archivo, mime, error_proveedor.
     """
 
     def __init__(self, mensaje: str, *, causa: str = "error_proveedor", proveedor: str = "", modelo: str = "", agente: str = ""):
@@ -87,6 +91,15 @@ class ErrorLLM(RuntimeError):
 
 
 # ---------------------------------------------------------------- configuración
+
+
+def _modelo_para(proveedor: str, valor: str | None) -> str:
+    """Modelo pedido, o el de por defecto del proveedor si falta o es de la otra familia (claude con gemini y al revés)."""
+    modelo = (valor or "").strip()
+    familia_ajena = "claude" if proveedor == "gemini" else "gemini"
+    if not modelo or modelo.lower().startswith(familia_ajena):
+        return MODELO_POR_DEFECTO[proveedor]
+    return modelo
 
 
 def configuracion() -> dict[str, str]:
@@ -103,7 +116,7 @@ def configuracion() -> dict[str, str]:
         raise ErrorLLM(
             f"LLM_MODO='{modo}' no es válido; use uno de: {', '.join(MODOS)}.", causa="modo_desconocido", proveedor=proveedor
         )
-    modelo = (os.getenv("PUENTE_MODELO_LLM") or "").strip() or MODELO_POR_DEFECTO[proveedor]
+    modelo = _modelo_para(proveedor, os.getenv("PUENTE_MODELO_LLM"))
     directorio = (os.getenv("LLM_DIR_GRABACIONES") or "").strip() or str(DIR_GRABACIONES_POR_DEFECTO)
     return {"proveedor": proveedor, "modelo": modelo, "modo": modo, "directorio": directorio}
 
@@ -119,8 +132,7 @@ def _respaldo(proveedor_principal: str) -> tuple[str, str] | None:
             causa="proveedor_desconocido",
             proveedor=proveedor,
         )
-    modelo = (os.getenv("LLM_MODELO_RESPALDO") or "").strip() or MODELO_POR_DEFECTO[proveedor]
-    return proveedor, modelo
+    return proveedor, _modelo_para(proveedor, os.getenv("LLM_MODELO_RESPALDO"))
 
 
 def _fallbacks_servidor() -> bool:
@@ -330,10 +342,40 @@ def _leer_grabacion(directorio: str, clave: str, esquema: type[T] | None, *, pro
 # ---------------------------------------------------------------- proveedores
 
 _clientes: dict[str, Any] = {}
+_dotenv_cargado = False
+_CLAVES = {"anthropic": ("ANTHROPIC_API_KEY",), "gemini": ("GOOGLE_API_KEY", "GEMINI_API_KEY")}
 
 
-def _cliente_por_defecto(proveedor: str, modelo: str) -> Any:
-    """Cliente real, creado de forma perezosa. Nunca se llama en modo reproducir."""
+def _cargar_dotenv() -> None:
+    """Carga `.env` una sola vez sin pisar lo que ya esté en el entorno (los puntos de entrada no lo hacen)."""
+    global _dotenv_cargado
+    if _dotenv_cargado:
+        return
+    _dotenv_cargado = True
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(override=False)
+    except Exception:  # noqa: BLE001 - un .env ilegible no debe tumbar la llamada; faltará la clave y se avisa
+        pass
+
+
+def _cliente_por_defecto(proveedor: str, modelo: str, agente: str = "") -> Any:
+    """Cliente real, creado de forma perezosa. Nunca se llama en modo reproducir.
+
+    Comprueba que haya clave (sin leerla ni mostrarla) para devolver un ErrorLLM claro y no una excepción del SDK.
+    """
+    _cargar_dotenv()
+    nombres = _CLAVES[proveedor]
+    if not any((os.getenv(nombre) or "").strip() for nombre in nombres):
+        raise ErrorLLM(
+            f"Falta {nombres[0]} en .env para el agente {agente or 'desconocido'} ({proveedor}/{modelo}); "
+            "use LLM_MODO=reproducir para la demo sin red.",
+            causa="sin_clave",
+            proveedor=proveedor,
+            modelo=modelo,
+            agente=agente,
+        )
     with _candado:
         if proveedor == "anthropic":
             if "anthropic" not in _clientes:
@@ -343,7 +385,7 @@ def _cliente_por_defecto(proveedor: str, modelo: str) -> Any:
             return _clientes["anthropic"]
     from langchain_google_genai import ChatGoogleGenerativeAI
 
-    return ChatGoogleGenerativeAI(model=modelo, temperature=0)
+    return ChatGoogleGenerativeAI(model=modelo, temperature=0, max_retries=MAX_REINTENTOS, timeout=TIMEOUT_SEGUNDOS)
 
 
 def _error_anthropic(exc: Exception, proveedor: str, modelo: str, agente: str) -> ErrorLLM:
@@ -365,7 +407,7 @@ def _error_anthropic(exc: Exception, proveedor: str, modelo: str, agente: str) -
 
 
 def _revisar_stop_reason(respuesta: Any, proveedor: str, modelo: str, agente: str) -> None:
-    """Antes de leer parsed_output o content: refusal y max_tokens son errores, no respuestas."""
+    """Antes de leer o validar el contenido: refusal y max_tokens son errores, no respuestas."""
     motivo = getattr(respuesta, "stop_reason", None)
     contexto = {"proveedor": proveedor, "modelo": modelo, "agente": agente}
     if motivo == "refusal":
@@ -408,11 +450,14 @@ def _llamar_anthropic(
 ) -> tuple[Any, int, int]:
     import anthropic
 
+    config_salida: dict[str, Any] = {"effort": effort}
+    if esquema is not None:
+        config_salida["format"] = {"type": "json_schema", "schema": anthropic.transform_schema(esquema)}
     argumentos: dict[str, Any] = {
         "model": modelo,
         "max_tokens": max_tokens,
         "messages": [{"role": "user", "content": _bloques_anthropic(prompt, archivos)}],
-        "output_config": {"effort": effort},
+        "output_config": config_salida,
     }
     if sistema:
         argumentos["system"] = (
@@ -423,37 +468,31 @@ def _llamar_anthropic(
         argumentos["fallbacks"] = "default"
         argumentos["betas"] = [BETA_FALLBACKS]
         servicio = cliente.beta.messages
-    if esquema is not None:
-        argumentos["output_format"] = esquema
+    # Se usa create y no parse: parse valida el JSON dentro de la llamada y un corte por max_tokens o un rechazo
+    # con texto llegarían como ValidationError, sin dejar leer stop_reason. Aquí se lee primero y se valida después.
     try:
-        respuesta = servicio.parse(**argumentos) if esquema is not None else servicio.create(**argumentos)
+        respuesta = servicio.create(**argumentos)
     except ErrorLLM:
         raise
-    except ValidationError as exc:
-        raise ErrorLLM(
-            f"La respuesta del modelo no cumple el esquema {esquema.__name__ if esquema else ''} ({modelo}, agente {agente}).",
-            causa="salida_invalida",
-            proveedor="anthropic",
-            modelo=modelo,
-            agente=agente,
-        ) from exc
     except anthropic.AnthropicError as exc:
         raise _error_anthropic(exc, "anthropic", modelo, agente) from exc
     _revisar_stop_reason(respuesta, "anthropic", modelo, agente)
     entrada, salida = _uso_anthropic(respuesta)
-    if esquema is not None:
-        parseado = getattr(respuesta, "parsed_output", None)
-        if parseado is None:
-            raise ErrorLLM(
-                f"El modelo no devolvió una salida estructurada ({modelo}, agente {agente}).",
-                causa="sin_salida",
-                proveedor="anthropic",
-                modelo=modelo,
-                agente=agente,
-            )
-        return (parseado if isinstance(parseado, esquema) else esquema.model_validate(parseado)), entrada, salida
-    texto = "".join(getattr(b, "text", "") for b in getattr(respuesta, "content", []) if getattr(b, "type", None) == "text")
-    return texto, entrada, salida
+    bloques = getattr(respuesta, "content", None) or []
+    texto = "".join(getattr(b, "text", "") for b in bloques if getattr(b, "type", None) == "text")
+    if esquema is None:
+        return texto, entrada, salida
+    contexto = {"proveedor": "anthropic", "modelo": modelo, "agente": agente}
+    if not texto.strip():
+        raise ErrorLLM(f"El modelo no devolvió una salida estructurada ({modelo}, agente {agente}).", causa="sin_salida", **contexto)
+    try:
+        return esquema.model_validate_json(texto), entrada, salida
+    except ValidationError as exc:
+        raise ErrorLLM(
+            f"La respuesta del modelo no cumple el esquema {esquema.__name__} ({modelo}, agente {agente}).",
+            causa="salida_invalida",
+            **contexto,
+        ) from exc
 
 
 def _texto_gemini(contenido: Any) -> str:
@@ -528,21 +567,32 @@ def _despachar(
         return resultado
 
     def intentar(prov: str, mod: str, cli: Any | None) -> tuple[Any, int, int]:
-        cli = cli if cli is not None else _cliente_por_defecto(prov, mod)
-        if prov == "anthropic":
-            return _llamar_anthropic(
-                cli,
+        try:
+            cli = cli if cli is not None else _cliente_por_defecto(prov, mod, agente)
+            if prov == "anthropic":
+                return _llamar_anthropic(
+                    cli,
+                    modelo=mod,
+                    prompt=prompt,
+                    esquema=esquema,
+                    archivos=datos,
+                    sistema=sistema,
+                    agente=agente,
+                    effort=effort,
+                    max_tokens=max_tokens,
+                    cache_sistema=cache_sistema,
+                )
+            return _llamar_gemini(cli, modelo=mod, prompt=prompt, esquema=esquema, archivos=datos, sistema=sistema, agente=agente)
+        except ErrorLLM:
+            raise
+        except Exception as exc:  # noqa: BLE001 - todo error llega como ErrorLLM, sin datos del entorno ni de la clave
+            raise ErrorLLM(
+                f"Error inesperado del modelo ({prov}/{mod}, agente {agente}): {type(exc).__name__}.",
+                causa="error_proveedor",
+                proveedor=prov,
                 modelo=mod,
-                prompt=prompt,
-                esquema=esquema,
-                archivos=datos,
-                sistema=sistema,
                 agente=agente,
-                effort=effort,
-                max_tokens=max_tokens,
-                cache_sistema=cache_sistema,
-            )
-        return _llamar_gemini(cli, modelo=mod, prompt=prompt, esquema=esquema, archivos=datos, sistema=sistema, agente=agente)
+            ) from exc
 
     atendido_por: dict[str, str] | None = None
     try:
@@ -594,7 +644,7 @@ def generar_estructurado(
     """Llama al modelo y devuelve una instancia validada de `esquema`.
 
     `archivos`: rutas o (mime, bytes); imágenes (jpeg, png, gif, webp) y PDF. `cliente` y `cliente_respaldo`
-    se inyectan en pruebas (doble que imita `messages.parse`, o `with_structured_output` con gemini).
+    se inyectan en pruebas (doble que imita `messages.create`, o `with_structured_output` con gemini).
     `cache_sistema=True` marca el `sistema` con cache_control cuando es largo y fijo.
     """
     return _despachar(
