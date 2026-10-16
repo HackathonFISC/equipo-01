@@ -1,8 +1,8 @@
 """Agente Postulación: acciones reales tras la aprobación humana. Issues #7 y #12.
 
 Recibe solo los matches que el orientador aprobó y avanza cada postulación por el embudo:
-preseleccionado -> aprobado -> enviado. ``registrar_entrevista`` la pasa a entrevista.
-Cada acción deja una Decision en la tabla ``decisiones``. Sin LLM: todo es código.
+preseleccionado -> aprobado -> consentido -> enviado. ``registrar_entrevista`` la pasa a
+entrevista. Cada acción deja una Decision en la tabla ``decisiones``. Sin LLM: todo es código.
 
 La aprobación humana se verifica aquí, en la herramienta que actúa: ``postular`` exige el
 dict ``aprobacion`` que deja el ``interrupt()`` del orientador (en ``EstadoPuente.aprobacion``)
@@ -11,7 +11,14 @@ y no actúa sobre ningún match que no esté en él. Forma esperada::
     {"orientador": "nombre", "timestamp": "2026-10-20T09:30:00-05:00",
      "aprobados": [{"perfil_id": "p1", "oferta_id": "o1"}, ...]}
 
-El nodo del grafo (``nodo_postulacion``) llega con el issue #12.
+El consentimiento del joven también se verifica aquí (Ley 81 de 2019: transferir datos
+personales a una empresa exige su consentimiento). ``postular`` pide un ``Consentimiento``
+con ``otorgado=True`` por cada pareja (perfil, oferta) y, sin él, lanza ValueError antes de
+cualquier efecto. El consentimiento queda como Decision con fecha y medio.
+
+``crear_nodo_postulacion`` arma el nodo ``postulacion`` del grafo (#12) sin tocar
+``puente/graph.py``: ``construir_grafo(nodos={"postulacion": crear_nodo_postulacion(...)})``.
+``nodo_postulacion`` es ese nodo con PUENTE_DB y ``outbox/`` por defecto.
 """
 from __future__ import annotations
 
@@ -23,7 +30,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from puente.tools import db
-from puente.schemas import Decision, Match, Oferta, Perfil
+from puente.schemas import SIN_OFERTA, Decision, EstadoPostulacion, Match, Oferta, Perfil
+from puente.tools.agenda import elegir_franja
 from puente.tools.calendario import ZONA_PANAMA, generar_ics
 from puente.tools.pdf import (
     evidencia_de,
@@ -32,11 +40,13 @@ from puente.tools.pdf import (
     limpiar_pii,
     skill_id_de,
 )
-from puente.tools.telegram import ResultadoEnvio, enviar_lista_corta
+from puente.tools.telegram import ResultadoEnvio, enviar_al_joven, enviar_lista_corta
 
 AGENTE = "postulacion"
 DURACION_ENTREVISTA_MIN = 45
 AVISO_FECHA = "Fecha provisional, por confirmar con la empresa"
+MENSAJE_SIN_CONSENTIMIENTO = "Sin consentimiento del joven no se envía nada (Ley 81 de 2019)"
+MEDIO_POR_DEFECTO = "orientador"
 # Estados desde los que postular ya no hace nada: la lista corta ya salió o el caso siguió.
 _YA_POSTULADA = frozenset({db.ENVIADO, db.ENTREVISTA, db.CONTRATADO, db.NO_SELECCIONADO})
 
@@ -77,12 +87,32 @@ def _validar_aprobacion(aprobacion: dict | None, aprobados: list[Match]) -> tupl
     return orientador, marca
 
 
+def _consentimiento_otorgado(
+    consentimientos: list[dict] | None, par: tuple[str, str]
+) -> dict | None:
+    """El Consentimiento otorgado de la pareja, o None.
+
+    Un ``otorgado=False`` explícito de la pareja manda sobre cualquier otro: si el joven lo
+    retiró, no se envía aunque otra entrada diga que sí.
+    """
+    propios = [c for c in consentimientos or [] if _par(c) == par]
+    if any(_leer(c, "otorgado") is False for c in propios):
+        return None
+    return next((c for c in propios if _leer(c, "otorgado") is True), None)
+
+
+def _leer(objeto, nombre: str):
+    return objeto.get(nombre) if isinstance(objeto, dict) else getattr(objeto, nombre, None)
+
+
 @dataclass
 class ResultadoPostulacion:
     postulaciones: list[int] = field(default_factory=list)
     envios: list[ResultadoEnvio] = field(default_factory=list)
     archivos: list[Path] = field(default_factory=list)
     decisiones: list[Decision] = field(default_factory=list)
+    # .ics de la entrevista por pareja (perfil_id, oferta_id); solo las postuladas en esta llamada
+    calendarios: dict[tuple[str, str], Path] = field(default_factory=dict)
 
 
 def inicio_entrevista_por_defecto(match: Match) -> datetime:
@@ -115,6 +145,7 @@ class _Plan:
     post_id: int | None  # None: la postulación aún no existe
     estado: str | None
     inicio: datetime | None  # None: se salta, no hace falta fecha
+    consentimiento: dict | None  # None: se salta, no hace falta consentimiento
 
 
 def _validar(
@@ -123,16 +154,19 @@ def _validar(
     ofertas: dict[str, Oferta],
     conn: sqlite3.Connection,
     elegir_inicio: Callable[[Match], datetime],
+    consentimientos: list[dict] | None = None,
 ) -> list[_Plan]:
     """Revisa todo antes de tocar nada: así un error no deja efectos a medias.
 
-    Incluye la fecha de la entrevista (la función inyectada y PUENTE_ENTREVISTA_INICIO):
-    una fecha mal configurada falla aquí, no después de crear la postulación.
+    Incluye el consentimiento del joven y la fecha de la entrevista (la función inyectada y
+    PUENTE_ENTREVISTA_INICIO): una fecha mal configurada o un consentimiento faltante fallan
+    aquí, no después de crear la postulación.
     """
     if not aprobados:
         raise ValueError("No hay matches aprobados para postular")
     vistos: set[tuple[str, str]] = set()
     planes: list[_Plan] = []
+    sin_consentimiento: list[str] = []
     for m in aprobados:
         if m.perfil_id not in perfiles:
             raise ValueError(f"Falta el perfil {m.perfil_id}")
@@ -149,7 +183,12 @@ def _validar(
         ).fetchone()
         post_id, estado = (int(fila["id"]), str(fila["estado"])) if fila else (None, None)
         inicio = None
+        consentimiento = None
         if estado not in _YA_POSTULADA:
+            consentimiento = _consentimiento_otorgado(consentimientos, clave)
+            if consentimiento is None:
+                sin_consentimiento.append(f"{m.perfil_id} / {m.oferta_id}")
+                continue
             inicio = elegir_inicio(m)
             if not isinstance(inicio, datetime):
                 raise ValueError(
@@ -157,19 +196,31 @@ def _validar(
                 )
             if inicio.tzinfo is None:
                 inicio = inicio.replace(tzinfo=ZONA_PANAMA)
-        planes.append(_Plan(m, perfiles[m.perfil_id], ofertas[m.oferta_id], post_id, estado, inicio))
+        planes.append(
+            _Plan(m, perfiles[m.perfil_id], ofertas[m.oferta_id], post_id, estado, inicio, consentimiento)
+        )
+    if sin_consentimiento:
+        raise ValueError(f"{MENSAJE_SIN_CONSENTIMIENTO}: {', '.join(sin_consentimiento)}")
     return planes
 
 
-def _texto_lista_corta(oferta: Oferta, filas: list[tuple[Match, Perfil, datetime]]) -> str:
-    lineas = [
+def _texto_lista_corta(
+    oferta: Oferta,
+    filas: list[tuple[Match, Perfil, datetime]],
+    mensaje_orientador: str = "",
+) -> str:
+    """Mensaje a la empresa. Ciego: no lleva corregimiento, edad ni género de los candidatos."""
+    lineas = []
+    if mensaje_orientador.strip():
+        lineas += [mensaje_orientador.strip(), ""]
+    lineas += [
         f"Lista corta para {oferta.puesto} en {oferta.empresa} ({oferta.corregimiento})",
         "Candidatos aprobados por el orientador. Datos de demostración (sintéticos).",
         f"Las fechas de entrevista de los .ics adjuntos son propuestas. {AVISO_FECHA}.",
         "",
     ]
     for i, (match, perfil, inicio) in enumerate(filas, start=1):
-        lineas.append(f"{i}. {perfil.nombre} - {perfil.corregimiento}")
+        lineas.append(f"{i}. {perfil.nombre}")
         habilidades = habilidades_para_cv(perfil, oferta)
         if habilidades:
             lineas.append("   Habilidades con evidencia:")
@@ -185,6 +236,35 @@ def _texto_lista_corta(oferta: Oferta, filas: list[tuple[Match, Perfil, datetime
     return limpiar_pii("\n".join(lineas)).rstrip() + "\n"
 
 
+def texto_para_joven(
+    perfil: Perfil,
+    enviados: list[tuple[Oferta, datetime]],
+    descartadas: list[tuple[str, str]],
+) -> str:
+    """Mensaje al joven: a dónde se le postuló, qué ofertas se descartaron y por qué.
+
+    ``enviados`` son (oferta, fecha propuesta de entrevista); ``descartadas`` son
+    (nombre de la oferta, motivo). Avisa que el .ics de la entrevista va adjunto.
+    """
+    lineas = [f"Hola, {perfil.nombre}. Esto es lo que hizo Puente por ti, con tu orientador(a):", ""]
+    if enviados:
+        lineas.append("Te postulamos a:")
+        for oferta, inicio in enviados:
+            lineas.append(
+                f"- {oferta.puesto} en {oferta.empresa}. Entrevista propuesta: "
+                f"{inicio.strftime('%Y-%m-%d %H:%M')} (hora de Panamá). {AVISO_FECHA}."
+            )
+    else:
+        lineas.append("Por ahora no te postulamos a ninguna oferta.")
+    if descartadas:
+        lineas += ["", "Ofertas que descartamos y por qué:"]
+        for nombre, motivo in descartadas:
+            lineas.append(f"- {nombre}: {motivo}")
+    if enviados:
+        lineas += ["", "Va adjunto el archivo .ics para que guardes la entrevista en tu calendario."]
+    return limpiar_pii("\n".join(lineas)).rstrip() + "\n"
+
+
 def postular(
     aprobados: list[Match],
     perfiles: dict[str, Perfil],
@@ -193,34 +273,41 @@ def postular(
     aprobacion: dict | None,
     conn: sqlite3.Connection,
     outbox: Path,
+    consentimientos: list[dict] | None = None,
+    mensaje_orientador: str = "",
     enviar: Callable[[str, str, str, list[Path]], dict] | None = None,
     inicio_entrevista: Callable[[Match], datetime] | None = None,
 ) -> ResultadoPostulacion:
     """Ejecuta las acciones reales para la lista aprobada por el orientador.
 
     Por cada match: guarda perfil y oferta, crea la postulación (preseleccionado), la pasa
-    a aprobado, genera el CV en PDF y el .ics de la entrevista. Después manda un mensaje
-    por oferta con sus candidatos (Telegram, o ``outbox/`` si no se puede) y pasa a
-    enviado las postulaciones de ese mensaje.
+    a aprobado y a consentido, genera el CV ciego en PDF y el .ics de la entrevista. Después
+    manda un mensaje por oferta con sus candidatos (Telegram, o ``outbox/`` si no se puede)
+    y pasa a enviado las postulaciones de ese mensaje.
 
     Se puede volver a llamar con los mismos matches (idempotente): una postulación que ya
-    existe se retoma desde su estado actual. Si quedó en perfil_listo, preseleccionado o
-    aprobado, se completa lo que falte hasta enviado; si ya está en enviado o más
-    adelante, se salta con una Decision "ya postulada" y se devuelve su id sin repetir
+    existe se retoma desde su estado actual. Si quedó en perfil_listo, preseleccionado,
+    aprobado o consentido, se completa lo que falte hasta enviado; si ya está en enviado o
+    más adelante, se salta con una Decision "ya postulada" y se devuelve su id sin repetir
     CV, .ics ni mensaje.
 
     ``aprobacion`` es el dict que dejó el orientador (ver el encabezado del módulo): sin él,
     o con un match que no esté en sus pares aprobados, no se hace nada. El orientador y la
     hora quedan en el historial de la postulación y en la Decision de la aprobación.
 
-    Lanza ValueError, sin efectos, si falta la aprobación o no cubre un match, la lista está
-    vacía, a un match le falta el perfil o la oferta, la oferta está bloqueada o la fecha de
-    entrevista no es válida.
+    ``consentimientos`` son los ``Consentimiento`` del joven (o del orientador en su nombre):
+    cada pareja que aún no salió necesita uno con ``otorgado=True``. Su medio y fecha quedan
+    en la Decision del consentimiento. ``mensaje_orientador``, si llega, va primero en el
+    mensaje a la empresa.
+
+    Lanza ValueError, sin efectos, si falta la aprobación o no cubre un match, falta el
+    consentimiento de una pareja, la lista está vacía, a un match le falta el perfil o la
+    oferta, la oferta está bloqueada o la fecha de entrevista no es válida.
     """
     orientador, hora_aprobacion = _validar_aprobacion(aprobacion, aprobados)
     quien = f"orientador {orientador} el {hora_aprobacion}"
     elegir_inicio = inicio_entrevista or inicio_entrevista_por_defecto
-    planes = _validar(aprobados, perfiles, ofertas, conn, elegir_inicio)
+    planes = _validar(aprobados, perfiles, ofertas, conn, elegir_inicio, consentimientos)
     outbox = Path(outbox)
     resultado = ResultadoPostulacion()
 
@@ -264,14 +351,23 @@ def postular(
 
         if estado == db.PRESELECCIONADO:
             db.cambiar_estado(conn, post_id, db.APROBADO, f"aprobado por el {quien}")
+            estado = db.APROBADO
             decidir(etiqueta, f"postulación {post_id} en aprobado",
                     f"El orientador {orientador} aprobó el match el {hora_aprobacion}; "
                     "solo desde aquí se actúa hacia terceros")
 
+        if estado == db.APROBADO:
+            medio = str(_leer(plan.consentimiento, "medio") or MEDIO_POR_DEFECTO)
+            fecha = str(_leer(plan.consentimiento, "timestamp") or hora_aprobacion)
+            db.cambiar_estado(conn, post_id, db.CONSENTIDO, f"consentimiento por {medio} el {fecha}")
+            decidir(etiqueta, f"postulación {post_id} en consentido",
+                    f"consentimiento de {perfil.id} para {oferta.id} por {medio} el {fecha}: "
+                    "acepta que su perfil se envíe a la empresa (Ley 81 de 2019)")
+
         cv = generar_cv(perfil, oferta, outbox)
         n_hab = len(habilidades_para_cv(perfil, oferta))
         decidir(etiqueta, cv.name,
-                f"CV generado solo con las {n_hab} habilidades que tienen evidencia")
+                f"CV ciego generado solo con las {n_hab} habilidades que tienen evidencia")
 
         ics = generar_ics(
             titulo=f"Propuesta de entrevista: {oferta.puesto} - {oferta.empresa}",
@@ -288,11 +384,14 @@ def postular(
                 "hora de Panamá), por confirmar con la empresa")
 
         resultado.archivos += [cv, ics]
+        resultado.calendarios[(perfil.id, oferta.id)] = ics
         por_oferta.setdefault(oferta.id, []).append((post_id, match, perfil, inicio, [cv, ics]))
 
     for oferta_id, filas in por_oferta.items():
         oferta = ofertas[oferta_id]
-        texto = _texto_lista_corta(oferta, [(m, p, i) for _, m, p, i, _ in filas])
+        texto = _texto_lista_corta(
+            oferta, [(m, p, i) for _, m, p, i, _ in filas], limpiar_pii(mensaje_orientador or "")
+        )
         adjuntos = [a for *_, archivos in filas for a in archivos]
         envio = enviar_lista_corta(texto, adjuntos, outbox=outbox, enviar=enviar)
         resultado.envios.append(envio)
@@ -302,7 +401,7 @@ def postular(
                 f"canal {envio.canal}, ok={envio.ok}",
                 envio.detalle)
         if not envio.ok:
-            continue  # ni Telegram ni el respaldo funcionaron: queda en aprobado y se puede reintentar
+            continue  # ni Telegram ni el respaldo funcionaron: queda en consentido y se puede reintentar
         for post_id, _, perfil, _, _ in filas:
             db.cambiar_estado(conn, post_id, db.ENVIADO, f"lista corta enviada por {envio.canal}")
             decidir(f"{perfil.id} -> {oferta_id}", f"postulación {post_id} en enviado",
@@ -322,3 +421,200 @@ def registrar_entrevista(conn: sqlite3.Connection, postulacion_id: int) -> None:
             razon="La empresa confirmó la entrevista",
         ),
     )
+
+
+# ---------------------------------------------------------------- nodo del grafo (#12)
+
+
+def _como(modelo, valor):
+    """El modelo Pydantic, venga ya construido o como dict (por ejemplo de un checkpoint)."""
+    return valor if isinstance(valor, modelo) else modelo.model_validate(valor)
+
+
+def _motivo_de_descarte(match: Match) -> str | None:
+    """Motivo por el que el Matching descartó la oferta, o None si no la descartó."""
+    desglose = match.desglose if isinstance(match.desglose, dict) else {}
+    if desglose.get("motivo_descarte"):
+        return str(desglose["motivo_descarte"])
+    if desglose.get("viable") is False:
+        return "no viable"
+    return None
+
+
+def _descartadas_de(
+    perfil_id: str, matches: list[Match], ofertas: dict[str, Oferta]
+) -> list[tuple[str, str]]:
+    """(nombre de la oferta, motivo) de lo que el Matching descartó para esa persona."""
+    resultado: list[tuple[str, str]] = []
+    for m in matches:
+        if m.perfil_id != perfil_id or m.oferta_id == SIN_OFERTA:
+            continue
+        motivo = _motivo_de_descarte(m)
+        if motivo is None:
+            continue
+        oferta = ofertas.get(m.oferta_id)
+        nombre = f"{oferta.puesto} en {oferta.empresa}" if oferta else m.oferta_id
+        if (nombre, motivo) not in resultado:
+            resultado.append((nombre, motivo))
+    return resultado
+
+
+def _ejecutar_nodo(
+    estado: dict,
+    conn: sqlite3.Connection,
+    *,
+    outbox: Path,
+    enviar,
+    enviar_joven,
+    reloj: Callable[[], datetime],
+) -> dict:
+    aprobacion = estado.get("aprobacion") or {}
+    errores = list(estado.get("errores") or [])
+    nuevas: list[Decision] = []
+    postulaciones = dict(estado.get("postulaciones") or {})
+    previos = list(estado.get("consentimientos") or [])
+
+    def anotar(entrada: str, salida: str, razon: str) -> None:
+        nuevas.append(Decision(agente=AGENTE, entrada_resumen=entrada, salida_resumen=salida, razon=razon))
+
+    def cambios(consentimientos: list[dict]) -> dict:
+        return {
+            "postulaciones": postulaciones,
+            "consentimientos": consentimientos,
+            "decisiones": [*(estado.get("decisiones") or []), *nuevas],
+            "errores": errores,
+        }
+
+    orientador = str(aprobacion.get("orientador") or "").strip()
+    pares = [_par(p) for p in aprobacion.get("aprobados") or []]
+    entrada = f"aprobación de {orientador or 'nadie'} para {aprobacion.get('oferta_id')}"
+    if not pares:
+        errores.append("postulacion: no hay aprobación con candidatos; no se envió nada")
+        anotar(entrada, "no se envió nada", "El estado no trae una aprobación con candidatos")
+        return cambios(previos)
+
+    # Consentimientos: los que ya trae el estado (por ejemplo del joven) más uno del
+    # orientador por cada aprobado sin entrada propia. Un otorgado=False explícito manda.
+    marca = str(aprobacion.get("timestamp") or "")
+    consentimientos = list(previos)
+    conocidos = {_par(c) for c in previos}
+    for par in pares:
+        if par not in conocidos:
+            consentimientos.append(
+                {"perfil_id": par[0], "oferta_id": par[1], "otorgado": True,
+                 "medio": MEDIO_POR_DEFECTO, "timestamp": marca}
+            )
+            conocidos.add(par)
+
+    lista_corta = {_par(m): m for m in estado.get("lista_corta") or []}
+    matches: list[Match] = []
+    for par in pares:
+        if _consentimiento_otorgado(consentimientos, par) is None:
+            errores.append(
+                f"postulacion: {par[0]} no dio su consentimiento para {par[1]}; no se envió nada"
+            )
+            anotar(f"{par[0]} -> {par[1]}", "no se envió nada",
+                   f"{MENSAJE_SIN_CONSENTIMIENTO}: el joven no consintió el envío a esta oferta")
+        elif par not in lista_corta:
+            errores.append(f"postulacion: {par[0]} / {par[1]} no está en la lista corta; no se envió nada")
+            anotar(f"{par[0]} -> {par[1]}", "no se envió nada", "El par aprobado no está en la lista corta")
+        else:
+            matches.append(_como(Match, lista_corta[par]))
+    if not matches:
+        return cambios(consentimientos)
+
+    perfiles = {p.id: p for p in (_como(Perfil, x) for x in estado.get("perfiles") or [])}
+    ofertas = {o.id: o for o in (_como(Oferta, x) for x in estado.get("ofertas") or [])}
+    inicios: dict[tuple[str, str], datetime] = {}
+
+    def elegir(match: Match) -> datetime:
+        par = _par(match)
+        traslado = dict(match.desglose).get("minutos_traslado", 0)
+        inicio = elegir_franja(ofertas[par[1]], perfiles[par[0]], traslado, desde=reloj())
+        if inicio is None:
+            inicio = inicio_entrevista_por_defecto(match)
+        inicios[par] = inicio
+        return inicio
+
+    try:
+        resultado = postular(
+            matches, perfiles, ofertas,
+            aprobacion=aprobacion, conn=conn, outbox=outbox,
+            consentimientos=consentimientos,
+            mensaje_orientador=str(aprobacion.get("mensaje") or ""),
+            enviar=enviar, inicio_entrevista=elegir,
+        )
+    except ValueError as error:
+        errores.append(f"postulacion: {error}")
+        anotar(entrada, "no se envió nada", str(error))
+        return cambios(consentimientos)
+
+    nuevas.extend(resultado.decisiones)
+    por_perfil: dict[str, list[tuple[Oferta, datetime]]] = {}
+    for match in matches:
+        par = _par(match)
+        fila = conn.execute(
+            "SELECT estado FROM postulaciones WHERE perfil_id = ? AND oferta_id = ?", par
+        ).fetchone()
+        if fila is None:
+            continue
+        postulaciones[f"{par[0]}:{par[1]}"] = EstadoPostulacion(fila["estado"])
+        if fila["estado"] == db.ENVIADO and par in inicios:
+            por_perfil.setdefault(par[0], []).append((ofertas[par[1]], inicios[par]))
+
+    todos = [_como(Match, m) for m in estado.get("matches") or []]
+    for perfil_id, enviados in por_perfil.items():
+        texto = texto_para_joven(perfiles[perfil_id], enviados, _descartadas_de(perfil_id, todos, ofertas))
+        adjuntos = [
+            resultado.calendarios[(perfil_id, oferta.id)]
+            for oferta, _ in enviados
+            if (perfil_id, oferta.id) in resultado.calendarios
+        ]
+        envio = enviar_al_joven(texto, adjuntos, outbox=outbox, enviar=enviar_joven)
+        anotar(f"mensaje al joven {perfil_id}", f"canal {envio.canal}, ok={envio.ok}", envio.detalle)
+        if not envio.ok:
+            errores.append(f"postulacion: no se pudo avisar a {perfil_id} ({envio.detalle})")
+    return cambios(consentimientos)
+
+
+def crear_nodo_postulacion(
+    *,
+    ruta_db: str | Path | None = None,
+    outbox: Path | None = None,
+    enviar=None,
+    enviar_joven=None,
+    ahora: Callable[[], datetime] | None = None,
+) -> Callable[[dict], dict]:
+    """Arma el nodo ``postulacion`` del grafo (issue #12).
+
+    Corre después del ``interrupt()`` del orientador. Lee ``estado["aprobacion"]`` (la forma
+    de ``nodo_aprobacion``), arma los consentimientos, elige la franja de entrevista con
+    ``elegir_franja``, llama a ``postular`` (CV ciego, .ics, mensaje a la empresa), avisa al
+    joven (a dónde se le postuló, qué se descartó y por qué, el .ics) y vuelca decisiones y
+    descartes a SQLite con ``db.volcar_estado``.
+
+    ``ruta_db`` es la base (por defecto PUENTE_DB o puente.db) y ``outbox`` la carpeta de
+    respaldo (por defecto ``outbox/``). ``enviar`` y ``enviar_joven`` son transportes de
+    Telegram inyectables y ``ahora`` el reloj (en pruebas, una fecha fija).
+
+    La conexión se abre y se cierra en cada llamada: LangGraph puede correr el nodo en otro
+    hilo y la de SQLite no se comparte entre hilos.
+    """
+    reloj = ahora or (lambda: datetime.now(ZONA_PANAMA))
+    carpeta = Path(outbox) if outbox is not None else Path("outbox")
+
+    def nodo_postulacion(estado: dict) -> dict:
+        conn = db.conectar(ruta_db)
+        try:
+            cambios = _ejecutar_nodo(
+                estado, conn, outbox=carpeta, enviar=enviar, enviar_joven=enviar_joven, reloj=reloj
+            )
+            db.volcar_estado(conn, {**estado, **cambios})
+        finally:
+            conn.close()
+        return cambios
+
+    return nodo_postulacion
+
+
+nodo_postulacion = crear_nodo_postulacion()

@@ -1,0 +1,376 @@
+"""Nodo `postulacion` dentro del grafo real de main (issue #12).
+
+El nodo se inyecta con `construir_grafo(nodos={"postulacion": ...})` y checkpointer SQLite en
+`tmp_path`. Sin red ni claves: Telegram es un doble y todo vive en directorios temporales.
+Todos los datos son SINTÉTICOS (caso_yaritza.json y perfiles ficticios).
+"""
+import urllib.request
+from datetime import datetime, timedelta, timezone
+
+import ics
+import pytest
+from langgraph.types import Command
+
+from puente import graph as g
+from puente.agents.postulacion import (
+    crear_nodo_postulacion,
+    nodo_postulacion,
+    postular,
+    texto_para_joven,
+)
+from puente.graph import (
+    aprobacion_pendiente,
+    cargar_caso,
+    checkpointer_sqlite,
+    config_caso,
+    construir_grafo,
+)
+from puente.schemas import EstadoPostulacion, HabilidadPerfil, Horario, Match, Oferta, Perfil
+from puente.tools import db
+
+PANAMA = timezone(timedelta(hours=-5))
+AHORA = datetime(2026, 10, 19, 7, 0, tzinfo=PANAMA)  # SINTÉTICO: un lunes a las 07:00
+CAJERO = "of-cajero-vista-alegre"
+COCINA = "of-ayudante-cocina-chorrera"
+TOCUMEN = "of-tocumen-sintetica"
+CHAT_EMPRESA = "chat-empresa-ficticio"
+CHAT_JOVEN = "chat-joven-ficticio"
+MOTIVO_TOCUMEN = "traslado de 95 min a Tocumen"
+
+
+@pytest.fixture(autouse=True)
+def entorno(monkeypatch):
+    """Tokens y chats ficticios; cualquier salida real a la red hace fallar la prueba."""
+    monkeypatch.setenv("LANGSMITH_TRACING", "false")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token-ficticio")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID_EMPRESA", CHAT_EMPRESA)
+    monkeypatch.setenv("TELEGRAM_CHAT_ID_JOVEN", CHAT_JOVEN)
+    monkeypatch.delenv("PUENTE_ENTREVISTA_INICIO", raising=False)
+
+    def prohibido(*a, **k):
+        raise AssertionError("no debe haber red en las pruebas")
+
+    monkeypatch.setattr(urllib.request, "urlopen", prohibido)
+
+
+class Doble:
+    """Transporte de Telegram falso: guarda (token, chat_id, texto, adjuntos)."""
+
+    def __init__(self):
+        self.mensajes = []
+
+    def __call__(self, token, chat_id, texto, adjuntos):
+        self.mensajes.append((token, chat_id, texto, list(adjuntos)))
+        return {"ok": True}
+
+
+class Caso:
+    """Grafo real con el nodo inyectado, detenido en el interrupt del orientador."""
+
+    def __init__(self, tmp_path, *, estado_extra=None, con_tocumen=False, **nodo):
+        self.tmp_path = tmp_path
+        self.empresa, self.joven = Doble(), Doble()
+        self.ruta_db = tmp_path / "puente.db"
+        self.outbox = tmp_path / "outbox"
+        nodos = {
+            "postulacion": crear_nodo_postulacion(
+                ruta_db=self.ruta_db, outbox=self.outbox,
+                enviar=self.empresa, enviar_joven=self.joven, ahora=lambda: AHORA, **nodo,
+            )
+        }
+        thread, estado = cargar_caso()
+        estado.update(estado_extra or {})
+        if con_tocumen:
+            tocumen = estado["ofertas"][0].model_copy(
+                update={"id": TOCUMEN, "puesto": "Operario de bodega", "empresa": "Bodega Ficticia",
+                        "corregimiento": "Tocumen", "habilidades": ["soldadura"]}
+            )
+            estado["ofertas"] = [*estado["ofertas"], tocumen]
+            nodos["matching"] = _matching_con_descarte_por_traslado
+        self.grafo = construir_grafo(nodos=nodos, checkpointer=checkpointer_sqlite(tmp_path / "checkpoints.db"))
+        self.config = config_caso(thread)
+        self.grafo.invoke(estado, self.config)
+
+    @property
+    def solicitud(self):
+        return aprobacion_pendiente(self.grafo, self.config)
+
+    @property
+    def valores(self):
+        return self.grafo.get_state(self.config).values
+
+    def responder(self, **respuesta):
+        return self.grafo.invoke(Command(resume=respuesta), self.config)
+
+    def aprobar(self, consentidos=None, **extra):
+        solicitud = self.solicitud
+        todos = [c["perfil_id"] for c in solicitud["candidatos"]]
+        return self.responder(
+            accion="aprobar", orientador="Orientadora Ficticia", oferta_id=solicitud["oferta_id"],
+            consentidos=todos if consentidos is None else consentidos, **extra,
+        )
+
+    def conexion(self):
+        return db.conectar(self.ruta_db)
+
+
+def _matching_con_descarte_por_traslado(estado):
+    """Matching de la Fase 1 más un descarte por traslado de Yaritza a la oferta de Tocumen."""
+    salida = g.stub_matching(estado)
+    matches = []
+    for m in salida["matches"]:
+        if (m.perfil_id, m.oferta_id) == ("yaritza", TOCUMEN):
+            m = m.model_copy(update={"desglose": {
+                **m.desglose, "viable": False, "motivo_descarte": MOTIVO_TOCUMEN, "minutos_traslado": 95}})
+        matches.append(m)
+    return {**salida, "matches": matches}
+
+
+def test_aprobar_en_el_tablero_envia_a_la_empresa_y_actualiza_el_embudo(tmp_path):
+    caso = Caso(tmp_path)
+    solicitud = caso.solicitud
+    aprobados = [c["perfil_id"] for c in solicitud["candidatos"]]
+    assert aprobados == ["carlos", "yaritza"]
+
+    caso.aprobar()  # como lo haría el tablero: Command(resume={accion, orientador, oferta_id, consentidos})
+
+    assert len(caso.empresa.mensajes) == 1
+    token, chat_id, texto, adjuntos = caso.empresa.mensajes[0]
+    assert chat_id == CHAT_EMPRESA
+    assert "Yaritza Ficticia" in texto and "Carlos Ficticio" in texto
+    assert {a.suffix for a in adjuntos} == {".pdf", ".ics"}
+
+    valores = caso.valores
+    assert valores["postulaciones"] == {
+        f"carlos:{CAJERO}": EstadoPostulacion.ENVIADO,
+        f"yaritza:{CAJERO}": EstadoPostulacion.ENVIADO,
+    }
+    assert [c["perfil_id"] for c in valores["consentimientos"]] == aprobados
+    assert all(c["otorgado"] and c["medio"] == "orientador" for c in valores["consentimientos"])
+
+    conn = caso.conexion()
+    try:
+        assert db.embudo(conn)["enviado"] == len(aprobados)
+        assert sum(db.embudo(conn).values()) == len(aprobados)
+        agentes = {t["agente"] for t in db.trazas(conn)}
+        assert {"postulacion", "aprobacion", "matching"} <= agentes  # el volcado trae lo de los otros nodos
+        consentimientos = [t for t in db.trazas(conn, agente="postulacion") if "consentimiento de" in t["razon"]]
+        assert len(consentimientos) == len(aprobados)
+        assert "por orientador el" in consentimientos[0]["razon"]
+    finally:
+        conn.close()
+
+
+def test_el_nodo_elige_la_franja_y_el_mensaje_a_la_empresa_es_ciego(tmp_path):
+    caso = Caso(tmp_path)
+    caso.aprobar(mensaje="Buen día: les presentamos a dos personas para la caja.")
+
+    texto = caso.empresa.mensajes[0][2]
+    assert texto.startswith("Buen día: les presentamos a dos personas para la caja.")  # va primero
+    for dato in ("Barrio Colón", "20 años", "edad", "género", "Femenino"):
+        assert dato not in texto
+
+    # Yaritza estudia de 18:00 a 22:00 y no declaró horario libre: lunes 08:00 es el primer hueco
+    # posterior a AHORA (07:00), con traslado 0 del Matching de la Fase 1.
+    eventos = {}
+    for ruta in caso.outbox.glob("entrevista_*.ics"):
+        (evento,) = ics.Calendar(ruta.read_text(encoding="utf-8")).events
+        eventos[ruta.stem] = evento.begin.datetime
+    assert eventos["entrevista_yaritza_" + CAJERO] == datetime(2026, 10, 19, 8, 0, tzinfo=PANAMA)
+
+
+def test_sin_consentido_postulacion_no_envia_nada(tmp_path):
+    # (a) postular() sin consentimientos, o con uno otorgado=False, lanza ValueError sin efectos.
+    perfil = Perfil(id="p1", nombre="Persona Ficticia", edad=21, corregimiento="La Chorrera",
+                    salario_minimo=300.0, presupuesto_pasaje_diario=2.0,
+                    habilidades=[HabilidadPerfil(skill_id="atencion_cliente", evidencia="atiendo clientes")])
+    oferta = Oferta(id="o1", puesto="Cajera", empresa="Super Demo", corregimiento="Arraiján",
+                    salario_mensual=420.0, horario=Horario(dias=["lunes"], hora_inicio="08:00", hora_fin="16:00"),
+                    habilidades=["atencion_cliente"])
+    match = Match(perfil_id="p1", oferta_id="o1", puntaje=90,
+                  desglose={"cobertura": 1.0, "minutos_traslado": 30, "pasaje_diario": 1.0, "penalizacion": 0})
+    aprobacion = {"orientador": "Orientadora Ficticia", "timestamp": "2026-10-20T09:30:00-05:00",
+                  "aprobados": [{"perfil_id": "p1", "oferta_id": "o1"}]}
+    denegado = [{"perfil_id": "p1", "oferta_id": "o1", "otorgado": False, "medio": "joven"}]
+    doble = Doble()
+    conn = db.conectar(tmp_path / "directa.db")
+    try:
+        for consentimientos in (None, [], denegado):
+            with pytest.raises(ValueError, match="Sin consentimiento"):
+                postular([match], {"p1": perfil}, {"o1": oferta}, aprobacion=aprobacion, conn=conn,
+                         outbox=tmp_path / "directo", consentimientos=consentimientos, enviar=doble)
+        assert doble.mensajes == [] and not (tmp_path / "directo").exists()
+        assert conn.execute("SELECT COUNT(*) FROM postulaciones").fetchone()[0] == 0
+        assert db.embudo(conn)["consentido"] == db.embudo(conn)["enviado"] == 0
+    finally:
+        conn.close()
+
+    # (b) el nodo con un otorgado=False explícito para la única pareja aprobada.
+    caso = Caso(tmp_path, estado_extra={"consentimientos": [
+        {"perfil_id": "yaritza", "oferta_id": CAJERO, "otorgado": False, "medio": "joven"}]})
+    caso.aprobar(consentidos=["yaritza"])
+
+    assert caso.empresa.mensajes == [] and caso.joven.mensajes == []
+    assert not caso.outbox.exists()
+    valores = caso.valores
+    assert any("consentimiento" in e and "yaritza" in e for e in valores["errores"])
+    assert valores["postulaciones"] == {}
+    conn = caso.conexion()
+    try:
+        assert db.embudo(conn)["enviado"] == 0 and db.embudo(conn)["consentido"] == 0
+        (explica,) = [t for t in db.trazas(conn, agente="postulacion") if t["salida_resumen"] == "no se envió nada"]
+        assert "consentimiento" in explica["razon"].lower()
+    finally:
+        conn.close()
+
+
+def test_un_otorgado_false_solo_frena_a_esa_pareja(tmp_path):
+    caso = Caso(tmp_path, estado_extra={"consentimientos": [
+        {"perfil_id": "yaritza", "oferta_id": CAJERO, "otorgado": False, "medio": "joven"}]})
+    # El orientador aprueba a Carlos y a Yaritza. Con `mensaje` propio: el sugerido por el grafo
+    # nombra a toda la lista corta, también a quien no consintió.
+    caso.aprobar(mensaje="Buen día: les presentamos a una persona para la caja.")
+
+    (token, chat_id, texto, adjuntos) = caso.empresa.mensajes[0]
+    assert "Carlos Ficticio" in texto and "Yaritza Ficticia" not in texto
+    assert caso.valores["postulaciones"] == {f"carlos:{CAJERO}": EstadoPostulacion.ENVIADO}
+    conn = caso.conexion()
+    try:
+        assert db.embudo(conn)["enviado"] == 1
+    finally:
+        conn.close()
+
+
+def test_el_consentimiento_del_joven_queda_con_su_medio_y_fecha(tmp_path):
+    marca = "2026-10-19T06:45:00-05:00"
+    caso = Caso(tmp_path, estado_extra={"consentimientos": [
+        {"perfil_id": "yaritza", "oferta_id": CAJERO, "otorgado": True, "medio": "joven", "timestamp": marca}]})
+    caso.aprobar()
+
+    conn = caso.conexion()
+    try:
+        razones = [t["razon"] for t in db.trazas(conn, agente="postulacion") if "consentimiento de" in t["razon"]]
+        assert any(f"consentimiento de yaritza para {CAJERO} por joven el {marca}" in r for r in razones)
+        assert any(f"consentimiento de carlos para {CAJERO} por orientador el" in r for r in razones)
+        historial = db.historial(conn, conn.execute(
+            "SELECT id FROM postulaciones WHERE perfil_id = 'yaritza'").fetchone()["id"])
+        assert [h["estado_nuevo"] for h in historial] == ["preseleccionado", "aprobado", "consentido", "enviado"]
+    finally:
+        conn.close()
+
+
+def test_rechazar_no_envia_y_queda_como_decision(tmp_path):
+    caso = Caso(tmp_path)
+    pendientes = caso.solicitud["vacantes_pendientes"]
+    assert pendientes == [CAJERO, COCINA]
+    for oferta_id in pendientes:
+        caso.responder(accion="rechazar", orientador="Orientadora Ficticia", oferta_id=oferta_id)
+
+    assert caso.empresa.mensajes == [] and caso.joven.mensajes == []
+    assert not caso.outbox.exists() or not list(caso.outbox.iterdir())
+    final = caso.valores
+    assert final.get("postulaciones") in (None, {})
+
+    conn = caso.conexion()  # rechazar no pasa por el nodo: el tablero vuelca el estado
+    try:
+        resultado = db.volcar_estado(conn, final)
+        assert resultado["decisiones"] > 0
+        assert db.embudo(conn) == {estado: 0 for estado in db.ESTADOS}
+        rechazos = db.trazas(conn, agente="aprobacion")
+        assert [r["salida_resumen"] for r in rechazos] == ["rechazar", "rechazar"]
+        assert "Orientadora Ficticia" in rechazos[0]["razon"]
+        assert db.volcar_estado(conn, final) == {"decisiones": 0, "descartes": 0}  # idempotente
+        assert any(d["perfil_id"] == "maria" and d["oferta_id"] == CAJERO for d in db.descartes(conn))
+    finally:
+        conn.close()
+
+
+def test_mensaje_al_joven_trae_postulacion_descarte_e_ics(tmp_path):
+    caso = Caso(tmp_path, con_tocumen=True)
+    caso.aprobar()
+
+    por_chat = {m[1] for m in caso.joven.mensajes}
+    assert por_chat == {CHAT_JOVEN}  # nunca al chat de la empresa
+    assert len(caso.joven.mensajes) == 2  # Carlos y Yaritza
+    textos = {m[2].split(".")[0].removeprefix("Hola, "): m for m in caso.joven.mensajes}
+    _, _, texto, adjuntos = textos["Yaritza Ficticia"]
+    assert "Cajero(a) de minisúper" in texto and "Minisúper Ficticio El Ahorro" in texto
+    assert MOTIVO_TOCUMEN in texto and "Bodega Ficticia" in texto
+    assert [a.suffix for a in adjuntos] == [".ics"] and "yaritza" in adjuntos[0].name
+    assert ".ics" in texto
+    # El mensaje a la empresa no cuenta lo que se descartó ni lleva datos del joven.
+    assert MOTIVO_TOCUMEN not in caso.empresa.mensajes[0][2]
+
+    conn = caso.conexion()
+    try:
+        assert {"perfil_id": "yaritza", "oferta_id": TOCUMEN, "motivo": MOTIVO_TOCUMEN, "origen": "matching"} \
+            in db.descartes(conn, perfil_id="yaritza")
+    finally:
+        conn.close()
+
+
+def test_sin_chat_del_joven_el_mensaje_queda_en_outbox(tmp_path, monkeypatch):
+    monkeypatch.delenv("TELEGRAM_CHAT_ID_JOVEN")
+    caso = Caso(tmp_path, con_tocumen=True)
+    caso.aprobar()
+
+    assert caso.joven.mensajes == []
+    archivos = sorted(caso.outbox.glob("joven_*.txt"))
+    assert len(archivos) == 2
+    yaritza = next(a for a in archivos if "Yaritza Ficticia" in a.read_text(encoding="utf-8"))
+    contenido = yaritza.read_text(encoding="utf-8")
+    assert MOTIVO_TOCUMEN in contenido and "entrevista_yaritza_" in contenido
+    assert len(caso.empresa.mensajes) == 1  # el de la empresa sí salió por su chat
+
+
+def test_volver_a_correr_el_nodo_no_repite_nada(tmp_path):
+    caso = Caso(tmp_path)
+    caso.aprobar()
+    estado = dict(caso.valores)
+    enviados_empresa, enviados_joven = len(caso.empresa.mensajes), len(caso.joven.mensajes)
+    archivos = sorted(p.name for p in caso.outbox.iterdir())
+
+    cambios = crear_nodo_postulacion(
+        ruta_db=caso.ruta_db, outbox=caso.outbox, enviar=caso.empresa, enviar_joven=caso.joven,
+        ahora=lambda: AHORA,
+    )(estado)
+
+    assert len(caso.empresa.mensajes) == enviados_empresa and len(caso.joven.mensajes) == enviados_joven
+    assert sorted(p.name for p in caso.outbox.iterdir()) == archivos
+    assert set(cambios["postulaciones"].values()) == {EstadoPostulacion.ENVIADO}
+    assert any("ya postulada" in d.razon.lower() for d in cambios["decisiones"])
+    conn = caso.conexion()
+    try:
+        assert db.embudo(conn)["enviado"] == 2
+    finally:
+        conn.close()
+
+
+def test_el_nodo_sin_aprobacion_no_hace_nada(tmp_path):
+    empresa, joven = Doble(), Doble()
+    nodo = crear_nodo_postulacion(ruta_db=tmp_path / "puente.db", outbox=tmp_path / "outbox",
+                                  enviar=empresa, enviar_joven=joven, ahora=lambda: AHORA)
+    cambios = nodo({"aprobacion": None, "decisiones": [], "errores": []})
+    assert empresa.mensajes == [] and joven.mensajes == [] and not (tmp_path / "outbox").exists()
+    assert cambios["errores"] and cambios["decisiones"][-1].salida_resumen == "no se envió nada"
+
+
+def test_nodo_postulacion_por_defecto_es_un_nodo_listo_para_el_grafo():
+    assert callable(nodo_postulacion)
+    assert nodo_postulacion.__name__ == "nodo_postulacion"
+
+
+def test_texto_para_joven_cuenta_a_donde_se_postulo_y_que_se_descarto():
+    perfil = Perfil(id="p1", nombre="Persona Ficticia", edad=21, corregimiento="La Chorrera",
+                    salario_minimo=300.0, presupuesto_pasaje_diario=2.0)
+    oferta = Oferta(id="o1", puesto="Cajera", empresa="Super Demo", corregimiento="Arraiján",
+                    salario_mensual=420.0, horario=Horario(dias=["lunes"], hora_inicio="08:00", hora_fin="16:00"),
+                    habilidades=["atencion_cliente"])
+    texto = texto_para_joven(perfil, [(oferta, AHORA + timedelta(days=1, hours=3))],
+                             [("Operario en Tocumen", MOTIVO_TOCUMEN)])
+    assert "Persona Ficticia" in texto
+    assert "Cajera en Super Demo" in texto and "2026-10-20 10:00" in texto
+    assert f"Operario en Tocumen: {MOTIVO_TOCUMEN}" in texto
+    assert ".ics" in texto
+    sin_envio = texto_para_joven(perfil, [], [("Operario en Tocumen", MOTIVO_TOCUMEN)])
+    assert "no te postulamos" in sin_envio and ".ics" not in sin_envio
