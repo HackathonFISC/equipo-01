@@ -24,6 +24,7 @@ ENV_EJEMPLO = RAIZ / ".env.example"
 
 ENCABEZADOS_README = (
     "## Problema",
+    "## Cobertura del reto",
     "## Arquitectura de agentes",
     "## Tecnologías",
     "## Fuentes de datos",
@@ -33,12 +34,25 @@ ENCABEZADOS_README = (
     "## Bitácora de IA",
 )
 
-# Variables de #7 (PR #34) que el README documenta aunque .env.example aún no las traiga,
+# Variables que el código lee y .env.example no trae (modelo del LLM y checkpoints del grafo),
 # más la que activa la comprobación estricta de la bitácora.
-VARIABLES_EXTRA = ("PUENTE_DB", "PUENTE_ENTREVISTA_INICIO", "PUENTE_CHEQUEO_ENTREGA")
+VARIABLES_EXTRA = ("PUENTE_MODELO_LLM", "PUENTE_CHECKPOINTS", "PUENTE_CHEQUEO_ENTREGA")
+
+# Agentes mínimos que sugiere el reto (sección 5.4), en su orden.
+AGENTES_RETO = (
+    "Inteligencia de mercado",
+    "Perfil",
+    "Matching",
+    "Ruta de formación",
+    "Postulación",
+    "Entrevista simulada",
+    "Auditor",
+)
+ESTADOS_COBERTURA = ("Completo", "Parcial", "Fuera de alcance")
 
 COMPONENTES_BITACORA = (
-    "Esquemas y grafo",
+    "Esquemas y contratos",
+    "Grafo",
     "Mercado",
     "Perfil",
     "Matching/solver",
@@ -96,7 +110,8 @@ def _filas_tabla(texto: str) -> list[list[str]]:
     filas = []
     for linea in texto.splitlines():
         if linea.startswith("|"):
-            celdas = [c.strip() for c in linea.strip().strip("|").split("|")]
+            # Un `\|` escapado es texto de la celda, como en GitHub; un `|` suelto parte la fila.
+            celdas = [c.strip() for c in re.split(r"(?<!\\)\|", linea.strip().strip("|"))]
             filas.append(celdas)
     return filas
 
@@ -179,9 +194,9 @@ def test_readme_es_seguible():
         assert imagen.format == "PNG"
         assert imagen.width >= 1200, f"docs/arquitectura.png mide {imagen.width} px de ancho; se piden al menos 1200"
 
-    # 7. La metodología tiene sus tres secciones.
+    # 7. La metodología tiene sus secciones, con las decisiones de diseño de la revisión del plan.
     metodologia = _leer(METODOLOGIA)
-    for encabezado in ("## Despliegue", "## Funcionamiento", "## Arquitectura"):
+    for encabezado in ("## Despliegue", "## Funcionamiento", "## Arquitectura", "## Decisiones de diseño"):
         assert re.search(rf"^{re.escape(encabezado)}\s*$", metodologia, flags=re.MULTILINE), (
             f"Falta '{encabezado}' en docs/metodologia.md"
         )
@@ -192,15 +207,29 @@ def test_readme_cita_cifras_con_fuente():
     problema = _seccion(texto, "## Problema")
     for fragmento in (
         "inec.gob.pa",
-        "laestrella.com.pa",
         "panama.justia.com",
         "tvn-2.com",
         "prensa.com",
     ):
         assert fragmento in problema, f"La sección Problema debe enlazar la fuente {fragmento}"
-    # Cifras verificadas, tal cual.
-    for cifra in ("10.4 %", "24.3 %", "47.1 %", "19.9 %", "113,347", "1,663", "Gaceta Oficial 25287"):
+    # Cifras verificadas en la fuente, tal cual (las del INEC, en su comentario de septiembre de 2025).
+    for cifra in ("10.4 %", "9.7 %", "24.3 %", "20,378", "47.1 %", "1,663", "Gaceta Oficial 25287"):
         assert cifra in problema, f"Falta la cifra verificada {cifra}"
+
+
+def test_readme_cubre_los_agentes_del_reto():
+    tabla = [f for f in _filas_tabla(_seccion(_leer(README), "## Cobertura del reto")) if not _es_separador(f)]
+    assert tabla and tabla[0][:4] == ["Agente sugerido (5.4)", "En Puente", "Issue", "Estado"], (
+        "La tabla de cobertura debe tener las columnas Agente sugerido (5.4) | En Puente | Issue | Estado"
+    )
+    # La sección trae también la tabla de requisitos técnicos, de 3 columnas.
+    agentes = [f for f in tabla[1:] if len(f) == len(tabla[0]) and re.match(r"\d\. ", f[0])]
+    assert len(agentes) == len(AGENTES_RETO), f"La tabla de cobertura debe listar los {len(AGENTES_RETO)} agentes del reto"
+    for n, (fila, nombre) in enumerate(zip(agentes, AGENTES_RETO), start=1):
+        assert fila[0].startswith(f"{n}. {nombre}"), f"Fila {n} de la cobertura: se esperaba '{nombre}', dice '{fila[0]}'"
+        assert fila[3] in ESTADOS_COBERTURA, f"Estado de '{nombre}' fuera de {ESTADOS_COBERTURA}: '{fila[3]}'"
+        if fila[3] != "Fuera de alcance":
+            assert fila[2].startswith("#"), f"'{nombre}' debe indicar su issue"
 
 
 def _filas_bitacora() -> list[list[str]]:
