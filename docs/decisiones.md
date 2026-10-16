@@ -9,6 +9,13 @@ Una entrada por decisión que cambie stack, arquitectura, alcance o forma de tra
 - **Consecuencias:** tres etiquetas nuevas (`estado: en proceso`, `estado: en revisión`, `estado: bloqueado`); scripts en `scripts/` y hook en `.githooks/`; `CLAUDE.md`, `GEMINI.md` y `.agents/rules/` apuntan a `AGENTS.md`.
 - **Quién:** @Cornelio-Guerra
 
+## 2026-10-16 · Sesiones en la nube con scripts/nube.sh
+
+- **Decisión:** los issues que se mandan a sesiones de Claude Code en la nube se lanzan con `scripts/nube.sh`, que reclama, crea y empuja la rama desde `origin/main`, lanza la sesión desde ese worktree y deja el enlace en el issue. Cada persona corre `/web-setup` una vez. El prompt obliga a la sesión a agregar el remoto `origin` antes de trabajar.
+- **Contexto:** las sesiones de #2, #5, #6 y #9 arrancaron sin remoto y sin acceso a la API de GitHub, porque la app de Claude no está instalada en la organización y la CLI sube una copia local del repo. Sin `/web-setup` no podían empujar; con `/web-setup` sí, después de agregar el remoto.
+- **Consecuencias:** la sección 12 de `AGENTS.md`; el humano mueve las etiquetas de estado de los issues que trabaja la nube; si un dueño de la organización instala la app de Claude para GitHub, las sesiones clonarían directo y el paso del remoto dejaría de hacer falta.
+- **Quién:** @Cornelio-Guerra
+
 ## Plantilla
 
 ## AAAA-MM-DD · Título
