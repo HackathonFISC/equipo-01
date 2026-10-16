@@ -68,12 +68,14 @@ def enviar_por_telegram(token: str, chat_id: str, texto: str, adjuntos: list[Pat
     return resultado
 
 
-def _escribir_outbox(texto: str, adjuntos: list[Path], outbox: Path, motivo: str) -> Path:
+def _escribir_outbox(
+    texto: str, adjuntos: list[Path], outbox: Path, motivo: str, prefijo: str = "mensaje"
+) -> Path:
     outbox = Path(outbox)
     outbox.mkdir(parents=True, exist_ok=True)
     sello = datetime.now(timezone(timedelta(hours=-5))).strftime("%Y%m%d-%H%M%S")
     n = 1
-    while (ruta := outbox / f"mensaje_{sello}_{n}.txt").exists():
+    while (ruta := outbox / f"{prefijo}_{sello}_{n}.txt").exists():
         n += 1
     lineas = [texto]
     if adjuntos:
@@ -115,6 +117,43 @@ def enviar_lista_corta(
                 # Solo el tipo de error: su texto podría traer la URL con el token.
                 motivo = f"fallo al enviar ({type(error).__name__})"
         ruta = _escribir_outbox(texto, adjuntos, outbox, motivo)
+        return ResultadoEnvio("outbox", True, ruta, f"Guardado en outbox: {motivo}")
+    except Exception as error:  # noqa: BLE001 - ni siquiera el respaldo puede lanzar
+        return ResultadoEnvio("outbox", False, None, f"No se pudo escribir el respaldo ({type(error).__name__})")
+
+
+def enviar_al_joven(
+    texto: str,
+    adjuntos: list[Path] = (),
+    *,
+    token: str | None = None,
+    chat_id: str | None = None,
+    outbox: Path = Path("outbox"),
+    enviar: Enviador | None = None,
+) -> ResultadoEnvio:
+    """Manda el mensaje al joven (issue #12); si no se puede, lo deja en ``outbox/joven_*.txt``.
+
+    Lee solo TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID_JOVEN del entorno si no se pasan. Nunca
+    recurre a TELEGRAM_CHAT_ID_EMPRESA: el mensaje del joven no debe llegar a la empresa.
+    Variable nueva (pendiente de agregar a .env.example): TELEGRAM_CHAT_ID_JOVEN.
+    Nunca lanza excepción.
+    """
+    adjuntos = [Path(a) for a in adjuntos]
+    token = token or os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = chat_id or os.getenv("TELEGRAM_CHAT_ID_JOVEN")
+    try:
+        if not token or not chat_id:
+            motivo = "sin token o chat del joven configurado"
+        else:
+            transporte = enviar or enviar_por_telegram
+            try:
+                respuesta = transporte(token, chat_id, texto, adjuntos)
+                if respuesta and respuesta.get("ok"):
+                    return ResultadoEnvio("telegram", True, None, "Enviado por Telegram")
+                motivo = "Telegram no aceptó el mensaje"
+            except Exception as error:  # noqa: BLE001 - el envío nunca debe tumbar el flujo
+                motivo = f"fallo al enviar ({type(error).__name__})"
+        ruta = _escribir_outbox(texto, adjuntos, outbox, motivo, prefijo="joven")
         return ResultadoEnvio("outbox", True, ruta, f"Guardado en outbox: {motivo}")
     except Exception as error:  # noqa: BLE001 - ni siquiera el respaldo puede lanzar
         return ResultadoEnvio("outbox", False, None, f"No se pudo escribir el respaldo ({type(error).__name__})")
