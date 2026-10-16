@@ -1,5 +1,5 @@
 {
-  "_nota": "Caso sintético de la demo (#10). Todas las personas y empresas son ficticias. `ofertas` y `perfiles` simulan lo que ya está en puente.db; `entradas_perfil` es la entrevista de Yaritza (forma de #6/#39) con las habilidades ya verificadas, porque el nodo Perfil es un stub en la Fase 1.",
+  "_nota": "Caso sintético de la demo (#10). Todas las personas y empresas son ficticias. `ofertas` y `perfiles` simulan lo que ya está en puente.db; `entradas_perfil` es la entrevista de Yaritza (forma de #6/#39); sus `habilidades` son la respuesta grabada del LLM para la demo sin conexión (`--llm grabado`), que Perfil vuelve a verificar contra la taxonomía y la evidencia literal.",
   "thread_id": "yaritza",
   "tipo_entrada": "perfil",
   "ofertas": [

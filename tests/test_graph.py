@@ -1,9 +1,11 @@
-"""Grafo completo de la Fase 1 (#10): stubs, interrupt() del orientador y checkpointer SQLite.
+"""Grafo de #10: interrupt() del orientador, checkpointer SQLite y agentes reales (Fase 2).
 
-Sin red ni claves: los nodos de agentes son stubs o falsos inyectados y los checkpoints
-viven en un directorio temporal.
+Sin red ni claves. La mecánica del grafo se prueba con los stubs de la Fase 1 (`NODOS_FASE_1`);
+la Fase 2, con los agentes reales y un LLM o extractor falso. Los checkpoints viven en un
+directorio temporal.
 """
 
+import json
 import sqlite3
 from datetime import datetime
 
@@ -18,9 +20,10 @@ from puente.graph import (
     config_caso,
     construir_grafo,
     estado_inicial,
+    nodos_fase_2,
 )
 from puente.guardrails import RESPUESTA_FUERA_DE_ALCANCE
-from puente.schemas import EstadoPostulacion
+from puente.schemas import EstadoPostulacion, agregar_decision
 
 CAJERO = "of-cajero-vista-alegre"
 COCINA = "of-ayudante-cocina-chorrera"
@@ -37,7 +40,8 @@ def caso():
 
 
 def _grafo(ruta_cp, **nodos):
-    return construir_grafo(nodos=nodos, checkpointer=checkpointer_sqlite(ruta_cp))
+    """Grafo con los stubs de la Fase 1: prueba la mecánica sin depender de los agentes."""
+    return construir_grafo(nodos={**g.NODOS_FASE_1, **nodos}, checkpointer=checkpointer_sqlite(ruta_cp))
 
 
 def _arrancar(grafo, estado, thread="yaritza"):
@@ -413,15 +417,18 @@ def test_checkpointer_una_conexion_por_ruta_y_fuera_de_puente_db(tmp_path):
 
 
 def test_demo_por_consola_automatica(tmp_path, capsys):
-    final = g.main(["--demo", "yaritza", "--checkpoints", str(tmp_path / "cp.db"), "--auto", "quitar:carlos,aprobar,rechazar"])
+    final = g.main(["--demo", "yaritza", "--checkpoints", str(tmp_path / "cp.db"), "--auto", "quitar:carlos,aprobar"])
     salida = capsys.readouterr().out
+    assert "LLM grabado" in salida
     assert "⏸  Aprobación pendiente" in salida
     assert "Flujo terminado." in salida
     assert final["excluidos"] == [{"perfil_id": "carlos", "oferta_id": CAJERO}]
+    assert "Formación sugerida" in salida  # María tiene una brecha en la cocina
 
 
 def test_demo_por_consola_interactiva(tmp_path):
-    respuestas = iter(["aprobar", "Orientadora Ficticia", "", "s", "n", "rechazar", "Orientadora Ficticia", ""])
+    # Cajero: aprobar a Carlos con consentimiento. Cocina: rechazar.
+    respuestas = iter(["aprobar", "Orientadora Ficticia", "", "s", "rechazar", "Orientadora Ficticia", ""])
     lineas = []
     final = g.main(
         ["--checkpoints", str(tmp_path / "cp.db"), "--thread", "interactiva"],
@@ -430,3 +437,193 @@ def test_demo_por_consola_interactiva(tmp_path):
     )
     assert "Flujo terminado." in "\n".join(lineas)
     assert _agentes(final).count("postulacion") == 1
+
+
+# ---------------------------------------------------------------- Fase 2: agentes reales
+
+
+class LLMFalso:
+    """LLM de Perfil sin red: devuelve siempre la misma respuesta y guarda los prompts."""
+
+    def __init__(self, respuesta):
+        self.respuesta = json.dumps(respuesta, ensure_ascii=False)
+        self.prompts = []
+
+    def __call__(self, prompt):
+        self.prompts.append(prompt)
+        return self.respuesta
+
+
+def _llm_yaritza(estado):
+    return LLMFalso({"habilidades": estado["entradas_perfil"][0]["habilidades"]})
+
+
+def _grafo_real(ruta_cp, **opciones):
+    return construir_grafo(nodos=nodos_fase_2(**opciones), checkpointer=checkpointer_sqlite(ruta_cp))
+
+
+def _decision_de(estado, agente):
+    return next(d for d in reversed(estado["decisiones"]) if d.agente == agente)
+
+
+def test_fase2_yaritza_corre_con_los_agentes_reales_y_se_detiene(ruta_cp, caso):
+    thread, estado = caso
+    llm = _llm_yaritza(estado)
+    grafo = _grafo_real(ruta_cp, llm_perfil=llm)
+    config = _arrancar(grafo, estado, thread)
+
+    assert len(llm.prompts) == 1  # una entrada de perfil, una llamada; nada más llama al LLM
+    valores = grafo.get_state(config).values
+    yaritza = next(p for p in valores["perfiles"] if p.id == "yaritza")
+    assert {h.skill_id for h in yaritza.habilidades} == {"atencion_cliente", "manejo_caja", "cocina"}
+    assert yaritza.horario_libre == []  # el rodeo del solver no toca el Perfil del estado
+    assert "CP-SAT" in _decision_de(valores, "matching").razon
+    assert _decision_de(valores, "auditor").salida_resumen.startswith("Consistencia=")
+    assert "set cover" in _decision_de(valores, "formacion").salida_resumen
+
+    solicitud = aprobacion_pendiente(grafo, config)
+    assert grafo.get_state(config).next == ("aprobacion",)
+    assert solicitud["vacantes_pendientes"] == [CAJERO, COCINA]  # la bloqueada nunca llega
+    final = _responder(grafo, config, **_aprobar(solicitud))
+    final = _responder(grafo, config, **_aprobar(aprobacion_pendiente(grafo, config)))
+    assert aprobacion_pendiente(grafo, config) is None
+    for agente in ("guardrails", "router", "perfil", "matching", "auditor", "formacion", "aprobacion", "postulacion"):
+        assert agente in _agentes(final), agente
+
+
+def test_fase2_el_interrupt_trae_formacion_auditor_y_lo_que_falta_confirmar(ruta_cp, caso):
+    thread, estado = caso
+    grafo = _grafo_real(ruta_cp, llm_perfil=_llm_yaritza(estado))
+    config = _arrancar(grafo, estado, thread)
+    _responder(grafo, config, **_aprobar(aprobacion_pendiente(grafo, config)))
+    solicitud = aprobacion_pendiente(grafo, config)
+
+    assert solicitud["oferta_id"] == COCINA
+    assert solicitud["oferta"]["salario_tipo"] == "exacto"
+    assert solicitud["oferta"]["requiere_confirmacion"] == []
+    maria = next(c for c in solicitud["candidatos"] if c["perfil_id"] == "maria")
+    assert maria["brechas"] == ["atencion_cliente"]
+    assert maria["rutas_formacion"][0]["brechas_cubiertas"] == ["atencion_cliente"]
+    assert maria["requiere_confirmacion"] == []
+    assert solicitud["reporte_auditor"].startswith("### Reporte del Agente Auditor")
+
+
+def test_fase2_quitar_recalcula_con_el_solver_y_entra_el_siguiente(ruta_cp, caso):
+    thread, estado = caso
+    estado["config_solver"] = {"max_candidatos_por_vacante": 1}
+    grafo = _grafo_real(ruta_cp, llm_perfil=_llm_yaritza(estado))
+    config = _arrancar(grafo, estado, thread)
+    _responder(grafo, config, **_aprobar(aprobacion_pendiente(grafo, config)))  # cajero
+    solicitud = aprobacion_pendiente(grafo, config)
+    assert [c["perfil_id"] for c in solicitud["candidatos"]] == ["yaritza"]  # k=1: la de mayor puntaje
+
+    _responder(grafo, config, accion="quitar", oferta_id=COCINA, perfil_id="yaritza")
+    valores = grafo.get_state(config).values
+    solicitud = aprobacion_pendiente(grafo, config)
+    assert [c["perfil_id"] for c in solicitud["candidatos"]] == ["maria"]  # su lugar lo ocupa la siguiente viable
+    assert not any(m.perfil_id == "yaritza" and m.oferta_id == COCINA for m in valores["matches"])
+    assert "yaritza → " + COCINA in _decision_de(valores, "matching").razon
+    # El cajero ya enviado no se vuelve a preguntar
+    assert solicitud["vacantes_pendientes"] == [COCINA]
+
+
+def test_fase2_quitar_al_unico_candidato_deja_la_vacante_sin_lista(ruta_cp, caso):
+    thread, estado = caso
+    grafo = _grafo_real(ruta_cp, llm_perfil=_llm_yaritza(estado))
+    config = _arrancar(grafo, estado, thread)
+    _responder(grafo, config, accion="quitar", oferta_id=CAJERO, perfil_id="carlos")
+    assert aprobacion_pendiente(grafo, config)["vacantes_pendientes"] == [COCINA]
+
+
+def _oferta_cruda(texto, **extraida):
+    return {"texto": texto, "fuente": "test", "respuesta_llm": extraida}
+
+
+OFERTA_VALIDA = _oferta_cruda(
+    "Tienda Ficticia busca vendedor(a) en Barrio Colón. Salario 500 balboas. Atención al cliente.",
+    puesto="Vendedor(a)",
+    empresa="Tienda Ficticia",
+    corregimiento="Barrio Colón",
+    salario_mensual=500,
+    habilidades=["atención al cliente"],
+    requisitos_texto="Atención al cliente.",
+)
+OFERTA_DISCRIMINATORIA = _oferta_cruda(
+    "Restaurante Ficticio busca mesera. Solo mujeres de 18 a 25 años, buena presencia. Salario 500.",
+    puesto="Mesera",
+    empresa="Restaurante Ficticio",
+    corregimiento="Barrio Colón",
+    salario_mensual=500,
+    habilidades=["atención al cliente"],
+    # El extractor "sumiso" omite el requisito: la regla corre sobre el texto original, no sobre esto
+    requisitos_texto="",
+)
+
+
+def test_fase2_mercado_bloquea_por_reglas_en_codigo_y_termina_con_alerta(ruta_cp, caso):
+    _, estado = caso
+    grafo = _grafo_real(ruta_cp, grabado=True)
+    config = config_caso("oferta-bloqueada")
+    final = grafo.invoke(
+        {**estado, "tipo_entrada": "oferta", "entradas_perfil": [], "ofertas_crudas": [OFERTA_DISCRIMINATORIA]}, config
+    )
+    assert "bloqueada" in final["respuesta"]
+    assert _agentes(final)[-1] == "alerta_oferta"
+    assert "matching" not in _agentes(final)
+    assert aprobacion_pendiente(grafo, config) is None
+
+
+def test_fase2_mercado_con_extractor_falso_entra_a_matching(ruta_cp, caso):
+    _, estado = caso
+    llamadas = []
+
+    def extraer(entrada):
+        llamadas.append(entrada.texto)
+        return OFERTA_VALIDA["respuesta_llm"]
+
+    grafo = _grafo_real(ruta_cp, extraer_oferta=extraer)
+    config = config_caso("oferta-valida")
+    grafo.invoke({**estado, "tipo_entrada": "oferta", "entradas_perfil": [], "ofertas_crudas": [OFERTA_VALIDA]}, config)
+    valores = grafo.get_state(config).values
+    [nueva] = valores["ofertas_nuevas"]
+    oferta = next(o for o in valores["ofertas"] if o.id == nueva)
+    assert llamadas == [OFERTA_VALIDA["texto"]]
+    assert oferta.habilidades == ["atencion_cliente"] and oferta.salario_mensual == 500
+    assert oferta.horario_tipo == "no_publicado"
+    assert nueva in aprobacion_pendiente(grafo, config)["vacantes_pendientes"]
+
+
+def test_fase2_auditor_que_devuelve_a_perfil_no_cuenta_dos_veces(ruta_cp, caso):
+    thread, estado = caso
+    llamadas = {"perfil": 0, "auditor": 0}
+    reales = nodos_fase_2(llm_perfil=_llm_yaritza(estado))
+
+    def perfil(estado):
+        llamadas["perfil"] += 1
+        return reales["perfil"](estado)
+
+    def auditor(estado):
+        llamadas["auditor"] += 1
+        primera = llamadas["auditor"] == 1
+        return {
+            "_auditor_incremento": True,
+            "reintentos_auditor": 1,
+            "sesgo_detectado": primera,
+            "devolver_a_matching": primera,
+            "accion_auditor": "perfil" if primera else "continuar",
+            "alertas_auditor": ["habilidades distintas al cambiar el nombre"] if primera else [],
+            **agregar_decision(estado, {"agente": "auditor", "entrada_resumen": "-", "salida_resumen": "-", "razon": "-"}),
+        }
+
+    grafo = construir_grafo(nodos={**reales, "perfil": perfil, "auditor": auditor}, checkpointer=checkpointer_sqlite(ruta_cp))
+    config = _arrancar(grafo, estado, thread)
+    assert llamadas == {"perfil": 2, "auditor": 2}
+    assert grafo.get_state(config).values["reintentos_auditor"] == 1
+    assert aprobacion_pendiente(grafo, config) is not None
+
+
+def test_fase2_cada_agente_es_un_nodo_con_nombre_para_langsmith():
+    nodos = set(construir_grafo().get_graph().nodes)
+    assert {"guardrails", "router", "mercado", "perfil", "matching", "auditor", "formacion", "aprobacion", "postulacion"} <= nodos
+    config = config_caso("yaritza")
+    assert config["run_name"] == "puente:yaritza" and config["metadata"]["thread_id"] == "yaritza"
