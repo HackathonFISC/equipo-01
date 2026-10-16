@@ -1,0 +1,113 @@
+{
+  "_nota": "Casos sintéticos para el agente Perfil (#6). respuesta_llm es la salida guardada del LLM, también sirve para el modo sin conexión de la demo; incluye a propósito habilidades inventadas o fuera de la taxonomía que el código debe descartar.",
+  "casos": [
+    {
+      "nombre": "yaritza_fonda_sin_cv",
+      "entrada": {
+        "id": "yaritza",
+        "nombre": "Yaritza Ficticia",
+        "genero": "F",
+        "presupuesto_pasaje_diario": 3.0,
+        "respuestas": [
+          "Tengo 20 años y vivo en La Chorrera. Mi celular es 6123-4567.",
+          "Estudio de noche, de lunes a viernes de 6 a 10 de la noche. En el día ayudo en la fonda.",
+          "Atiendo la fonda de mi mamá todas las mañanas. Atiendo a los clientes y les tomo el pedido, cobro y doy el vuelto, y anoto lo que se va acabando para comprar el surtido del día siguiente.",
+          "No he hecho voluntariado.",
+          "Sé usar el celular y ayudo a cocinar el almuerzo. Necesito ganar al menos 400 al mes."
+        ]
+      },
+      "respuesta_llm": {
+        "habilidades": [
+          {"skill_id": "atencion_cliente", "evidencia": "Atiendo a los clientes y les tomo el pedido"},
+          {"skill_id": "manejo_caja", "evidencia": "cobro y doy el vuelto"},
+          {"skill_id": "inventario", "evidencia": "anoto lo que se va acabando para comprar el surtido"},
+          {"skill_id": "cocina", "evidencia": "ayudo a cocinar el almuerzo"},
+          {"skill_id": "ventas", "evidencia": "vendí más de 100 platos al día"},
+          {"skill_id": "liderazgo", "evidencia": "Atiendo la fonda de mi mamá"}
+        ],
+        "edad": 20,
+        "corregimiento": "La Chorrera",
+        "salario_minimo": 400,
+        "horario_clases": [{"dias": ["lunes", "martes", "miercoles", "jueves", "viernes"], "hora_inicio": "18:00", "hora_fin": "22:00"}]
+      },
+      "habilidades_esperadas": ["atencion_cliente", "manejo_caja", "inventario", "cocina"]
+    },
+    {
+      "nombre": "carlos_cv_supermercado",
+      "entrada": {
+        "id": "carlos",
+        "nombre": "Carlos Ficticio",
+        "genero": "M",
+        "edad": 23,
+        "cv_texto": "CARLOS FICTICIO\nCédula: 8-000-1234\nTeléfono: +507 6987-6543\nDirección: Calle 5, casa 23, Barrio Colón, La Chorrera\n\nEXPERIENCIA\nCajero en Super Ejemplo (2023-2025): manejo de caja registradora y\ncuadre de caja al cierre del turno. Atención al cliente en horas pico.\n\nHABILIDADES\nExcel básico para planillas de turnos."
+      },
+      "respuesta_llm": {
+        "habilidades": [
+          {"skill_id": "manejo_caja", "evidencia": "manejo de caja registradora y cuadre de caja al cierre del turno"},
+          {"skill_id": "atencion_cliente", "evidencia": "Atención al cliente en horas pico."},
+          {"skill_id": "excel", "evidencia": "Excel básico para planillas de turnos"},
+          {"skill_id": "inventario", "evidencia": "controlaba el inventario de la tienda"}
+        ],
+        "edad": 23,
+        "corregimiento": "Barrio Colón",
+        "salario_minimo": null,
+        "horario_clases": []
+      },
+      "habilidades_esperadas": ["manejo_caja", "atencion_cliente", "excel"]
+    },
+    {
+      "nombre": "maria_voluntariado",
+      "entrada": {
+        "id": "maria",
+        "nombre": "María Ficticia",
+        "genero": "F",
+        "respuestas": [
+          "Tengo 18 años, vivo en Vista Alegre.",
+          "Terminé el colegio y ahora no estudio.",
+          "No he trabajado en negocios.",
+          "En la iglesia ayudo a organizar los bazares y las kermeses, y coordino con otros jóvenes quién lleva cada cosa.",
+          "Sé algo de inglés del colegio. Quisiera ganar 500."
+        ]
+      },
+      "respuesta_llm": {
+        "habilidades": [
+          {"skill_id": "Organizar eventos", "evidencia": "ayudo a organizar los bazares y las kermeses"},
+          {"skill_id": "trabajo_equipo", "evidencia": "coordino con otros jóvenes quién lleva cada cosa"},
+          {"skill_id": "ingles_basico", "evidencia": "inglés"},
+          {"skill_id": "excel", "evidencia": "manejo Excel avanzado"}
+        ],
+        "edad": 18,
+        "corregimiento": "Vista Alegre",
+        "salario_minimo": 500,
+        "horario_clases": []
+      },
+      "habilidades_esperadas": ["organizacion_eventos", "trabajo_equipo"]
+    },
+    {
+      "nombre": "kevin_sin_experiencia",
+      "entrada": {
+        "id": "kevin",
+        "nombre": "Kevin Ficticio",
+        "genero": "M",
+        "respuestas": [
+          "17 años, Tocumen.",
+          "Estoy en el colegio por la mañana.",
+          "No.",
+          "No.",
+          "Nada todavía."
+        ]
+      },
+      "respuesta_llm": {
+        "habilidades": [
+          {"skill_id": "trabajo_equipo", "evidencia": "siempre trabajo bien en grupo"},
+          {"skill_id": "excel", "evidencia": "No."}
+        ],
+        "edad": 17,
+        "corregimiento": "Tocumen",
+        "salario_minimo": null,
+        "horario_clases": [{"dias": ["lunes"], "hora_inicio": "7:00", "hora_fin": "12:00"}]
+      },
+      "habilidades_esperadas": []
+    }
+  ]
+}
