@@ -13,7 +13,7 @@ Reto: 0
 
 ## Problema
 
-Qué problema resuelve el proyecto, para quién y con qué datos.
+Reto 3 - Empleabilidad
 
 ## Arquitectura de agentes
 
