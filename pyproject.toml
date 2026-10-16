@@ -13,6 +13,7 @@ dependencies = [
     "langsmith",
     "ortools",
     "pydantic",
+    "pypdf>=6.21.0",
     "python-dotenv",
     "pyyaml",
     "starlette",
