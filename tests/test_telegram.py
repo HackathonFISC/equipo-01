@@ -1,9 +1,16 @@
 """Telegram con enviador doble y respaldo en outbox/, sin red ni token (issue #7)."""
+import email.parser
+import email.policy
+import http.server
+import threading
 import urllib.request
 
 import pytest
 
+from puente.tools import telegram
 from puente.tools.telegram import ResultadoEnvio, enviar_lista_corta
+
+_URLOPEN_REAL = urllib.request.urlopen  # el autouse lo bloquea; la prueba del servidor local lo restaura
 
 
 @pytest.fixture(autouse=True)
@@ -107,3 +114,50 @@ def test_transporte_real_arma_las_llamadas_sin_red(tmp_path, monkeypatch):
     assert [u.rsplit("/", 1)[1] for u, _ in llamadas] == ["sendMessage", "sendDocument"]
     assert all(u.startswith("https://api.telegram.org/botT0KEN/") for u, _ in llamadas)
     assert b"%PDF-falso" in llamadas[1][1] and b'filename="cv.pdf"' in llamadas[1][1]
+
+
+def test_transporte_real_contra_un_servidor_local_con_multipart_valido(tmp_path, monkeypatch):
+    """sendDocument se arma como multipart que un servidor HTTP real puede interpretar.
+
+    No toca la red externa: ``_API`` apunta a un servidor en 127.0.0.1 que juega a ser la API de
+    Telegram. No sustituye la prueba con el bot de demo (ver el PR), pero valida el formato.
+    """
+    recibidas = []
+
+    class FalsaApi(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            cuerpo = self.rfile.read(int(self.headers["Content-Length"]))
+            recibidas.append((self.path, self.headers["Content-Type"], cuerpo))
+            respuesta = b'{"ok": true}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(respuesta)))
+            self.end_headers()
+            self.wfile.write(respuesta)
+
+        def log_message(self, *args):
+            pass
+
+    servidor = http.server.HTTPServer(("127.0.0.1", 0), FalsaApi)
+    hilo = threading.Thread(target=servidor.serve_forever, daemon=True)
+    hilo.start()
+    try:
+        monkeypatch.setattr(urllib.request, "urlopen", _URLOPEN_REAL)
+        monkeypatch.setattr(telegram, "_API", f"http://127.0.0.1:{servidor.server_address[1]}")
+        pdf = tmp_path / "cv_p1_o1.pdf"
+        pdf.write_bytes(b"%PDF-1.4 binario \x00\xff\r\n con saltos")
+        resultado = telegram.enviar_por_telegram("TOKEN-FALSO", "chat-de-prueba", "hola equipo", [pdf])
+    finally:
+        servidor.shutdown()
+        servidor.server_close()
+
+    assert resultado == {"ok": True}
+    assert [ruta for ruta, *_ in recibidas] == ["/botTOKEN-FALSO/sendMessage", "/botTOKEN-FALSO/sendDocument"]
+    _, tipo, cuerpo = recibidas[1]
+    mensaje = email.parser.BytesParser(policy=email.policy.default).parsebytes(
+        b"Content-Type: " + tipo.encode() + b"\r\n\r\n" + cuerpo
+    )
+    partes = {p.get_param("name", header="content-disposition"): p for p in mensaje.iter_parts()}
+    assert partes["chat_id"].get_content().strip() == "chat-de-prueba"
+    assert partes["document"].get_filename() == "cv_p1_o1.pdf"
+    assert partes["document"].get_payload(decode=True) == pdf.read_bytes()

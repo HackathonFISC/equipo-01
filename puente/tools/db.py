@@ -10,7 +10,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from puente.tools._contratos import Decision, Oferta, Perfil, _campo
+from puente.schemas import Decision, Oferta, Perfil
 
 PERFIL_LISTO = "perfil_listo"
 PRESELECCIONADO = "preseleccionado"
@@ -72,6 +72,13 @@ CREATE TABLE IF NOT EXISTS decisiones (
 def _ahora() -> str:
     """Hora de Panamá (UTC-5, sin cambio de horario) en ISO 8601."""
     return datetime.now(timezone(timedelta(hours=-5))).isoformat(timespec="seconds")
+
+
+def _campo(objeto, nombre: str, defecto=None):
+    """Lee un campo de un modelo o de un dict (los nodos del grafo guardan dicts)."""
+    if isinstance(objeto, dict):
+        return objeto.get(nombre, defecto)
+    return getattr(objeto, nombre, defecto)
 
 
 def _valor(estado) -> str:
@@ -178,11 +185,11 @@ def registrar_decision(conn: sqlite3.Connection, decision: Decision | dict) -> i
             "INSERT INTO decisiones (agente, entrada_resumen, salida_resumen, razon, timestamp) "
             "VALUES (?, ?, ?, ?, ?)",
             (
-                str(_campo(decision, "agente")),
-                str(_campo(decision, "entrada_resumen")),
-                str(_campo(decision, "salida_resumen")),
-                str(_campo(decision, "razon")),
-                str(marca) if marca else _ahora(),
+                str(_campo(decision, "agente", "")),
+                str(_campo(decision, "entrada_resumen", "")),
+                str(_campo(decision, "salida_resumen", "")),
+                str(_campo(decision, "razon", "")),
+                str(marca) if marca else datetime.now(timezone.utc).isoformat(),
             ),
         )
     return int(cur.lastrowid)

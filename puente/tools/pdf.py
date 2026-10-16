@@ -6,11 +6,32 @@ from pathlib import Path
 
 from fpdf import FPDF
 
-from puente.tools._contratos import Habilidad, Oferta, Perfil, evidencia_de, skill_id_de
+from puente.schemas import HabilidadPerfil, Oferta, Perfil
 
-# Cédulas panameñas (8-123-4567, PE-1-234, E-8-12345) y teléfonos (+507 6123-4567, 6123-4567).
-_PATRON_CEDULA = re.compile(r"\b(?:PE|E|N|AV|PI)-\d{1,4}-\d{1,6}\b|\b\d{1,2}-\d{1,4}-\d{1,6}\b")
-_PATRON_TELEFONO = re.compile(r"(?:\+?507[\s-]?)?\b\d{3,4}[\s-]\d{4}\b|\+507[\s-]?\d{7,8}\b")
+# Cédulas panameñas: 8-123-4567, 08 123 4567 (provincias 1 a 13), PE-1-234, E-8-12345.
+# La provincia numérica se limita a 1-13 y no se lee dentro de una fecha u hora ("20-10-2026",
+# "2026-10-20 10:00"). Una fecha ambigua como 08-10-2026 se trata como cédula: ante la duda, se omite.
+_PROVINCIA = r"(?:0?[1-9]|1[0-3])"
+_PATRON_CEDULA = re.compile(
+    r"\b(?i:PE|E|N|AV|PI)-\d{1,4}-\d{1,6}\b"
+    r"|\b(?:PE|E|N|AV|PI)\s\d{1,4}\s\d{1,6}\b"
+    rf"|(?<![\d:/.-])\b{_PROVINCIA}[\s-]\d{{1,4}}[\s-]\d{{1,6}}\b(?![:/])"
+)
+# Teléfonos panameños con o sin +507, con separador o sin él: celulares de 8 dígitos que
+# empiezan en 6 (6123-4567, 61234567) y fijos de 7 (233-4567, 2334567). Las cifras sueltas que
+# no encajan ("salario 1200 1500") no se tocan.
+_NUMERO_TEL = r"(?:6\d{3}|[2-57]\d{2})[\s-]?\d{4}(?!\d)"
+_PATRON_TELEFONO = re.compile(
+    rf"(?:\+\s?507[\s-]?|\(507\)\s?|(?<!\w)507[\s-]){_NUMERO_TEL}"
+    rf"|(?<!\w){_NUMERO_TEL}"
+)
+# Dirección: heurística mínima. Palabra de domicilio seguida de número ("calle 5", "casa 12-B",
+# "apto 3A") o una línea "dirección: ...". No reconoce direcciones sin número.
+_PATRON_DIRECCION = re.compile(
+    r"\b(?i:calle|casa|apto|apt|apartamento|edificio|avenida|av|lote|manzana|mz)\.?\s*"
+    r"(?:(?i:n[oº°]\.?)\s*|#\s*)?[A-Za-z]?\d+[\w-]*"
+    r"|\b(?i:direcci[oó]n)\s*:\s*[^\n,;]+"
+)
 
 # Las fuentes core de fpdf2 (Helvetica) solo admiten latin-1: sustituimos lo más común.
 _SUSTITUCIONES = {
@@ -26,9 +47,10 @@ _SUSTITUCIONES = {
 
 
 def limpiar_pii(texto: str) -> str:
-    """Quita cédula y teléfono de un texto libre (defensa extra: Perfil ya los quita antes)."""
-    texto = _PATRON_CEDULA.sub("[dato omitido]", texto)
-    return _PATRON_TELEFONO.sub("[dato omitido]", texto)
+    """Quita cédula, teléfono y dirección de un texto libre (defensa extra: Perfil ya los quita)."""
+    for patron in (_PATRON_CEDULA, _PATRON_TELEFONO, _PATRON_DIRECCION):
+        texto = patron.sub("[dato omitido]", texto)
+    return texto
 
 
 def a_latin1(texto: str) -> str:
@@ -38,7 +60,23 @@ def a_latin1(texto: str) -> str:
     return texto.encode("latin-1", errors="replace").decode("latin-1")
 
 
-def habilidades_para_cv(perfil: Perfil, oferta: Oferta) -> list[Habilidad]:
+def _campo(habilidad, nombre: str) -> str:
+    """Lee un campo de una habilidad que puede ser un modelo o un dict."""
+    valor = habilidad.get(nombre) if isinstance(habilidad, dict) else getattr(habilidad, nombre, None)
+    return str(valor or "")
+
+
+def skill_id_de(habilidad) -> str:
+    """``skill_id`` de una habilidad, sea ``HabilidadPerfil`` o dict."""
+    return _campo(habilidad, "skill_id")
+
+
+def evidencia_de(habilidad) -> str:
+    """Frase que evidencia la habilidad (vacía si no hay), sea ``HabilidadPerfil`` o dict."""
+    return _campo(habilidad, "evidencia")
+
+
+def habilidades_para_cv(perfil: Perfil, oferta: Oferta) -> list[HabilidadPerfil]:
     """Solo habilidades con evidencia no vacía; primero las que pide la oferta.
 
     Cada habilidad puede ser un modelo o un dict (ver ``skill_id_de`` y ``evidencia_de``).

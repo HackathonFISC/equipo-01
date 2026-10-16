@@ -4,6 +4,13 @@ Recibe solo los matches que el orientador aprobó y avanza cada postulación por
 preseleccionado -> aprobado -> enviado. ``registrar_entrevista`` la pasa a entrevista.
 Cada acción deja una Decision en la tabla ``decisiones``. Sin LLM: todo es código.
 
+La aprobación humana se verifica aquí, en la herramienta que actúa: ``postular`` exige el
+dict ``aprobacion`` que deja el ``interrupt()`` del orientador (en ``EstadoPuente.aprobacion``)
+y no actúa sobre ningún match que no esté en él. Forma esperada::
+
+    {"orientador": "nombre", "timestamp": "2026-10-20T09:30:00-05:00",
+     "aprobados": [{"perfil_id": "p1", "oferta_id": "o1"}, ...]}
+
 El nodo del grafo (``nodo_postulacion``) llega con el issue #12.
 """
 from __future__ import annotations
@@ -16,9 +23,15 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from puente.tools import db
-from puente.tools._contratos import Decision, Match, Oferta, Perfil, evidencia_de, skill_id_de
+from puente.schemas import Decision, Match, Oferta, Perfil
 from puente.tools.calendario import ZONA_PANAMA, generar_ics
-from puente.tools.pdf import generar_cv, habilidades_para_cv, limpiar_pii
+from puente.tools.pdf import (
+    evidencia_de,
+    generar_cv,
+    habilidades_para_cv,
+    limpiar_pii,
+    skill_id_de,
+)
 from puente.tools.telegram import ResultadoEnvio, enviar_lista_corta
 
 AGENTE = "postulacion"
@@ -26,6 +39,42 @@ DURACION_ENTREVISTA_MIN = 45
 AVISO_FECHA = "Fecha provisional, por confirmar con la empresa"
 # Estados desde los que postular ya no hace nada: la lista corta ya salió o el caso siguió.
 _YA_POSTULADA = frozenset({db.ENVIADO, db.ENTREVISTA, db.CONTRATADO, db.NO_SELECCIONADO})
+
+
+def _par(item) -> tuple[str, str]:
+    """(perfil_id, oferta_id) de un Match, un dict o cualquier objeto con esos campos."""
+    leer = item.get if isinstance(item, dict) else lambda k: getattr(item, k, None)
+    return str(leer("perfil_id") or ""), str(leer("oferta_id") or "")
+
+
+def _validar_aprobacion(aprobacion: dict | None, aprobados: list[Match]) -> tuple[str, str]:
+    """Comprueba la aprobación del orientador y devuelve (orientador, timestamp).
+
+    ValueError si falta, no dice quién ni cuándo aprobó, o algún match de ``aprobados`` no
+    está entre los pares aprobados. Se llama antes de tocar nada.
+    """
+    if not isinstance(aprobacion, dict) or not aprobacion:
+        raise ValueError("Falta la aprobación del orientador: postular no actúa sin ella")
+    orientador = str(aprobacion.get("orientador") or "").strip()
+    if not orientador:
+        raise ValueError("La aprobación no dice qué orientador aprobó")
+    marca = str(aprobacion.get("timestamp") or "").strip()
+    if not marca:
+        raise ValueError("La aprobación no trae la hora en que aprobó el orientador")
+    try:
+        datetime.fromisoformat(marca)
+    except ValueError as error:
+        raise ValueError(f"La hora de la aprobación no es ISO 8601: {marca!r}") from error
+    pares = aprobacion.get("aprobados")
+    if not isinstance(pares, (list, tuple)) or not pares:
+        raise ValueError("La aprobación no lista los pares perfil/oferta aprobados")
+    permitidos = {_par(p) for p in pares}
+    for m in aprobados:
+        if _par(m) not in permitidos:
+            raise ValueError(
+                f"El match {m.perfil_id} / {m.oferta_id} no está en la aprobación de {orientador}"
+            )
+    return orientador, marca
 
 
 @dataclass
@@ -141,6 +190,7 @@ def postular(
     perfiles: dict[str, Perfil],
     ofertas: dict[str, Oferta],
     *,
+    aprobacion: dict | None,
     conn: sqlite3.Connection,
     outbox: Path,
     enviar: Callable[[str, str, str, list[Path]], dict] | None = None,
@@ -159,9 +209,16 @@ def postular(
     adelante, se salta con una Decision "ya postulada" y se devuelve su id sin repetir
     CV, .ics ni mensaje.
 
-    Lanza ValueError, sin efectos, si la lista está vacía, a un match le falta el perfil o
-    la oferta, la oferta está bloqueada o la fecha de entrevista no es válida.
+    ``aprobacion`` es el dict que dejó el orientador (ver el encabezado del módulo): sin él,
+    o con un match que no esté en sus pares aprobados, no se hace nada. El orientador y la
+    hora quedan en el historial de la postulación y en la Decision de la aprobación.
+
+    Lanza ValueError, sin efectos, si falta la aprobación o no cubre un match, la lista está
+    vacía, a un match le falta el perfil o la oferta, la oferta está bloqueada o la fecha de
+    entrevista no es válida.
     """
+    orientador, hora_aprobacion = _validar_aprobacion(aprobacion, aprobados)
+    quien = f"orientador {orientador} el {hora_aprobacion}"
     elegir_inicio = inicio_entrevista or inicio_entrevista_por_defecto
     planes = _validar(aprobados, perfiles, ofertas, conn, elegir_inicio)
     outbox = Path(outbox)
@@ -173,7 +230,6 @@ def postular(
             entrada_resumen=entrada,
             salida_resumen=salida,
             razon=razon,
-            timestamp=datetime.now(ZONA_PANAMA),
         )
         db.registrar_decision(conn, decision)
         resultado.decisiones.append(decision)
@@ -207,9 +263,10 @@ def postular(
         resultado.postulaciones.append(post_id)
 
         if estado == db.PRESELECCIONADO:
-            db.cambiar_estado(conn, post_id, db.APROBADO, "aprobado por orientador")
+            db.cambiar_estado(conn, post_id, db.APROBADO, f"aprobado por el {quien}")
             decidir(etiqueta, f"postulación {post_id} en aprobado",
-                    "El orientador aprobó el match; solo desde aquí se actúa hacia terceros")
+                    f"El orientador {orientador} aprobó el match el {hora_aprobacion}; "
+                    "solo desde aquí se actúa hacia terceros")
 
         cv = generar_cv(perfil, oferta, outbox)
         n_hab = len(habilidades_para_cv(perfil, oferta))
@@ -263,6 +320,5 @@ def registrar_entrevista(conn: sqlite3.Connection, postulacion_id: int) -> None:
             entrada_resumen=f"postulación {postulacion_id}",
             salida_resumen="estado entrevista",
             razon="La empresa confirmó la entrevista",
-            timestamp=datetime.now(ZONA_PANAMA),
         ),
     )

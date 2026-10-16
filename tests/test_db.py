@@ -4,13 +4,14 @@ import sqlite3
 import pytest
 
 from puente.tools import db
-from puente.tools._contratos import Decision, Habilidad, Horario, Oferta, Perfil
+from puente.schemas import Decision, HabilidadPerfil, Horario, Oferta, Perfil
 
 
 def _perfil(id_="p1"):
     return Perfil(
         id=id_, nombre="Yaritza Ficticia", edad=20, corregimiento="La Chorrera",
-        habilidades=[Habilidad(skill_id="atencion_cliente", evidencia="atiendo la fonda")],
+        salario_minimo=300.0, presupuesto_pasaje_diario=2.0,
+        habilidades=[HabilidadPerfil(skill_id="atencion_cliente", evidencia="atiendo la fonda")],
     )
 
 
