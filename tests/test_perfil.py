@@ -2,7 +2,7 @@
 modo terminal y nodo del grafo.
 
 Sin red, claves ni `puente.llm`: el LLM es un falso que devuelve `PerfilExtraido` guardados y
-anota cada prompt y sistema, y la taxonomía es un falso con la interfaz acordada con #5 sobre tests/fixtures/taxonomia_mini.csv.
+anota cada prompt, y la taxonomía es un falso con la interfaz acordada con #5 sobre tests/fixtures/taxonomia_mini.csv.
 """
 import csv
 import json
@@ -69,16 +69,14 @@ def normalizar_falso(texto: str, taxonomia: dict[str, dict]) -> str | None:
 
 
 class LLMFalso:
-    """Imita `llm_puente`: recibe prompt y sistema y devuelve un PerfilExtraido (o el texto dado)."""
+    """Imita `llm_puente`: recibe el prompt y devuelve un PerfilExtraido (o el texto dado)."""
 
     def __init__(self, respuesta: dict | str):
         self.respuesta = respuesta
         self.prompts: list[str] = []
-        self.sistemas: list[str] = []
 
-    def __call__(self, prompt: str, *, sistema: str) -> PerfilExtraido | str:
+    def __call__(self, prompt: str) -> PerfilExtraido | str:
         self.prompts.append(prompt)
-        self.sistemas.append(sistema)
         if isinstance(self.respuesta, str):
             return self.respuesta
         return PerfilExtraido.model_validate(self.respuesta)
@@ -114,7 +112,7 @@ def test_yaritza_sin_cv_fonda(taxonomia):
     assert perfil.edad == 20 and perfil.corregimiento == "La Chorrera"
     assert perfil.horario_clases[0].hora_inicio == "18:00"
     assert perfil.salario_minimo == 400 and perfil.presupuesto_pasaje_diario == 3.0
-    assert "6123-4567" not in llm.prompts[0] and "6123-4567" not in llm.sistemas[0]
+    assert "6123-4567" not in llm.prompts[0]
     assert "liderazgo" in decision.razon and "ventas" in decision.razon
     assert "ignorado del LLM" in decision.razon and "edad=25" in decision.razon
 
@@ -315,11 +313,18 @@ def test_preguntas_solo_piden_habilidades():
 
 
 def test_prompt_no_pide_datos_del_formulario(taxonomia):
-    sistema, prompt = construir_prompt("texto del joven", "entrevista", taxonomia)
-    assert "Llena solo \"habilidades\"" in sistema and "manejo_caja" in sistema
-    assert "texto del joven" in prompt and "texto del joven" not in sistema
-    # El sistema no depende del texto del joven: es cacheable y la grabación solo cambia con el prompt.
-    assert construir_prompt("otro texto", "entrevista", taxonomia)[0] == sistema
+    prompt = construir_prompt("texto del joven", "entrevista", taxonomia)
+    assert "Llena solo \"habilidades\"" in prompt and "manejo_caja" in prompt and "texto del joven" in prompt
+    assert '"edad"' not in prompt and '"salario_minimo"' not in prompt and '"horario_clases"' not in prompt
+
+
+def test_acepta_llm_que_devuelve_texto_json_como_el_grabado_del_grafo(taxonomia):
+    """`_llm_grabado` de puente/graph.py devuelve el JSON como texto con la firma llm(prompt)."""
+    caso = _caso("yaritza_fonda_sin_cv")
+    texto = json.dumps(caso["respuesta_llm"], ensure_ascii=False)
+    perfil, _ = construir_perfil(caso["entrada"], taxonomia=taxonomia, normalizar=normalizar_falso, llm=lambda _p: texto)
+    assert {"atencion_cliente", "manejo_caja", "inventario"} <= {h.skill_id for h in perfil.habilidades}
+    assert agente.llm_gemini is agente.llm_puente, "alias temporal mientras graph.py importe llm_gemini"
 
 
 def test_sin_edad_en_el_formulario_es_error_aunque_el_llm_la_diga(taxonomia):
@@ -507,7 +512,7 @@ class LLMPorId:
     def __init__(self):
         self.prompts: list[str] = []
 
-    def __call__(self, prompt: str, *, sistema: str) -> PerfilExtraido:
+    def __call__(self, prompt: str) -> PerfilExtraido:
         self.prompts.append(prompt)
         for caso in CASOS:
             muestra = (caso["entrada"].get("respuestas") or [caso["entrada"].get("cv_texto", "")])[-1][-30:]

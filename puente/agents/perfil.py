@@ -50,7 +50,7 @@ MAX_PREGUNTAS = 5
 # Una evidencia de 1 o 2 palabras ("caja", "sí") aparece en casi cualquier texto y no respalda nada.
 MIN_CARACTERES_EVIDENCIA = 8
 
-# llm(prompt, sistema=...) -> PerfilExtraido. También se acepta un dict o un texto JSON con esa forma
+# llm(prompt) -> PerfilExtraido. También se acepta un dict o un texto JSON con esa forma
 # (respuestas grabadas, falsos de los tests); el código lo valida contra PerfilExtraido.
 LLM = Callable[..., PerfilExtraido | dict[str, Any] | str]
 # Campos de PerfilExtraido que manda el formulario fijo: si el LLM los trae, se ignoran.
@@ -364,7 +364,7 @@ def medir_habilidades(pares: Iterable[tuple[Iterable[str], Iterable[str]]]) -> d
 # ---------------------------------------------------------------- LLM
 
 
-def llm_puente(prompt: str, *, sistema: str) -> PerfilExtraido:
+def llm_puente(prompt: str) -> PerfilExtraido:
     """LLM por defecto: la capa común de #45. Import diferido para que los tests no la necesiten.
 
     Proveedor, modelo y modo (vivo, grabar, reproducir) se eligen por entorno en `puente.llm`.
@@ -374,17 +374,20 @@ def llm_puente(prompt: str, *, sistema: str) -> PerfilExtraido:
         from puente.llm import generar_estructurado
     except ImportError as exc:
         raise RuntimeError("falta puente/llm.py (#45): no hay LLM; usa --reproducir o un llm inyectado") from exc
-    return generar_estructurado(prompt, PerfilExtraido, sistema=sistema, agente=AGENTE, cache_sistema=True)
+    return generar_estructurado(prompt, PerfilExtraido, agente=AGENTE)
 
 
-def construir_prompt(texto: str, modo: str, taxonomia: dict[str, dict]) -> tuple[str, str]:
-    """(sistema, prompt). El sistema es fijo por modo y taxonomía; solo el prompt lleva el texto del joven."""
+# Alias temporal: puente/graph.py (#10, PR #69) lo importa con este nombre. Se quita cuando graph.py use llm_puente.
+llm_gemini = llm_puente
+
+
+def construir_prompt(texto: str, modo: str, taxonomia: dict[str, dict]) -> str:
     catalogo = "\n".join(
         f"- {sid}: {d.get('nombre_es', sid)}" + (f" (también: {', '.join(d['sinonimos'])})" if d.get("sinonimos") else "")
         for sid, d in sorted(taxonomia.items())
     )
     fuente = "el CV" if modo == "cv" else "las respuestas de la entrevista"
-    sistema = f"""Eres el agente Perfil de Puente, un servicio de empleo juvenil en Panamá.
+    return f"""Eres el agente Perfil de Puente, un servicio de empleo juvenil en Panamá.
 Lee {fuente} y lista las habilidades laborales de la persona, incluidas las informales
 (negocio familiar, voluntariado, oficios). No inventes nada.
 
@@ -394,12 +397,12 @@ Reglas:
 - Para cada habilidad copia en "evidencia" una frase LITERAL, sin cambiar palabras, de {fuente}.
 - Si no hay frase que la respalde, no la incluyas.
 - Llena solo "habilidades". Deja vacíos o nulos los demás campos (edad, lugar, horarios, dinero):
-  esos datos llegan por un formulario aparte."""
-    prompt = f"""Texto:
+  esos datos llegan por un formulario aparte.
+
+Texto:
 <<<
 {texto}
 >>>"""
-    return sistema, prompt
 
 
 def _como_extraido(salida: PerfilExtraido | dict[str, Any] | str) -> PerfilExtraido:
@@ -482,8 +485,7 @@ def construir_perfil(
     else:
         raise ValueError(f"{pid}: sin CV ni respuestas de entrevista")
 
-    sistema, prompt = construir_prompt(texto_llm, modo, taxonomia)
-    extraido = _como_extraido(llm(prompt, sistema=sistema))
+    extraido = _como_extraido(llm(construir_prompt(texto_llm, modo, taxonomia)))
     habilidades, descartes = filtrar_habilidades(extraido.habilidades, fuentes, taxonomia, normalizar)
 
     corregimiento = entrada.get("corregimiento") or detectar_corregimiento(original, corregimientos)
@@ -646,7 +648,7 @@ def main(
     if llm is None and args.reproducir:
         grabada = _respuesta_guardada(args.reproducir, entrada["id"])
 
-        def llm(_prompt: str, **_: Any) -> PerfilExtraido:
+        def llm(_prompt: str) -> PerfilExtraido:
             return grabada
     elif llm is None:
         llm = llm_puente
