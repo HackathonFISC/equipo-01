@@ -1,12 +1,14 @@
 # Resultados de los evals de Puente
 
-Generado por `uv run python -m evals.run` el 2026-10-16 16:49 (hora de Panamá, UTC-5). No lo edites a mano: se regenera en cada corrida.
+Generado por `uv run python -m evals.run` el 2026-10-16 18:11 (hora de Panamá, UTC-5). No lo edites a mano: se regenera en cada corrida.
 
 Estados: 15 ok · 0 fallo · 0 pendiente · 9 omitido (de 24 casos).
 
 **Esta corrida no mide todo el sistema:** 9 casos con LLM omitidos por falta de GOOGLE_API_KEY (no se miden hasta correr con la clave real). Una categoría sin medir no es una categoría aprobada.
 
 Los casos con LLM se corren 3 veces y la tasa es aciertos sobre corridas. Las metas son propuestas provisionales hasta que el equipo las confirme con el plan. Todos los datos de los casos son sintéticos.
+
+Taxonomía usada en esta corrida: la de `casos.yaml` (en línea), copia literal de `data/taxonomia.csv` de #3 (rama issue-3-datos-puente, PR #27) con sus mismos sinónimos; no se agregaron sinónimos tomados de los textos de los casos. Cuando se fusione #27, medir con `data/taxonomia.csv`.
 
 ## Tabla por categoría
 

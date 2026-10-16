@@ -12,20 +12,27 @@
 #   en el repositorio. El equipo debe confirmarlas.
 # - Los skill_id son los de data/taxonomia.csv del issue #3 (atencion_cliente, manejo_caja, inventario,
 #   recepcion_mercancia, reposicion_productos, registro_datos, excel_basico, limpieza, ...).
+#   La taxonomía en línea de abajo es copia LITERAL de esa tabla (rama issue-3-datos-puente, PR #27), con sus
+#   mismos sinónimos: no se agregaron sinónimos tomados de los textos de los casos, para que la tasa de
+#   extracción y de perfil no salga inflada frente al sistema de la demo.
 # - Reglas legales (Ley 11 de 2005): art. 2 = límite de edad (bloquea); art. 1 = exigencia de sexo
 #   (bloquea); "buena presencia", foto y estado civil solo alertan. Falta revisión legal humana.
 #
 # Formato de las entradas y de lo esperado, por categoría:
 #   extraccion_ofertas          entrada.texto -> esperado {puesto, empresa, corregimiento, salario_mensual, habilidades[]}
 #   requisitos_discriminatorios entrada.texto -> esperado {bloqueada, reglas[] ("art. 1" | "art. 2"), alertas[] (presencia | foto | estado_civil)}
-#   perfil_sin_cv               entrada {texto (entrevista corta), formulario {nombre, edad, corregimiento}} -> esperado {habilidades[], no_incluir[], sin_pii[]}
+#   perfil_sin_cv               entrada {respuestas[] (hasta 5, en el orden de PREGUNTAS_ENTREVISTA de puente/agents/perfil.py:
+#                               1 edad y corregimiento, 2 estudio o trabajo y horario, 3 negocio o ayuda en casa,
+#                               4 voluntariado o comunidad, 5 qué sabe hacer y salario mínimo),
+#                               formulario {nombre, edad, corregimiento}} -> esperado {habilidades[], no_incluir[], sin_pii[]}
+#                               (sin_pii: datos que NO pueden aparecer ni en la evidencia ni en el prompt que recibe el LLM)
 #   matching_factible           entrada {config, traslados[], perfiles[], ofertas[]} -> esperado {asignacion{perfil: oferta|null}, violaciones_duras}
 #   sesgo_contrafactual         entrada {matching, traslados[], perfiles[], ofertas[]} -> esperado {sesgo_detectado}
 #   guardrails                  entrada {tipo, ...} -> esperado {veredicto, llamo_llm?, sigue_como_dato?}
 #
-# Taxonomía en línea (clave "taxonomia"): los skill_id que usan los casos de extracción y de perfil, con sus
-# sinónimos. Es SINTÉTICA y vive aquí porque data/taxonomia.csv (#3) todavía no está en main; los agentes la
-# reciben por inyección. Cuando #3 se fusione, conviene compararla con la real.
+# Taxonomía en línea (clave "taxonomia"): copia literal de data/taxonomia.csv de #3 (rama issue-3-datos-puente).
+# Vive aquí porque ese archivo todavía no está en main; los agentes la reciben por inyección. Cuando se fusione
+# #27, medir con data/taxonomia.csv y borrar esta copia.
 
 version: 1
 
@@ -62,17 +69,18 @@ categorias:
     meta: 1.0
 
 taxonomia:
-  atencion_cliente: {nombre_es: Atención al cliente, sinonimos: [servicio al cliente, atender clientes, atender a los clientes, trato al cliente, buen trato al cliente]}
-  manejo_caja: {nombre_es: Manejo de caja, sinonimos: [cobrar en caja, cobro en caja, cajero, cuadrar la caja, cuadre de caja, caja registradora, cobrar]}
-  inventario: {nombre_es: Control de inventario, sinonimos: [inventarios, control de inventarios, conteo de inventario, llevar el inventario]}
-  recepcion_mercancia: {nombre_es: Recepción de mercancía, sinonimos: [recibir mercancia, recibir mercancía, recepcion de mercancia, recibir pedidos]}
-  reposicion_productos: {nombre_es: Reposición de productos, sinonimos: [reponer productos, acomodar productos, acomodar productos en estantes, acomodar mercancia, reposicion]}
-  registro_datos: {nombre_es: Registro de datos, sinonimos: [registrar datos, digitacion, ingreso de datos, digitar datos, llenar planillas]}
-  excel_basico: {nombre_es: Excel básico, sinonimos: [excel, manejo de excel, manejo basico de excel, hojas de calculo]}
-  archivo_documentos: {nombre_es: Archivo de documentos, sinonimos: [archivar documentos, archivo, archivar]}
-  ventas_mostrador: {nombre_es: Ventas de mostrador, sinonimos: [venta de mostrador, ventas, atender el mostrador, venta al detal]}
-  limpieza: {nombre_es: Limpieza, sinonimos: [aseo, tareas de limpieza, limpiar, limpieza y aseo]}
-  trabajo_equipo: {nombre_es: Trabajo en equipo, sinonimos: [trabajar en equipo, colaboracion, trabajo colaborativo]}
+  atencion_cliente: {nombre_es: asistir a clientes, sinonimos: [atención al cliente, servicio al cliente, atender clientes], uri_esco: "http://data.europa.eu/esco/skill/61970f8b-099c-4e7e-82e0-9ccdced0baf3"}
+  manejo_caja: {nombre_es: manejar una caja registradora, sinonimos: [cobro en caja, cajero, cobrar], uri_esco: "http://data.europa.eu/esco/skill/0cb013af-6dd9-4fb2-b34e-63dda1a5cf82"}
+  inventario: {nombre_es: gestionar el inventario, sinonimos: [control de inventario, conteo de existencias, stock], uri_esco: "http://data.europa.eu/esco/skill/ab6265f2-a9bf-49e8-a9a5-67cbab4de38b"}
+  recepcion_mercancia: {nombre_es: recibir mercancías, sinonimos: [recepción de mercancía, recibir productos], uri_esco: "http://data.europa.eu/esco/skill/2cae39d6-78c2-4ce3-bee8-628504371463"}
+  reposicion_productos: {nombre_es: colocar las mercancías en las estanterías, sinonimos: [reposición, surtir estantes, acomodar productos], uri_esco: "http://data.europa.eu/esco/skill/7e9daad3-8604-4839-af9b-dc6f8db3ef68"}
+  registro_datos: {nombre_es: procesar datos, sinonimos: [registro de datos, entrada de datos, captación de datos], uri_esco: "http://data.europa.eu/esco/skill/f2d57f41-43b4-4f5b-8100-3df5c21eda50"}
+  excel_basico: {nombre_es: utilizar hojas de cálculo, sinonimos: [Excel básico, hojas de cálculo, planillas], uri_esco: "http://data.europa.eu/esco/skill/1225b032-7ead-464c-9072-64097d9a4b62"}
+  limpieza: {nombre_es: realizar tareas de limpieza, sinonimos: [aseo, limpiar superficies, desinfección], uri_esco: "http://data.europa.eu/esco/skill/1448431a-4fe5-4ca3-83db-665e0df3f130"}
+  despacho_mercancia: {nombre_es: preparar los pedidos para el envío, sinonimos: [despacho, separar pedidos, preparar entregas], uri_esco: "http://data.europa.eu/esco/skill/ee5e2297-39cc-4ed6-89e5-d58016118a7f"}
+  ventas_mostrador: {nombre_es: vender productos, sinonimos: [ventas de mostrador, ventas en tienda, ofrecer productos], uri_esco: "http://data.europa.eu/esco/skill/29a50780-f81b-429c-b410-7f23a492e19d"}
+  archivo_documentos: {nombre_es: archivar documentos, sinonimos: [archivo, organizar formularios, gestión documental], uri_esco: "http://data.europa.eu/esco/skill/3d427a49-4f85-42cd-8a92-62d4a34f41a1"}
+  trabajo_equipo: {nombre_es: trabajar en equipo, sinonimos: [colaboración, trabajo colaborativo], uri_esco: "http://data.europa.eu/esco/skill/c291acb4-6992-46ff-bf72-681eb378daa5"}
 
 casos:
   # ------------------------------------------------------------------ Extracción de ofertas (5)
@@ -262,11 +270,12 @@ casos:
     categoria: perfil_sin_cv
     descripcion: "Yaritza (ficticia), 20 años, La Chorrera, atiende la fonda de su mamá; sin CV."
     entrada:
-      texto: |
-        P1. ¿Qué haces en un día normal? R. Por la mañana atiendo la fonda de mi mamá en La Chorrera.
-        Atiendo a los clientes, cobro en caja y llevo el control del inventario de lo que se vende.
-        P2. ¿Y por la noche? R. Estudio el bachillerato de noche.
-        P3. ¿Qué te gusta de ese trabajo? R. Tratar con la gente.
+      respuestas:
+        - "Tengo 20 años y vivo en La Chorrera."
+        - "Por la mañana trabajo y estudio el bachillerato de noche."
+        - "Por la mañana atiendo la fonda de mi mamá. Atiendo a los clientes, cobro en caja y llevo el control del inventario de lo que se vende."
+        - "No he hecho voluntariado."
+        - "Me gusta tratar con la gente. Necesito ganar como mínimo 400 al mes."
       formulario: {nombre: Yaritza Ficticia, edad: 20, corregimiento: La Chorrera}
     esperado:
       habilidades: [atencion_cliente, manejo_caja, inventario]
@@ -280,10 +289,12 @@ casos:
     categoria: perfil_sin_cv
     descripcion: "Joven ficticio que ayuda en la bodega de un familiar; recibe y acomoda mercancía."
     entrada:
-      texto: |
-        P1. ¿En qué has trabajado? R. Ayudo en la bodega de mi tío los fines de semana.
-        Recibo la mercancía cuando llega el camión y acomodo los productos en los estantes.
-        P2. ¿Algo más? R. Nada formal, solo eso.
+      respuestas:
+        - "Tengo 19 años y vivo en Arraiján."
+        - "Estudio entre semana y los fines de semana estoy libre."
+        - "Ayudo en la bodega de mi tío los fines de semana. Recibo la mercancía cuando llega el camión y acomodo los productos en los estantes."
+        - "Nada formal, solo eso."
+        - "Todavía no tengo claro cuánto necesito ganar."
       formulario: {nombre: Joven Ficticio Bodega, edad: 19, corregimiento: Arraiján}
     esperado:
       habilidades: [recepcion_mercancia, reposicion_productos]
@@ -297,9 +308,12 @@ casos:
     categoria: perfil_sin_cv
     descripcion: "Joven ficticio con un curso de Excel que lleva las cuentas del taller de su papá."
     entrada:
-      texto: |
-        P1. ¿Qué sabes hacer? R. Hice un curso de Excel básico en el colegio.
-        P2. ¿Lo has usado? R. Sí, registro los datos de las ventas del taller de mi papá en una planilla cada semana.
+      respuestas:
+        - "Tengo 18 años y vivo en San Miguelito."
+        - "Estudio por la mañana y por la tarde estoy libre."
+        - "Registro los datos de las ventas del taller de mi papá en una planilla cada semana."
+        - "Nada de voluntariado por ahora."
+        - "Hice un curso de Excel básico en el colegio."
       formulario: {nombre: Joven Ficticio Taller, edad: 18, corregimiento: San Miguelito}
     esperado:
       habilidades: [excel_basico, registro_datos]
@@ -313,16 +327,17 @@ casos:
     categoria: perfil_sin_cv
     descripcion: "Entrevista con cédula, teléfono y dirección ficticios (no deben salir en la evidencia) y una habilidad que solo se desea, no se tiene (manejo_caja)."
     entrada:
-      texto: |
-        P1. Tu nombre y contacto. R. Soy Marisol Ficticia, cédula 8-000-0000, teléfono 6000-0000,
-        vivo en Calle 5ta, casa 12, Barrio Ficticio, Arraiján.
-        P2. ¿Qué haces? R. Limpio casas y oficinas los sábados y trabajo en equipo con mi prima.
-        P3. ¿Qué quieres aprender? R. Me gustaría aprender a manejar la caja, pero nunca lo he hecho.
+      respuestas:
+        - "Tengo 22 años, soy Marisol Ficticia, cédula 8-000-0000, teléfono 6000-0000, vivo en Calle 5ta, casa 12, Barrio Ficticio, Arraiján."
+        - "Trabajo solo los sábados."
+        - "Limpio casas y oficinas los sábados y trabajo en equipo con mi prima."
+        - "No he hecho voluntariado."
+        - "Me gustaría aprender a manejar la caja, pero nunca lo he hecho."
       formulario: {nombre: Marisol Ficticia, edad: 22, corregimiento: Arraiján}
     esperado:
       habilidades: [limpieza, trabajo_equipo]
       no_incluir: [manejo_caja]
-      sin_pii: ["8-000-0000", "6000-0000", "Calle 5ta"]
+      sin_pii: ["8-000-0000", "6000-0000", "Calle 5ta", "Barrio Ficticio"]
     escrito_el: "2026-10-16"
     datos_sinteticos: true
     fallos: []

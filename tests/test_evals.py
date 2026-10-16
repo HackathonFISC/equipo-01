@@ -468,6 +468,7 @@ def test_main_imprime_y_guarda_tabla(tmp_path, capsys):
     for seccion in ("## Tabla por categoría", "## Detalle por caso", "## Registro de fallos"):
         assert seccion in guardado
     assert "hora de Panamá" in guardado
+    assert "Taxonomía usada en esta corrida" in guardado and "copia literal de `data/taxonomia.csv`" in guardado
 
 
 def test_modulo_se_ejecuta_como_script(tmp_path):
@@ -656,7 +657,7 @@ def _oferta_extraida(**cambios):
         "corregimiento": "La Chorrera",
         "salario_mensual": 520.0,
         "horario": HorarioExtraido(dias=["lunes", "martes"], hora_inicio="08:00", hora_fin="16:00"),
-        "habilidades": ["cobrar en caja", "atender a los clientes"],
+        "habilidades": ["cobro en caja", "atender clientes"],  # nombres de la taxonomía real de #3, no frases de los casos
         "requisitos_texto": "cobrar en caja",
     }
     return OfertaExtraida(**{**datos, **cambios})
@@ -805,9 +806,51 @@ def test_perfil_descarta_evidencia_inventada_y_quita_pii_antes_del_llm(casos):
     caso = _caso(casos, "PER-04")
     observado = run.ejecutores_por_defecto(casos["taxonomia"], llm=llm)["perfil_sin_cv"](caso)
     assert {h["skill_id"] for h in observado["habilidades"]} == {"limpieza", "trabajo_equipo"}
-    assert run.comparar("perfil_sin_cv", caso["esperado"], {"texto_fuente": caso["entrada"]["texto"], **observado})
+    fuente = "\n".join(caso["entrada"]["respuestas"])
+    assert observado["prompt_llm"] == prompts[0]  # el observado lleva lo que recibió el LLM
     for dato in ("8-000-0000", "6000-0000"):  # la cédula y el teléfono no llegan al prompt
         assert dato not in prompts[0]
+    # Esas dos y la evidencia limpia cumplen lo esperado; la dirección parcial es el fallo de #6 de la prueba siguiente.
+    esperado = {**caso["esperado"], "sin_pii": ["8-000-0000", "6000-0000"]}
+    assert run.comparar("perfil_sin_cv", esperado, {"texto_fuente": fuente, **observado})
+
+
+@pytest.mark.xfail(
+    strict=False,
+    reason="Bug de #6: quitar_pii deja pasar 'Calle 5ta' y 'Barrio Ficticio' al prompt del LLM. XPASS cuando se corrija.",
+)
+def test_perfil_04_no_filtra_la_direccion_al_llm(casos):
+    caso = _caso(casos, "PER-04")
+    llm = _llm_de_perfil(("limpieza", "Limpio casas y oficinas los sábados"))
+    observado = run.ejecutores_por_defecto(casos["taxonomia"], llm=llm)["perfil_sin_cv"](caso)
+    fuente = "\n".join(caso["entrada"]["respuestas"])
+    assert run.comparar("perfil_sin_cv", {**caso["esperado"], "habilidades": ["limpieza"]}, {"texto_fuente": fuente, **observado})
+
+
+def test_el_eval_detecta_pii_en_el_prompt_aunque_la_evidencia_este_limpia(casos, monkeypatch):
+    evidencia =[{"skill_id": "limpieza", "evidencia": "Limpio casas y oficinas los sábados"}]
+    esperado = {"habilidades": ["limpieza"], "sin_pii": ["Calle 5ta", "8-000-0000"]}
+    limpio = {"habilidades": evidencia, "prompt_llm": "P: ...\nR: vivo en [DIRECCION]"}
+    fuga = {"habilidades": evidencia, "prompt_llm": "P: ...\nR: vivo en Calle 5ta, [DIRECCION]"}
+    assert run.comparar("perfil_sin_cv", esperado, limpio)
+    assert not run.comparar("perfil_sin_cv", esperado, fuga)
+    assert run._diferencias("perfil_sin_cv", esperado, fuga) == ["PII en el prompt (Calle 5ta)"]
+
+    # De punta a punta: un agente que deja pasar la dirección al LLM hace fallar el caso con ese motivo.
+    from puente.schemas import Perfil
+
+    def construir_con_fuga(entrada, *, llm, **kwargs):
+        llm("R: vivo en Calle 5ta, [DIRECCION]")
+        perfil = Perfil(id="x", nombre="n", edad=22, corregimiento="Arraiján", salario_minimo=0, presupuesto_pasaje_diario=0)
+        return perfil, None
+
+    resolver_real = run._resolver
+    monkeypatch.setattr(
+        run, "_resolver", lambda destino: construir_con_fuga if destino[1] == run.PERFIL_CONSTRUIR[1] else resolver_real(destino)
+    )
+    ejecutor = run.ejecutores_por_defecto(casos["taxonomia"], llm=lambda prompt: "{}")["perfil_sin_cv"]
+    resultado = run.correr(_solo(casos, "PER-04"), ejecutores={"perfil_sin_cv": ejecutor}, usar_llm=True, repeticiones=1)[0]
+    assert resultado.estado == "fallo" and "PII en el prompt (Calle 5ta)" in resultado.detalle
 
 
 def test_perfil_mide_una_habilidad_que_solo_se_desea(casos):
@@ -823,13 +866,14 @@ def test_perfil_exige_la_tupla_de_construir_perfil(casos, monkeypatch):
     destinos = {
         run.PERFIL_CONSTRUIR[1]: lambda entrada, **kw: {"habilidades": []},
         run.TAXONOMIA_NORMALIZAR[1]: lambda texto, taxonomia: None,
+        run.PERFIL_LLM[1]: lambda prompt: "{}",
     }
     monkeypatch.setattr(run, "_resolver", lambda destino: destinos[destino[1]])
     with pytest.raises(TypeError, match="forma inesperada: dict"):
         run._ejecutar_perfil(_caso(casos, "PER-01"), taxonomia=casos["taxonomia"])
 
 
-def test_perfil_manda_el_formulario_y_la_entrevista_como_cv_texto(casos, monkeypatch):
+def test_perfil_manda_el_formulario_y_las_respuestas_de_la_entrevista(casos, monkeypatch):
     from puente.schemas import Perfil
 
     recibido = {}
@@ -842,9 +886,35 @@ def test_perfil_manda_el_formulario_y_la_entrevista_como_cv_texto(casos, monkeyp
     destinos = {run.PERFIL_CONSTRUIR[1]: construir, run.TAXONOMIA_NORMALIZAR[1]: lambda texto, taxonomia: None}
     monkeypatch.setattr(run, "_resolver", lambda destino: destinos[destino[1]])
     caso = _caso(casos, "PER-02")
-    assert run._ejecutar_perfil(caso, taxonomia=casos["taxonomia"], llm=print) == {"habilidades": []}
-    assert recibido["entrada"] == {**caso["entrada"]["formulario"], "id": "PER-02", "cv_texto": caso["entrada"]["texto"]}
+    observado = run._ejecutar_perfil(caso, taxonomia=casos["taxonomia"], llm=lambda prompt: "{}")
+    assert observado == {"habilidades": [], "prompt_llm": ""}
+    assert recibido["entrada"] == {**caso["entrada"]["formulario"], "id": "PER-02", "respuestas": caso["entrada"]["respuestas"]}
+    assert "cv_texto" not in recibido["entrada"]
     assert set(recibido["kwargs"]) == {"taxonomia", "normalizar", "llm"}
+
+
+def test_los_casos_de_perfil_sin_cv_corren_el_agente_en_modo_entrevista(casos, monkeypatch):
+    from puente.agents import perfil as agente
+
+    decisiones = []
+    construir_real = agente.construir_perfil
+    resolver_real = run._resolver
+
+    def construir(entrada, **kwargs):
+        perfil, decision = construir_real(entrada, **kwargs)
+        decisiones.append(decision)
+        return perfil, decision
+
+    monkeypatch.setattr(run, "_resolver", lambda destino: construir if destino[1] == run.PERFIL_CONSTRUIR[1] else resolver_real(destino))
+    ejecutor = run.ejecutores_por_defecto(casos["taxonomia"], llm=lambda prompt: '{"habilidades": []}')["perfil_sin_cv"]
+    por_caso = [c for c in casos["casos"] if c["categoria"] == "perfil_sin_cv"]
+    assert len(por_caso) == 4
+    for caso in por_caso:
+        respuestas = caso["entrada"]["respuestas"]
+        assert 1 <= len(respuestas) <= agente.MAX_PREGUNTAS and "texto" not in caso["entrada"]
+        ejecutor(caso)
+    assert len(decisiones) == 4
+    assert all("· entrevista ·" in d.entrada_resumen and "· cv ·" not in d.entrada_resumen for d in decisiones)
 
 
 def test_guardrails_contra_evaluar_entrada_real(casos):

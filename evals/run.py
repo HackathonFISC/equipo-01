@@ -49,6 +49,7 @@ DISCRIMINACION_BLOQUEADA = ("puente.rules.discriminacion", "esta_bloqueada", 5) 
 TAXONOMIA_CARGAR = ("puente.rules.taxonomia", "cargar_taxonomia", 5)  # () -> {skill_id: {...}}
 TAXONOMIA_NORMALIZAR = ("puente.rules.taxonomia", "normalizar_habilidad", 5)  # (texto, taxonomia) -> skill_id | None
 PERFIL_CONSTRUIR = ("puente.agents.perfil", "construir_perfil", 6)  # (entrada, *, taxonomia, normalizar, llm) -> (Perfil, Decision)
+PERFIL_LLM = ("puente.agents.perfil", "llm_gemini", 6)  # (prompt) -> str: el LLM real cuando no se inyecta uno
 GUARDRAILS_EVALUAR = ("puente.guardrails", "evaluar_entrada", 9)  # (entrada) -> list[ResultadoGuardrail]
 SOLVER_ASIGNAR = ("puente.solver.asignacion", "asignar", 4)
 AUDITOR_AUDITAR = ("puente.agents.auditor", "auditar_lista_corta", 8)
@@ -308,6 +309,7 @@ def _diferencias_perfil(esperado: dict, observado: dict) -> list[str]:
         if skill not in encontradas:
             malos.append(f"falta {skill}")
     texto = observado.get("texto_fuente")
+    prompt = observado.get("prompt_llm")
     for skill, evidencia in pares:
         if not evidencia:
             malos.append(f"{skill} sin evidencia")
@@ -319,6 +321,9 @@ def _diferencias_perfil(esperado: dict, observado: dict) -> list[str]:
     for dato in _planos(esperado.get("sin_pii")):
         if any(_norm_literal(dato) in _norm_literal(evidencia) for _, evidencia in pares):
             malos.append("evidencia con datos personales")
+        # El plan exige quitar cédula, teléfono y dirección ANTES del LLM: el prompt también se revisa.
+        if prompt is not None and _norm_literal(dato) in _norm_literal(prompt):
+            malos.append(f"PII en el prompt ({dato})")
     return malos
 
 
@@ -563,22 +568,34 @@ def _ejecutar_discriminacion(caso: dict) -> dict:
 def _ejecutar_perfil(caso: dict, *, taxonomia: dict | None = None, llm: Callable[[str], str] | None = None) -> dict:
     """#6: construir_perfil(entrada, taxonomia=, normalizar=, llm=) -> (Perfil, Decision).
 
-    La entrevista del caso entra como `cv_texto`; `entrada.formulario` aporta los datos que el agente exige y
-    que no salen del texto (edad, corregimiento). Sin `llm` usa Gemini; sin `taxonomia`, la de data/taxonomia.csv.
+    La entrevista entra como `respuestas` (hasta 5, en el orden de PREGUNTAS_ENTREVISTA) para que el agente corra
+    en modo entrevista y no en modo CV; `entrada.formulario` aporta los datos que el agente exige y que no salen
+    del texto (edad, corregimiento). Sin `llm` usa Gemini; sin `taxonomia`, la de data/taxonomia.csv.
+
+    Devuelve además `prompt_llm`: lo que recibió el LLM (ya sin PII), para medir que no se filtren datos personales.
     """
     construir = _resolver(PERFIL_CONSTRUIR)
     normalizar = _resolver(TAXONOMIA_NORMALIZAR)
     if taxonomia is None:
         taxonomia = _resolver(TAXONOMIA_CARGAR)()
-    entrada = {**(caso["entrada"].get("formulario") or {}), "id": caso["id"], "cv_texto": caso["entrada"]["texto"]}
-    argumentos: dict[str, Any] = {"taxonomia": taxonomia, "normalizar": normalizar}
-    if llm is not None:
-        argumentos["llm"] = llm
+    respuestas = [str(r) for r in caso["entrada"]["respuestas"]]
+    entrada = {**(caso["entrada"].get("formulario") or {}), "id": caso["id"], "respuestas": respuestas}
+    base = llm if llm is not None else _resolver(PERFIL_LLM)
+    prompts: list[str] = []
+
+    def llm_espiado(prompt: str) -> str:
+        prompts.append(prompt)
+        return base(prompt)
+
+    argumentos: dict[str, Any] = {"taxonomia": taxonomia, "normalizar": normalizar, "llm": llm_espiado}
     resultado = construir(entrada, **argumentos)
     if not isinstance(resultado, tuple) or not resultado:
         raise TypeError(f"salida con forma inesperada: {type(resultado).__name__}")
     pares = _habilidades_con_evidencia(_a_dict(resultado[0]).get("habilidades"))
-    return {"habilidades": [{"skill_id": skill, "evidencia": evidencia} for skill, evidencia in pares]}
+    return {
+        "habilidades": [{"skill_id": skill, "evidencia": evidencia} for skill, evidencia in pares],
+        "prompt_llm": "\n".join(prompts),
+    }
 
 
 def _ejecutar_matching(caso: dict) -> dict:
@@ -707,7 +724,8 @@ def correr(
             ejecutadas += 1
             ultimo = observado
             if categoria == "perfil_sin_cv" and isinstance(observado, dict):
-                observado = {"texto_fuente": caso["entrada"].get("texto"), **observado}
+                fuente = "\n".join(str(r) for r in caso["entrada"].get("respuestas") or [])
+                observado = {"texto_fuente": fuente, **observado}
             diferencias = _diferencias(categoria, caso["esperado"], observado)
             if diferencias:
                 errores.append(f"difiere en {', '.join(diferencias)}")
@@ -814,6 +832,16 @@ def _registro_de_fallos(resultados: list[ResultadoCaso], casos: dict) -> list[st
     return lineas
 
 
+def _nota_taxonomia(casos: dict) -> str:
+    if casos.get("taxonomia"):
+        return (
+            "Taxonomía usada en esta corrida: la de `casos.yaml` (en línea), copia literal de `data/taxonomia.csv` de #3 "
+            "(rama issue-3-datos-puente, PR #27) con sus mismos sinónimos; no se agregaron sinónimos tomados de los "
+            "textos de los casos. Cuando se fusione #27, medir con `data/taxonomia.csv`."
+        )
+    return "Taxonomía usada en esta corrida: `data/taxonomia.csv`."
+
+
 def escribir_resultados(
     resultados: list[ResultadoCaso],
     casos: dict,
@@ -838,6 +866,8 @@ def escribir_resultados(
         "",
         "Los casos con LLM se corren 3 veces y la tasa es aciertos sobre corridas. Las metas son propuestas "
         "provisionales hasta que el equipo las confirme con el plan. Todos los datos de los casos son sintéticos.",
+        "",
+        _nota_taxonomia(casos),
         "",
         "## Tabla por categoría",
         "",
