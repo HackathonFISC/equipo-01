@@ -386,6 +386,29 @@ def test_entrada_entrevista_tiene_la_forma_de_entradas_perfil(taxonomia):
     assert yaritza.horario_clases[0].dias[-1] == "viernes" and yaritza.salario_minimo == 400
 
 
+def test_entrevista_entra_al_grafo_como_un_elemento_de_entradas_perfil(taxonomia):
+    from langgraph.checkpoint.memory import MemorySaver
+
+    from puente.graph import cargar_caso, config_caso, construir_grafo
+
+    caso = _caso("yaritza_fonda_sin_cv")
+    preguntar, _ = _respondedor(FORMULARIO_YARITZA)
+    entrada = entrada_entrevista("yaritza", pedir_formulario(preguntar, lambda _: None), caso["entrada"]["respuestas"])
+    llm = LLMFalso(caso["respuesta_llm"])
+
+    def perfil_real(estado):
+        return nodo_perfil(estado, llm=llm, taxonomia=taxonomia, normalizar=normalizar_falso)
+
+    _, estado = cargar_caso()
+    grafo = construir_grafo(nodos={"perfil": perfil_real}, checkpointer=MemorySaver())
+    config = config_caso("perfil-44")
+    grafo.invoke({**estado, "tipo_entrada": "perfil", "perfiles": [], "entradas_perfil": [entrada]}, config)
+
+    assert len(llm.prompts) == 1, "una sola llamada al LLM: la entrevista ya llegó completa"
+    yaritza = next(p for p in grafo.get_state(config).values["perfiles"] if p.id == "yaritza")
+    assert {"atencion_cliente", "manejo_caja", "inventario"} <= {h.skill_id for h in yaritza.habilidades}
+
+
 def test_entrada_entrevista_rechaza_campos_ajenos_y_mas_de_cinco():
     with pytest.raises(ValueError, match="fuera del formulario"):
         entrada_entrevista("x", {"cedula": "8-1-1"}, [])
