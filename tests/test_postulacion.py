@@ -51,6 +51,18 @@ def _aprobacion(aprobados, orientador="Orientadora Ficticia", timestamp="2026-10
     }
 
 
+@pytest.fixture(autouse=True)
+def sin_red_ni_claves(monkeypatch):
+    """Ninguna prueba toca el Telegram real aunque el entorno traiga token (.env, shell de la demo)."""
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_CHAT_ID_EMPRESA", raising=False)
+
+    def prohibido(*a, **k):
+        raise AssertionError("no debe haber red en las pruebas")
+
+    monkeypatch.setattr(urllib.request, "urlopen", prohibido)
+
+
 @pytest.fixture
 def conn(tmp_path):
     c = db.conectar(tmp_path / "puente.db")
