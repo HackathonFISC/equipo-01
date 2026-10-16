@@ -134,6 +134,10 @@ Solo se usa [`.env.example`](.env.example): se copia a `.env` y cada quien llena
 | `PUENTE_ENTREVISTA_INICIO` | Fecha ISO 8601 fija de la entrevista en el `.ics` (variable de #7) |
 | `PUENTE_CHEQUEO_ENTREGA` | Con valor `1`, las pruebas verifican que cada módulo con código tenga fila en la bitácora (se usa en el ensayo de #17) |
 
+## Guardrails y datos personales
+
+Las palabras clave de inyección ("ignora tus instrucciones", "eres ahora", "system prompt") solo **marcan** el texto, que sigue como dato; no bloquean nada, porque una lista de palabras se esquiva con facilidad. La defensa real es estructural: el LLM responde con salida estructurada que se valida con Pydantic, y las decisiones que importan (orden de candidatos, traslados, legalidad de una oferta) se toman en código. Antes de `graph.invoke`, `limpiar_entrada()` de `puente/guardrails.py` quita cédula, teléfono y dirección exacta. Así el dato crudo no llega al checkpoint, a `decisiones`, al LLM ni a LangSmith, que además corre con `LANGSMITH_HIDE_INPUTS` y `LANGSMITH_HIDE_OUTPUTS`. Las notas de voz se rechazan por ahora con un mensaje claro.
+
 ## Evals
 
 Al menos 15 casos de prueba con resultado esperado escrito antes de correr, métrica y resultados por categoría. Casos: `evals/casos.yaml` (pendiente de #13). Runner: `evals/run.py`. Resultados: `evals/resultados.md` (pendiente de #13). No se citan métricas aquí hasta que existan; no se inventan.

@@ -39,7 +39,7 @@ Vocabulario. **Agente de desarrollo**: la IA que programa contigo. **Agente del 
 ```
 entrada → guardrails (#9) → router por tipo
    oferta  → Mercado (#5)  ─┐
-   perfil  → Perfil  (#6)  ─┴→ Matching (#4) → Auditor (#8) ──sesgo──→ Matching
+   perfil  → Perfil  (#6)  ─┴→ Matching (#4) → Auditor (#8, #50) ──sesgo──→ Perfil / orientador
                                       ↓ ok
                               Formación (#14, opcional)
                                       ↓
@@ -62,7 +62,7 @@ Cada nodo escribe una `Decision` en la tabla `decisiones` vía `puente/tools/db.
 | `puente/agents/mercado.py`, `puente/rules/{discriminacion,taxonomia}.py` | #5 | Extracción estructurada, reglas regex de la Ley 11 de 2005, dedup por hash |
 | `puente/agents/perfil.py` | #6 | CV o entrevista de 5 preguntas, habilidades con evidencia literal, PII fuera del LLM |
 | `puente/tools/{db,pdf,telegram,calendario}.py`, `puente/agents/postulacion.py` | #7 | Acciones reales, solo tras aprobación |
-| `puente/agents/auditor.py` | #8 | Contrafactuales de nombre y género, arista de regreso a Matching |
+| `puente/agents/auditor.py` | #8, #50 | Contrafactuales de nombre, género y corregimiento, línea base y retorno a Perfil / orientador |
 | `puente/guardrails.py` | #9 | Tamaños, rangos, inyección, fuera de alcance |
 | `puente/graph.py` completo | #10 | Router, `interrupt()`, checkpointer, trazas |
 | `app/streamlit_app.py` | #11 | Tablero del orientador: lista corta, bloqueadas, trazas, embudo, Auditor |
