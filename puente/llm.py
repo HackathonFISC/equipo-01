@@ -477,8 +477,11 @@ def _llamar_anthropic(
         raise
     except anthropic.AnthropicError as exc:
         raise _error_anthropic(exc, "anthropic", modelo, agente) from exc
-    _revisar_stop_reason(respuesta, "anthropic", modelo, agente)
+    # El uso se cuenta en cuanto llega la respuesta, antes de revisar stop_reason o validar: un corte por max_tokens,
+    # un rechazo o una salida inválida también consumen tokens y cuestan dinero. Aquí y solo aquí, para no contar dos veces.
     entrada, salida = _uso_anthropic(respuesta)
+    _registrar(agente, modelo, entrada, salida)
+    _revisar_stop_reason(respuesta, "anthropic", modelo, agente)
     bloques = getattr(respuesta, "content", None) or []
     texto = "".join(getattr(b, "text", "") for b in bloques if getattr(b, "type", None) == "text")
     if esquema is None:
@@ -520,7 +523,9 @@ def _llamar_gemini(
     try:
         if esquema is not None:
             resultado = cliente.with_structured_output(esquema).invoke(mensajes)
-            return (resultado if isinstance(resultado, esquema) else esquema.model_validate(resultado)), 0, 0
+            validado = resultado if isinstance(resultado, esquema) else esquema.model_validate(resultado)
+            _registrar(agente, modelo, 0, 0)  # la salida estructurada de Gemini no trae uso: se cuenta la llamada
+            return validado, 0, 0
         respuesta = cliente.invoke(mensajes)
     except ErrorLLM:
         raise
@@ -537,6 +542,7 @@ def _llamar_gemini(
     metadatos = getattr(respuesta, "usage_metadata", None) or {}
     entrada = int(metadatos.get("input_tokens", 0) or 0) if isinstance(metadatos, dict) else 0
     salida = int(metadatos.get("output_tokens", 0) or 0) if isinstance(metadatos, dict) else 0
+    _registrar(agente, modelo, entrada, salida)
     return _texto_gemini(getattr(respuesta, "content", "")), entrada, salida
 
 
@@ -598,17 +604,15 @@ def _despachar(
     atendido_por: dict[str, str] | None = None
     try:
         resultado, entrada, salida = intentar(proveedor, modelo, cliente)
-        modelo_usado = modelo
     except ErrorLLM as error:
         respaldo = _respaldo(proveedor) if error.causa == "refusal" else None
         if respaldo is None:
             raise
         prov_r, mod_r = respaldo
         resultado, entrada, salida = intentar(prov_r, mod_r, cliente_respaldo)
-        modelo_usado = mod_r
         atendido_por = {"proveedor": prov_r, "modelo": mod_r}
 
-    _registrar(agente, modelo_usado, entrada, salida)
+    # El uso ya lo registró cada proveedor al recibir la respuesta (también cuando falló); aquí no se vuelve a sumar.
     if modo == "grabar":
         # Se guarda bajo la clave de lo pedido (proveedor principal) para que reproducir lo encuentre.
         _guardar_grabacion(

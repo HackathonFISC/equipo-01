@@ -36,11 +36,12 @@ class Salida(BaseModel):
 
 @pytest.fixture(autouse=True)
 def entorno(monkeypatch, tmp_path):
+    # tests/conftest.py ya puso LLM_MODO=reproducir y _dotenv_cargado=True (ningún .env real se carga en estas pruebas).
     for nombre in VARIABLES:
         monkeypatch.delenv(nombre, raising=False)
+    monkeypatch.setenv("LLM_MODO", "vivo")  # estas pruebas ejercen la capa con clientes dobles; el modo se fija a propósito
     monkeypatch.setenv("LANGSMITH_TRACING", "false")
     monkeypatch.setenv("LLM_DIR_GRABACIONES", str(tmp_path / "grabaciones"))
-    monkeypatch.setattr(llm, "_dotenv_cargado", True)  # que un .env real de la máquina no meta claves en estas pruebas
     llm.reiniciar_uso()
     llm._clientes.clear()
     yield
@@ -253,7 +254,9 @@ def test_refusal_reintenta_una_sola_vez_con_el_respaldo(monkeypatch):
     resultado = generar_estructurado("x", Salida, agente="mercado", cliente=principal, cliente_respaldo=respaldo)
     assert resultado.respuesta == "desde gemini"
     assert len(principal.llamadas) == 1 and len(respaldo.mensajes) == 1
-    assert llm.uso_por_agente()["mercado"]["llamadas"] == 1
+    # El rechazo del principal también consumió tokens y se cuenta; Gemini estructurado suma su llamada sin uso.
+    fila = llm.uso_por_agente()["mercado"]
+    assert fila["llamadas"] == 2 and fila["tokens_entrada"] == 100 and fila["tokens_salida"] == 50
 
 
 def test_respaldo_que_tambien_falla_no_genera_un_tercer_intento(monkeypatch):
@@ -379,7 +382,8 @@ def test_fallbacks_del_servidor_apagado_por_defecto_y_activable(monkeypatch):
 # ---------------------------------------------------------------- modelo y proveedor por entorno
 
 
-def test_configuracion_por_defecto():
+def test_configuracion_por_defecto(monkeypatch):
+    monkeypatch.delenv("LLM_MODO")  # sin la variable, el modo por defecto es vivo
     cfg = configuracion()
     assert (cfg["proveedor"], cfg["modelo"], cfg["modo"]) == ("anthropic", "claude-opus-5-5", "vivo")
     assert cfg["directorio"].endswith("grabaciones")
@@ -626,6 +630,45 @@ def test_sdk_real_max_tokens_con_json_cortado_da_causa_max_tokens():
     assert info.value.causa == "max_tokens"  # no "salida_invalida": el orientador debe subir max_tokens
 
 
+def test_sdk_real_max_tokens_cuenta_tokens_y_costo_aunque_falle():
+    cliente = _sdk_con_respuesta("max_tokens", '{"respuesta": "cort')
+    with pytest.raises(ErrorLLM) as info:
+        generar_estructurado("x", Salida, agente="perfil", cliente=cliente)
+    assert info.value.causa == "max_tokens"
+    fila = llm.uso_por_agente()["perfil"]
+    assert fila["llamadas"] == 1 and fila["reproducidas"] == 0
+    assert fila["tokens_entrada"] == 120 and fila["tokens_salida"] == 30
+    assert fila["costo_usd"] == pytest.approx(120 * 4 / 1e6 + 30 * 20 / 1e6) and fila["costo_usd"] > 0
+
+
+def test_sdk_real_refusal_cuenta_tokens_y_costo_aunque_falle():
+    cliente = _sdk_con_respuesta("refusal", "No puedo ayudar con eso, lo siento.")
+    with pytest.raises(ErrorLLM) as info:
+        generar_estructurado("x", Salida, agente="mercado", cliente=cliente)
+    assert info.value.causa == "refusal"
+    fila = llm.uso_por_agente()["mercado"]
+    assert fila["llamadas"] == 1 and fila["tokens_entrada"] == 120 and fila["tokens_salida"] == 30
+    assert fila["costo_usd"] > 0
+
+
+def test_sdk_real_salida_invalida_y_sin_salida_cuentan_uso():
+    with pytest.raises(ErrorLLM) as info:
+        generar_estructurado("x", Salida, agente="perfil", cliente=_sdk_con_respuesta("end_turn", '{"respuesta": 1}'))
+    assert info.value.causa == "salida_invalida"
+    with pytest.raises(ErrorLLM) as info:
+        generar_estructurado("x", Salida, agente="perfil", cliente=_sdk_con_respuesta("end_turn", ""))
+    assert info.value.causa == "sin_salida"
+    fila = llm.uso_por_agente()["perfil"]
+    assert fila["llamadas"] == 2 and fila["tokens_entrada"] == 240 and fila["tokens_salida"] == 60
+
+
+def test_sdk_real_exito_cuenta_la_llamada_una_sola_vez():
+    cliente = _sdk_con_respuesta("end_turn", '{"respuesta": "ok"}')
+    generar_estructurado("x", Salida, agente="perfil", cliente=cliente)
+    fila = llm.uso_por_agente()["perfil"]
+    assert fila["llamadas"] == 1 and fila["tokens_entrada"] == 120 and fila["tokens_salida"] == 30
+
+
 def test_sdk_real_refusal_con_texto_usa_el_respaldo(monkeypatch):
     monkeypatch.setenv("LLM_PROVEEDOR_RESPALDO", "gemini")
     principal = _sdk_con_respuesta("refusal", "No puedo ayudar con eso, lo siento.")
@@ -649,6 +692,9 @@ def _dotenv_falso(monkeypatch, **valores):
     import os
 
     import dotenv
+
+    for nombre in valores:  # el proceso arranca sin estas variables: solo el .env las trae
+        monkeypatch.delenv(nombre, raising=False)
 
     def cargar(*args, **kwargs):
         for nombre, valor in valores.items():
