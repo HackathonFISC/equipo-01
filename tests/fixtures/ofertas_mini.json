@@ -1,0 +1,54 @@
+[
+  {
+    "nombre": "cajera_discriminatoria",
+    "texto": "Se busca cajera para minisúper en Vista Alegre. Requisitos: buena presencia, 18 a 25 años, manejo de caja y atención al cliente. Lunes a viernes de 14:00 a 22:00. Salario B/. 650 mensual.",
+    "extraida": {
+      "puesto": "Cajera",
+      "empresa": "Minisúper Ficticio El Ahorro",
+      "corregimiento": "Vista Alegre",
+      "salario_mensual": 650,
+      "horario": {"dias": ["lunes", "martes", "miercoles", "jueves", "viernes"], "hora_inicio": "14:00", "hora_fin": "22:00"},
+      "habilidades": ["Manejo de caja", "atención al cliente", "liderazgo transformacional"],
+      "requisitos_texto": "buena presencia, 18 a 25 años, manejo de caja y atención al cliente"
+    }
+  },
+  {
+    "nombre": "ayudante_cocina",
+    "texto": "Fonda Ficticia La Esquina   busca AYUDANTE DE COCINA en La Chorrera.\nRequisitos: manipulación de alimentos, servicio al cliente.\nSábado y domingo 07:00 a 15:00. Pago B/. 400 al mes.",
+    "extraida": {
+      "puesto": "Ayudante de cocina",
+      "empresa": "Fonda Ficticia La Esquina",
+      "corregimiento": "Barrio Colón",
+      "salario_mensual": 400,
+      "horario": {"dias": ["sabado", "domingo"], "hora_inicio": "07:00", "hora_fin": "15:00"},
+      "habilidades": ["manipulación de alimentos", "Servicio al Cliente"],
+      "requisitos_texto": "manipulación de alimentos, servicio al cliente"
+    }
+  },
+  {
+    "nombre": "ayudante_cocina_duplicada",
+    "texto": "fonda ficticia la esquina busca ayudante de cocina en la chorrera.\nrequisitos: manipulacion de alimentos,  servicio al cliente.\nsabado y domingo 07:00 a 15:00.  pago b/. 400 al mes.",
+    "extraida": {
+      "puesto": "Ayudante de Cocina",
+      "empresa": "Fonda Ficticia La Esquina",
+      "corregimiento": "Barrio Colón",
+      "salario_mensual": 400,
+      "horario": {"dias": ["sab", "dom"], "hora_inicio": "07:00", "hora_fin": "15:00"},
+      "habilidades": ["cocina"],
+      "requisitos_texto": "manipulacion de alimentos, servicio al cliente"
+    }
+  },
+  {
+    "nombre": "vendedor_sin_salario",
+    "texto": "Empresa Ficticia Ventas Ya busca vendedor. Interesados escribir.",
+    "extraida": {
+      "puesto": "Vendedor",
+      "empresa": "Empresa Ficticia Ventas Ya",
+      "corregimiento": "",
+      "salario_mensual": null,
+      "horario": {"dias": [], "hora_inicio": "", "hora_fin": ""},
+      "habilidades": ["ventas"],
+      "requisitos_texto": ""
+    }
+  }
+]
