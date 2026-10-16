@@ -15,7 +15,17 @@ Sistema agéntico de inserción laboral juvenil: conecta jóvenes, vacantes y cu
 
 ## Problema
 
-Reto 3 - Empleabilidad
+En Panamá, la Encuesta de Mercado Laboral del INEC de **agosto de 2026** estimó una tasa de desocupación nacional de **8,5 %**. Para las personas de **20 a 24 años** fue **22,6 %**, y para las de **25 a 29 años**, **14,4 %**. El mismo boletín reportó **45,8 %** de empleo informal no agrícola. Son indicadores de contexto nacional, no resultados ni línea base de Puente: [comentario oficial](https://www.inec.gob.pa/archivos/P053342420260930151945Comentarios.pdf), [cuadro de desocupación por edad](https://www.inec.gob.pa/archivos/P0579518620260930152328Cuadro%205.pdf) y [boletín oficial, cuadro 26](https://www.inec.gob.pa/archivos/P0862619320260930153357Bolet%C3%ADn%20de%20la%20Encuesta%20de%20Mercado%20Laboral%20-%20Agosto%202026.pdf).
+
+El reto que aborda esta demo es concreto: una persona joven puede tener habilidades adquiridas en trabajo informal sin un certificado que las haga visibles, mientras una oferta aparentemente cercana puede exigir un viaje o pasaje incompatible con su horario y presupuesto. Puente toma evidencia literal de esas habilidades, evalúa restricciones de traslado, horario y salario, y presenta al orientador humano una lista corta con motivos verificables. La demo usa perfiles y vacantes sintéticos; todavía no demuestra colocaciones ni reducción real del desempleo.
+
+### Cómo mediremos el impacto en la demo
+
+`puente/metricas.py` calcula desde el desglose de los matches: (1) número de ofertas descartadas por traslado o pasaje y motivo; (2) diferencia mensual de minutos de ida y vuelta y de costo frente a **cada** oferta descartada con ruta conocida, con 22 días laborables por defecto; y (3) habilidades pedidas por una oferta asignada que el perfil respalda con evidencia literal. El rótulo de salida es **«Ilustrativo, datos de la demo»**. Las comparaciones son alternativas hipotéticas: no se suman entre ofertas ni se presentan como ahorro observado. Si falta una ruta o un match viable, no se calcula una diferencia. La evidencia literal no prueba por sí sola que una habilidad provenga de trabajo informal. La matriz de traslados de la demo es una aproximación pendiente de validación con datos de campo.
+
+### Nivel agéntico que muestra la demo
+
+El objetivo verificable es un flujo coordinado: el router dirige la entrada, Perfil conserva evidencia literal, Mercado normaliza ofertas, el solver calcula una lista corta y Auditor puede pedir un recálculo acotado. El orientador humano decide antes de postular; el recálculo pedido por el humano y el reacomodo ante cambios de disponibilidad son objetivos de la integración y del issue #54. Cada decisión debe quedar en el registro del estado. La equivalencia de este flujo con un **nivel numérico oficial** queda pendiente de confirmación con la organización; esta descripción no atribuye una calificación no publicada.
 
 ## Arquitectura de agentes
 
