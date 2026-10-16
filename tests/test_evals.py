@@ -88,7 +88,9 @@ def test_casos_yaml_completo(casos):
         assert caso["esperado"], caso["id"]
         assert caso["escrito_el"], caso["id"]
         assert caso["datos_sinteticos"] is True, caso["id"]
-        assert caso["fallos"] == [], f"{caso['id']}: aún no hay fallos anotados"
+        assert isinstance(caso["fallos"], list), caso["id"]
+        for fallo in caso["fallos"]:  # anotar fallos es lo esperado: solo se valida la estructura del registro
+            assert {"fecha", "observado", "cambio_hecho", "issue", "nueva_ejecucion"} <= set(fallo), caso["id"]
     for nombre, info in casos["categorias"].items():
         assert info["metrica"].strip(), nombre
         assert isinstance(info["meta"], (int, float)) and 0 < info["meta"] <= 1, nombre
@@ -483,7 +485,7 @@ def test_ejecutor_de_matching_ignora_filas_no_viables_y_cuenta_violaciones(casos
     caso = _caso(casos, "MAT-02")
 
     def asignar(perfiles, ofertas, traslados, config):
-        assert len(perfiles) == 4 and traslados == caso["entrada"]["traslados"] and config is None
+        assert len(perfiles) == 4 and traslados == caso["entrada"]["traslados"] and config == {"max_vacantes_por_perfil": 1}
         filas = [
             {"perfil_id": p, "oferta_id": "VAC-UNICA", "puntaje": 100 - n, "desglose": {"viable": True}}
             for n, p in enumerate(("p1", "p2", "p3"))
@@ -506,6 +508,27 @@ def test_ejecutor_de_matching_ignora_filas_no_viables_y_cuenta_violaciones(casos
     mal = run._ejecutar_matching(caso)
     assert mal["violaciones_duras"] == 1
     assert not run.comparar("matching_factible", caso["esperado"], mal)
+
+
+def test_matching_mide_violaciones_sobre_todas_las_filas_asignadas(casos, monkeypatch):
+    caso = _caso(casos, "MAT-01")
+    recibido = {}
+
+    def asignar_doble(perfiles, ofertas, traslados, config):
+        recibido["config"] = config
+        return [
+            {"perfil_id": "yaritza", "oferta_id": "OF-CHORRERA", "puntaje": 85, "desglose": {"viable": True}},
+            {"perfil_id": "yaritza", "oferta_id": "OF-TOCUMEN", "puntaje": 5, "desglose": {"viable": True}},
+        ]
+
+    monkeypatch.setattr(run, "_resolver", lambda destino: asignar_doble)
+    observado = run._ejecutar_matching(caso)
+    assert recibido["config"] == {"max_vacantes_por_perfil": 1}
+    assert observado["asignacion"] == {"yaritza": "OF-CHORRERA"}  # la mejor coincide con lo esperado...
+    assert observado["violaciones_duras"] >= 2  # ...pero Tocumen (traslado, pasaje) y la 2.ª vacante cuentan
+    texto = " ".join(observado["violaciones"])
+    assert "OF-TOCUMEN" in texto and "vacantes asignadas" in texto
+    assert not run.comparar("matching_factible", caso["esperado"], observado)
 
 
 def test_ejecutor_de_sesgo_inyecta_el_matching_sesgado_solo_cuando_el_caso_lo_pide(casos, monkeypatch):

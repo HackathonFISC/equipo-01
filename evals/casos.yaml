@@ -197,10 +197,10 @@ casos:
 
   - id: DIS-04
     categoria: requisitos_discriminatorios
-    descripcion: "Pide estado civil soltera; solo alerta, no bloquea."
+    descripcion: "Pide estado civil (persona soltera), sin mención de sexo; solo alerta, no bloquea."
     entrada:
       texto: |
-        Recepcionista para consultorio en Betania. Se prefiere soltera, sin hijos.
+        Recepcionista para consultorio en Betania. Se prefiere persona soltera.
         Salario $480 mensual. Atención al cliente y archivo de documentos.
     esperado:
       bloqueada: false
@@ -316,7 +316,7 @@ casos:
       Yaritza (ficticia, La Chorrera, estudia de noche, presupuesto 3.00 al día). La oferta de Tocumen paga más
       pero se descarta (95 min > 60 y pasaje diario 4.70 > 3.00); queda la de La Chorrera.
     entrada:
-      config: {}
+      config: {max_vacantes_por_perfil: 1}
       traslados:
         - {origen: La Chorrera, destino: Tocumen, minutos: 95, pasaje_ida: 2.35}
         - {origen: La Chorrera, destino: La Chorrera, minutos: 15, pasaje_ida: 0.50}
@@ -364,7 +364,7 @@ casos:
       Cuatro candidatos (cobertura 100, 75, 50 y 25 %) para una sola vacante con k = 3: quedan los tres de mayor
       puntaje y el de menor cobertura se queda sin vacante. Puntajes a mano: 100-15, 75-15, 50-15, 25-15.
     entrada:
-      config: {}
+      config: {max_vacantes_por_perfil: 1}
       traslados:
         - {origen: La Chorrera, destino: La Chorrera, minutos: 15, pasaje_ida: 0.50}
       perfiles:
@@ -443,7 +443,7 @@ casos:
       Carlos (ficticio, San Miguelito, clases de 07:00 a 12:00, salario mínimo 350). Se descartan la oferta de la
       mañana (cruza con las clases) y la que paga 300 (< 350); queda la de la tarde que paga 380.
     entrada:
-      config: {}
+      config: {max_vacantes_por_perfil: 1}
       traslados:
         - {origen: San Miguelito, destino: Bella Vista, minutos: 25, pasaje_ida: 0.35}
       perfiles:

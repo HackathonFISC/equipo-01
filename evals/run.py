@@ -386,8 +386,11 @@ def _cabe_en(horario: dict, libre: dict) -> bool:
     )
 
 
-def _violaciones_duras(entrada: dict, asignacion: dict[str, str | None]) -> list[str]:
-    """Restricciones duras comprobadas en código sobre los datos del caso, sin confiar en el solver."""
+def _violaciones_duras(entrada: dict, asignacion: dict[str, str | list[str] | None]) -> list[str]:
+    """Restricciones duras comprobadas en código sobre los datos del caso, sin confiar en el solver.
+
+    `asignacion` mapea cada perfil a una oferta, a None o a la lista de TODAS las ofertas que el solver le dio.
+    """
     perfiles = {p["id"]: p for p in entrada["perfiles"]}
     ofertas = {o["id"]: o for o in entrada["ofertas"]}
     traslados = _indice_traslados(entrada.get("traslados"))
@@ -395,9 +398,14 @@ def _violaciones_duras(entrada: dict, asignacion: dict[str, str | None]) -> list
     k = int(config.get("k", VACANTES_K))
     violaciones: list[str] = []
     por_vacante: dict[str, int] = {}
-    for perfil_id, oferta_id in asignacion.items():
-        if oferta_id is None:
-            continue
+    max_por_perfil = config.get("max_vacantes_por_perfil")
+    pares: list[tuple[str, str]] = []
+    for perfil_id, destino in asignacion.items():
+        asignadas = [] if destino is None else [destino] if isinstance(destino, str) else list(destino)
+        pares.extend((perfil_id, str(oferta_id)) for oferta_id in asignadas)
+        if max_por_perfil is not None and len(asignadas) > int(max_por_perfil):
+            violaciones.append(f"{perfil_id}: {len(asignadas)} vacantes asignadas (máximo {int(max_por_perfil)})")
+    for perfil_id, oferta_id in pares:
         p, o = perfiles.get(perfil_id), ofertas.get(oferta_id)
         if p is None or o is None:
             violaciones.append(f"{perfil_id}->{oferta_id}: perfil u oferta inexistente")
@@ -485,6 +493,7 @@ def _ejecutar_matching(caso: dict) -> dict:
     entrada = caso["entrada"]
     matches = asignar(entrada["perfiles"], entrada["ofertas"], entrada.get("traslados"), entrada.get("config") or None)
     asignacion: dict[str, str | None] = {p["id"]: None for p in entrada["perfiles"]}
+    todas: dict[str, list[str]] = {}
     mejores: dict[str, float] = {}
     for match in matches:
         d = _a_dict(match)
@@ -492,10 +501,12 @@ def _ejecutar_matching(caso: dict) -> dict:
         desglose = _a_dict(d.get("desglose"))
         if perfil_id not in asignacion or oferta_id in (None, "", "SIN_OFERTA") or desglose.get("viable") is False:
             continue  # el solver también devuelve una fila (viable: false) por cada perfil sin vacante
+        todas.setdefault(perfil_id, []).append(str(oferta_id))
         puntaje = float(d.get("puntaje") or 0)
         if perfil_id not in mejores or puntaje > mejores[perfil_id]:
             mejores[perfil_id], asignacion[perfil_id] = puntaje, str(oferta_id)
-    violaciones = _violaciones_duras(entrada, asignacion)
+    # Las violaciones se miden sobre TODAS las filas asignadas, no solo sobre la de mayor puntaje.
+    violaciones = _violaciones_duras(entrada, {**asignacion, **todas})
     return {"asignacion": asignacion, "violaciones_duras": len(violaciones), "violaciones": violaciones}
 
 
