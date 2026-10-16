@@ -1,0 +1,23 @@
+name: Pruebas
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+
+      - name: Instalar dependencias (Python de .python-version)
+        run: uv sync --locked
+
+      - name: Correr pruebas
+        run: uv run pytest -q
