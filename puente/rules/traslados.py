@@ -21,10 +21,45 @@ CORREGIMIENTOS_PANAMA: tuple[str, ...] = (
     "Bella Vista",
     "Calidonia",
     "Betania",
+    "San Francisco",
     "Pedregal",
     "24 de Diciembre",
     "Ancón",
 )
+
+# Tabla de alias para resolver barrios, terminales o zonas especiales hacia su nodo canónico en traslados.csv (#51)
+TABLA_ALIAS_LUGARES: dict[str, str] = {
+    "barrio colon": "la chorrera",
+    "barrio balboa": "la chorrera",
+    "el coco": "la chorrera",
+    "guadalupe": "la chorrera",
+    "herrera": "la chorrera",
+    "puerto caimito": "la chorrera",
+    "juan demostenes arosemena": "vista alegre",
+    "vacamonte": "vista alegre",
+    "cerro silvestre": "vista alegre",
+    "panama pacifico": "arraijan",
+    "howard": "arraijan",
+    "burunga": "arraijan",
+    "veracruz": "arraijan",
+    "nuevo emperador": "arraijan",
+    "albrook": "ancon",
+    "terminal de albrook": "ancon",
+    "curundu": "calidonia",
+    "santa ana": "calidonia",
+    "el chorrillo": "calidonia",
+    "pueblo nuevo": "betania",
+    "bethania": "betania",
+    "parque lefevre": "juan diaz",
+    "rio abajo": "juan diaz",
+    "costa del este": "juan diaz",
+    "rufina alfaro": "san miguelito",
+    "belisario porras": "san miguelito",
+    "amelia denis de icaza": "san miguelito",
+    "jose domingo espinar": "san miguelito",
+    "las cumbres": "san miguelito",
+    "mananitas": "tocumen",
+}
 
 
 def normalizar_corregimiento(nombre: str) -> str:
@@ -36,6 +71,12 @@ def normalizar_corregimiento(nombre: str) -> str:
         c for c in unicodedata.normalize("NFD", texto) if unicodedata.category(c) != "Mn"
     )
     return " ".join(texto.split())
+
+
+def resolver_alias_corregimiento(nombre: str) -> str:
+    """Normaliza y aplica la tabla de alias hacia el nodo canónico de traslados.csv."""
+    norm = normalizar_corregimiento(nombre)
+    return TABLA_ALIAS_LUGARES.get(norm, norm)
 
 
 class InfoTraslado(BaseModel):
@@ -53,6 +94,14 @@ class InfoTraslado(BaseModel):
     )
     modo: str = Field(
         default="Transporte público", description="Modo de transporte público (Metro, Metrobús, etc.)"
+    )
+    fuente: str = Field(
+        default="Google Maps Transit + Tarifas MiBus / Metro de Panamá / ATTT",
+        description="Fuente de medición del tiempo y tarifa",
+    )
+    fecha_medicion: str = Field(
+        default="2026-10-16",
+        description="Fecha de consulta (YYYY-MM-DD)",
     )
 
     @model_validator(mode="before")
@@ -94,6 +143,7 @@ _PERFIL_ZONA: dict[str, tuple[str, int, float]] = {
     normalizar_corregimiento("Calidonia"): ("centro", 42, 0.35),
     normalizar_corregimiento("Bella Vista"): ("centro", 45, 0.60),
     normalizar_corregimiento("Betania"): ("centro", 47, 0.60),
+    normalizar_corregimiento("San Francisco"): ("centro", 50, 0.60),
     normalizar_corregimiento("San Miguelito"): ("norte_centro", 55, 0.60),
     normalizar_corregimiento("Juan Díaz"): ("este_medio", 62, 0.60),
     normalizar_corregimiento("Pedregal"): ("este_medio", 70, 0.85),
@@ -110,6 +160,7 @@ _PARES_EXPLICITOS: dict[tuple[str, str], tuple[int, float, str]] = {
     ("la chorrera", "calidonia"): (55, 1.85, "Bus La Chorrera + Metro L1"),
     ("la chorrera", "bella vista"): (58, 1.85, "Bus La Chorrera + Metro L1"),
     ("la chorrera", "betania"): (60, 1.85, "Bus La Chorrera + Metro L1"),
+    ("la chorrera", "san francisco"): (65, 2.10, "Bus La Chorrera + Metro L1 + Metrobús"),
     ("la chorrera", "san miguelito"): (70, 1.85, "Bus La Chorrera + Metro L1"),
     ("la chorrera", "juan diaz"): (80, 2.35, "Bus La Chorrera + Metro L1/L2"),
     ("la chorrera", "pedregal"): (88, 2.35, "Bus La Chorrera + Metro L1/L2"),
@@ -121,6 +172,7 @@ _PARES_EXPLICITOS: dict[tuple[str, str], tuple[int, float, str]] = {
     ("vista alegre", "calidonia"): (48, 1.60, "Bus Vista Alegre + Metro L1"),
     ("vista alegre", "bella vista"): (50, 1.60, "Bus Vista Alegre + Metro L1"),
     ("vista alegre", "betania"): (52, 1.60, "Bus Vista Alegre + Metro L1"),
+    ("vista alegre", "san francisco"): (56, 1.85, "Bus Vista Alegre + Metro L1 + Metrobús"),
     ("vista alegre", "san miguelito"): (62, 1.60, "Bus Vista Alegre + Metro L1"),
     ("vista alegre", "juan diaz"): (72, 2.10, "Bus Vista Alegre + Metro L1/L2"),
     ("vista alegre", "pedregal"): (78, 2.10, "Bus Vista Alegre + Metro L1/L2"),
@@ -131,6 +183,7 @@ _PARES_EXPLICITOS: dict[tuple[str, str], tuple[int, float, str]] = {
     ("arraijan", "calidonia"): (38, 1.35, "Bus Arraiján + Metro L1"),
     ("arraijan", "bella vista"): (42, 1.35, "Bus Arraiján + Metro L1"),
     ("arraijan", "betania"): (45, 1.35, "Bus Arraiján + Metro L1"),
+    ("arraijan", "san francisco"): (48, 1.60, "Bus Arraiján + Metro L1 + Metrobús"),
     ("arraijan", "san miguelito"): (52, 1.35, "Bus Arraiján + Metro L1"),
     ("arraijan", "juan diaz"): (62, 1.85, "Bus Arraiján + Metro L1/L2"),
     ("arraijan", "pedregal"): (68, 1.85, "Bus Arraiján + Metro L1/L2"),
@@ -140,7 +193,7 @@ _PARES_EXPLICITOS: dict[tuple[str, str], tuple[int, float, str]] = {
 
 
 def construir_matriz_default() -> dict[tuple[str, str], InfoTraslado]:
-    """Construye la matriz completa 12×12 de corregimientos de Panamá como respaldo."""
+    """Construye la matriz completa de corregimientos de Panamá como fixture explícito de respaldo."""
     matriz: dict[tuple[str, str], InfoTraslado] = {}
     for orig in CORREGIMIENTOS_PANAMA:
         for dest in CORREGIMIENTOS_PANAMA:
@@ -183,7 +236,7 @@ def cargar_traslados(
 ) -> dict[tuple[str, str], InfoTraslado]:
     """Carga data/traslados.csv en un diccionario indexado por (origen_norm, destino_norm).
 
-    Si el archivo no existe todavía, devuelve la matriz 12×12 por defecto para desarrollo y pruebas.
+    Si el archivo no existe todavía, devuelve la matriz por defecto para pruebas.
     """
     archivo = Path(ruta) if ruta is not None else RUTA_TRASLADOS_DEFAULT
     if not archivo.exists():
@@ -201,6 +254,8 @@ def cargar_traslados(
                 minutos_hora_pico=int(float(fila.get("minutos_hora_pico") or fila.get("minutos") or 0)),
                 pasaje_ida_usd=float(fila.get("pasaje_ida_usd") or fila.get("pasaje_ida") or 0.0),
                 modo=(fila.get("modo") or "Transporte público").strip(),
+                fuente=(fila.get("fuente") or "Google Maps Transit + Tarifas MiBus / Metro de Panamá / ATTT").strip(),
+                fecha_medicion=(fila.get("fecha_medicion") or "2026-10-16").strip(),
             )
             ko = normalizar_corregimiento(info.origen)
             kd = normalizar_corregimiento(info.destino)
@@ -212,6 +267,8 @@ def cargar_traslados(
                     minutos_hora_pico=info.minutos_hora_pico,
                     pasaje_ida_usd=info.pasaje_ida_usd,
                     modo=info.modo,
+                    fuente=info.fuente,
+                    fecha_medicion=info.fecha_medicion,
                 )
     return matriz
 
@@ -256,9 +313,10 @@ def indexar_traslados(
                         minutos_hora_pico=info.minutos_hora_pico,
                         pasaje_ida_usd=info.pasaje_ida_usd,
                         modo=info.modo,
+                        fuente=info.fuente,
+                        fecha_medicion=info.fecha_medicion,
                     )
             elif isinstance(clave, str) and isinstance(valor, dict):
-                # Formato anidado: {"La Chorrera": {"Tocumen": {...}}}
                 ko = normalizar_corregimiento(clave)
                 for dest_str, subval in valor.items():
                     kd = normalizar_corregimiento(dest_str)
@@ -280,6 +338,8 @@ def indexar_traslados(
                             minutos_hora_pico=info.minutos_hora_pico,
                             pasaje_ida_usd=info.pasaje_ida_usd,
                             modo=info.modo,
+                            fuente=info.fuente,
+                            fecha_medicion=info.fecha_medicion,
                         )
         return indice
 
@@ -311,6 +371,8 @@ def indexar_traslados(
                     minutos_hora_pico=info.minutos_hora_pico,
                     pasaje_ida_usd=info.pasaje_ida_usd,
                     modo=info.modo,
+                    fuente=info.fuente,
+                    fecha_medicion=info.fecha_medicion,
                 )
         return indice
 
@@ -322,7 +384,7 @@ def obtener_traslado(
     origen: str,
     destino: str,
 ) -> InfoTraslado | None:
-    """Obtiene la información de traslado entre origen y destino."""
+    """Obtiene la información de traslado entre origen y destino (resolviendo alias como Albrook o Panamá Pacífico)."""
     indice = (
         traslados
         if isinstance(traslados, dict)
@@ -342,7 +404,36 @@ def obtener_traslado(
             minutos_hora_pico=inv.minutos_hora_pico,
             pasaje_ida_usd=inv.pasaje_ida_usd,
             modo=inv.modo,
+            fuente=inv.fuente,
+            fecha_medicion=inv.fecha_medicion,
         )
+
+    # Resolver alias hacia nodos canónicos de traslados.csv (ej. Albrook -> Ancón, Panamá Pacífico -> Arraiján)
+    ko_alias = resolver_alias_corregimiento(origen)
+    kd_alias = resolver_alias_corregimiento(destino)
+    if (ko_alias, kd_alias) in indice:
+        aliased = indice[(ko_alias, kd_alias)]
+        return InfoTraslado(
+            origen=origen,
+            destino=destino,
+            minutos_hora_pico=aliased.minutos_hora_pico,
+            pasaje_ida_usd=aliased.pasaje_ida_usd,
+            modo=aliased.modo,
+            fuente=aliased.fuente,
+            fecha_medicion=aliased.fecha_medicion,
+        )
+    if (kd_alias, ko_alias) in indice:
+        inv_a = indice[(kd_alias, ko_alias)]
+        return InfoTraslado(
+            origen=origen,
+            destino=destino,
+            minutos_hora_pico=inv_a.minutos_hora_pico,
+            pasaje_ida_usd=inv_a.pasaje_ida_usd,
+            modo=inv_a.modo,
+            fuente=inv_a.fuente,
+            fecha_medicion=inv_a.fecha_medicion,
+        )
+
     if ko and ko == kd:
         return InfoTraslado(
             origen=origen,
