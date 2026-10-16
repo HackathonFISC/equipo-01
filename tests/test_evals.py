@@ -188,6 +188,9 @@ def test_cargar_casos_rechaza_archivos_invalidos(tmp_path):
             {"puesto": "Cajero/a", "empresa": "Super Rio Ficticio S.A.", "corregimiento": "la chorrera", "salario_mensual": 520.0, "habilidades": ["b", "a"]},
             True,
         ),
+        ("extraccion_ofertas", {"puesto": "Auxiliar administrativo"}, {"puesto": "Auxiliar"}, False),
+        ("extraccion_ofertas", {"empresa": "Distribuidora Ficticia Istmo"}, {"empresa": "Istmo"}, False),
+        ("extraccion_ofertas", {"puesto": "Auxiliar administrativo"}, {"puesto": "Auxiliar administrativo/a"}, True),
         ("extraccion_ofertas", {"salario_mensual": 520}, {"salario_mensual": 5000}, False),
         ("extraccion_ofertas", {"habilidades": ["a"]}, {"habilidades": ["a", "b"]}, False),
         ("extraccion_ofertas", {"corregimiento": "Arraiján"}, {"corregimiento": "Arraijan"}, True),
@@ -198,6 +201,24 @@ def test_cargar_casos_rechaza_archivos_invalidos(tmp_path):
             True,
         ),
         ("requisitos_discriminatorios", {"bloqueada": True, "reglas": ["art. 1"], "alertas": []}, {"bloqueada": True, "reglas": ["art. 2"], "alertas": []}, False),
+        (
+            "requisitos_discriminatorios",
+            {"bloqueada": True, "reglas": ["art. 1", "art. 2"], "alertas": []},
+            {"bloqueada": True, "reglas": ["Ley 11 de 2005 (arts. 1 y 2)"], "alertas": []},
+            True,
+        ),
+        (
+            "requisitos_discriminatorios",
+            {"bloqueada": True, "reglas": ["art. 1", "art. 2"], "alertas": []},
+            {"bloqueada": True, "reglas": ["Ley 11 de 2005, artículos 1 y 2"], "alertas": []},
+            True,
+        ),
+        (
+            "requisitos_discriminatorios",
+            {"bloqueada": True, "reglas": ["art. 2"], "alertas": []},
+            {"bloqueada": True, "reglas": ["Ley 11 de 2005 (arts. 1 y 2)"], "alertas": []},
+            False,
+        ),
         ("requisitos_discriminatorios", {"bloqueada": False, "reglas": [], "alertas": ["foto"]}, {"bloqueada": True, "reglas": [], "alertas": ["foto"]}, False),
         ("requisitos_discriminatorios", {"bloqueada": False, "reglas": [], "alertas": []}, {"bloqueada": False, "reglas": [], "alertas": ["foto"]}, False),
         (
@@ -219,6 +240,13 @@ def test_cargar_casos_rechaza_archivos_invalidos(tmp_path):
 )
 def test_comparar_por_categoria(categoria, esperado, observado, cumple):
     assert run.comparar(categoria, esperado, observado) is cumple
+
+
+def test_regla_normalizada_captura_enumeraciones():
+    assert run._regla_normalizada("Ley 11 de 2005 (arts. 1 y 2)") == ["art. 1", "art. 2"]
+    assert run._regla_normalizada("artículos 1, 2 y 3") == ["art. 1", "art. 2", "art. 3"]
+    assert run._regla_normalizada("Ley 11 de 2005, artículo 2") == ["art. 2"]
+    assert run._regla_normalizada("sin cita") == []
 
 
 def test_comparar_categoria_desconocida():

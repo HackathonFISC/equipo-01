@@ -200,8 +200,13 @@ def _ids_habilidades(valor: Any) -> list[str]:
     return [i for i in ids if i]
 
 
+_RE_ARTICULOS = re.compile(r"\bart[^\d]{0,12}((?:\d+\s*(?:,|y|e)\s*)*\d+)")
+
+
 def _regla_normalizada(texto: Any) -> list[str]:
-    return sorted({f"art. {n}" for n in re.findall(r"\bart[^\d]{0,12}(\d+)", _norm(texto))})
+    """Artículos citados, incluidas las enumeraciones ('arts. 1 y 2', 'artículos 1, 2 y 3')."""
+    numeros = {n for grupo in _RE_ARTICULOS.findall(_norm(texto)) for n in re.findall(r"\d+", grupo)}
+    return sorted(f"art. {n}" for n in numeros)
 
 
 def _alertas_normalizadas(items: Any) -> list[str]:
@@ -231,7 +236,8 @@ def _diferencias_extraccion(esperado: dict, observado: dict) -> list[str]:
     for campo in ("puesto", "empresa"):
         if campo in esperado:
             e, o = _norm(esperado[campo]), _norm(observado.get(campo) or "")
-            if not e or not o or (e not in o and o not in e):
+            # Lo esperado debe estar completo en lo observado: una extracción truncada no es un acierto.
+            if not e or not o or e not in o:
                 malos.append(campo)
     if "corregimiento" in esperado and _norm(esperado["corregimiento"]) != _norm(observado.get("corregimiento") or ""):
         malos.append("corregimiento")
