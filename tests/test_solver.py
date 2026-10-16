@@ -340,9 +340,12 @@ def test_nodo_matching_y_redactor_llm():
     }
     nuevo = nodo_matching(estado)
     assert len(nuevo["lista_corta"]) == 1
-    assert nuevo["lista_corta"][0]["puntaje"] == 85
-    assert "Explicación redactada para PERFIL-YARITZA" in nuevo["lista_corta"][0]["explicacion"]
+    m0 = nuevo["lista_corta"][0]
+    assert m0.puntaje == 85
+    assert "Explicación redactada para PERFIL-YARITZA" in m0.explicacion
     assert len(nuevo["decisiones"]) == 1
-    assert nuevo["decisiones"][0]["agente"] == "matching"
+    d0 = nuevo["decisiones"][0]
+    agente_d0 = d0["agente"] if isinstance(d0, dict) else d0.agente
+    assert agente_d0 == "matching"
 
 

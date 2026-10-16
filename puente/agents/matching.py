@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Callable, Sequence
 
+import puente.schemas as _schemas_mod
 from puente.rules.traslados import InfoTraslado, cargar_traslados
 from puente.solver.asignacion import ConfigSolver, MatchFallback, asignar
 
@@ -42,6 +43,35 @@ def ejecutar_matching(
     return resultados
 
 
+def _construir_decision(
+    *,
+    agente: str,
+    entrada_resumen: str,
+    salida_resumen: str,
+    razon: str,
+    timestamp: str,
+) -> Any:
+    cls_dec = getattr(_schemas_mod, "Decision", None)
+    if cls_dec is not None and isinstance(cls_dec, type):
+        try:
+            return cls_dec(
+                agente=agente,
+                entrada_resumen=entrada_resumen,
+                salida_resumen=salida_resumen,
+                razon=razon,
+                timestamp=timestamp,
+            )
+        except Exception:
+            pass
+    return {
+        "timestamp": timestamp,
+        "agente": agente,
+        "entrada_resumen": entrada_resumen,
+        "salida_resumen": salida_resumen,
+        "razon": razon,
+    }
+
+
 def nodo_matching(state: dict[str, Any]) -> dict[str, Any]:
     """Nodo compatible con LangGraph (EstadoPuente) que ejecuta el solver determinístico y registra la Decision."""
     perfiles = state.get("perfiles", [])
@@ -58,32 +88,34 @@ def nodo_matching(state: dict[str, Any]) -> dict[str, Any]:
         redactor_llm=redactor_llm,
     )
 
-    matches_dict = [m.model_dump() for m in resultados]
+    sin_oferta = getattr(_schemas_mod, "SIN_OFERTA", "SIN_OFERTA")
     lista_corta = [
-        m.model_dump()
+        m
         for m in resultados
-        if m.desglose.get("viable", bool(m.oferta_id)) and m.oferta_id
+        if m.desglose.get("viable", bool(m.oferta_id))
+        and m.oferta_id
+        and m.oferta_id != sin_oferta
     ]
 
     decisiones = list(state.get("decisiones", []))
     decisiones.append(
-        {
-            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "agente": "matching",
-            "entrada_resumen": f"{len(perfiles)} perfil(es) × {len(ofertas)} oferta(s)",
-            "salida_resumen": (
+        _construir_decision(
+            agente="matching",
+            entrada_resumen=f"{len(perfiles)} perfil(es) × {len(ofertas)} oferta(s)",
+            salida_resumen=(
                 f"{len(lista_corta)} asignación(es) viable(s) en lista corta "
                 f"({len(resultados) - len(lista_corta)} sin vacante viable)"
             ),
-            "razon": (
+            razon=(
                 "Asignación entera determinística con OR-Tools CP-SAT "
                 "(traslado <= 60 min, pasaje <= 15% salario, sin choque de horario)."
             ),
-        }
+            timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
     )
 
-    nuevo_estado = dict(state)
-    nuevo_estado["matches"] = matches_dict
-    nuevo_estado["lista_corta"] = lista_corta
-    nuevo_estado["decisiones"] = decisiones
-    return nuevo_estado
+    return {
+        "matches": resultados,
+        "lista_corta": lista_corta,
+        "decisiones": decisiones,
+    }
