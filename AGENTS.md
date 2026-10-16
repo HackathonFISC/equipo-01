@@ -4,7 +4,7 @@ Hackathon FISC AI Agents 2026 · Reto 3: Empleabilidad · 24 horas continuas · 
 
 Este archivo lo leen **las tres personas del equipo y todos los agentes de desarrollo** al inicio de cada sesión. En este equipo conviven **Claude Code**, **Codex (GPT)** y **Antigravity (Gemini)**; el protocolo es el mismo para los tres. Si otra instrucción lo contradice, manda este archivo. Los issues de GitHub mandan sobre este archivo en todo lo que sea alcance de una tarea.
 
-Cómo llega este archivo a cada herramienta: Codex y Antigravity leen `AGENTS.md` directamente; Claude Code lee `CLAUDE.md`, Antigravity y Gemini CLI leen además `GEMINI.md` y `.agents/rules/`; esos archivos solo apuntan aquí. Si tu agente corre en la nube sin `gh` autenticado (por ejemplo Codex en la web), reclama tú el issue desde GitHub antes de lanzarlo y escribe el nombre del agente en el comentario 🔒.
+Cómo llega este archivo a cada herramienta: Codex y Antigravity leen `AGENTS.md` directamente; Claude Code lee `CLAUDE.md`, Antigravity y Gemini CLI leen además `GEMINI.md` y `.agents/rules/`; esos archivos solo apuntan aquí. Si tu agente corre en la nube, sigue la sección 12: dentro de la nube no hay `gh`, así que el reclamo y las etiquetas los hace el humano desde su máquina. Para Claude Code, `scripts/nube.sh` hace todo el ciclo; para Codex en la web u otras, reclama tú el issue antes de lanzarlo y escribe el nombre del agente en el comentario 🔒.
 
 Vocabulario. **Agente de desarrollo**: la IA que programa contigo. **Agente del sistema**: los nodos del producto (Mercado, Perfil, Matching, Auditor, Formación, Postulación). Este protocolo coordina a los primeros mientras construyen a los segundos.
 
@@ -184,5 +184,34 @@ scripts/bloquear.sh 4 "necesito traslados.csv de @jesus12ga"
 scripts/liberar.sh 4 "faltan tests; rama empujada"
 scripts/entregar.sh 4                       # push + PR en borrador + estado: en revisión
 scripts/revisar.sh 21 ok "LGTM"             # revisor: etiqueta revisión: ok en el PR 21
+scripts/nube.sh 10 grafo-completo --simular # ver el prompt que recibiría la sesión en la nube
+scripts/nube.sh 10 grafo-completo           # reclama #10 y lo manda a una sesión de Claude Code en la nube
 uv run pytest -q && uv run python -m evals.run
 ```
+
+## 12. Sesiones en la nube (`claude --cloud`)
+
+Una sesión en la nube es Claude Code trabajando en una máquina de Anthropic: sigue aunque cierres la laptop y se revisa desde claude.ai/code o el celular. Gasta del crédito de nube de tu cuenta y, cuando se acaba, de los límites normales de tu plan.
+
+**Preparación, una vez por persona.**
+1. `gh auth login` con tu cuenta de GitHub, que debe tener escritura en el repo.
+2. Dentro de `claude` en tu terminal: `/web-setup`. Envía tu token de `gh` a tu cuenta de Claude. Sin este paso la sesión trabaja, pero no puede empujar ni abrir el PR.
+
+**Lanzar un issue.** `scripts/nube.sh <N> [descripcion]`. Reclama el issue con `estado: en proceso` y 🔒, crea la rama `issue-N-descripcion` desde `origin/main` con su worktree, empuja la rama, lanza la sesión desde ese worktree con el texto del issue y estas reglas, y deja el enlace de la sesión en el issue. La primera vez en cada worktree nuevo Claude Code pregunta si confías en la carpeta: es el repo del equipo, responde "Yes, I trust this folder". Con `--simular` ves el prompt sin lanzar nada.
+
+**Si la sesión dice que no tiene acceso a GitHub.** Es lo esperado y tiene arreglo. `claude --cloud` parte de tu rama actual, y como la app de Claude para GitHub no está instalada en la organización, sube una copia local del repo sin remoto `origin`. Dentro de la nube la API de GitHub responde 403 y no hay `gh`, pero git sí funciona gracias a `/web-setup`. El prompt de `scripts/nube.sh` ya le pide agregar el remoto; si lanzaste la sesión de otra forma, mándale esto:
+
+```bash
+claude -p "Agrega el remoto: git remote add origin https://github.com/HackathonFISC/equipo-01.git && git fetch origin. Luego rebase sobre origin/main, empuja tu rama y abre el PR. Si falla, dime el error exacto en una línea." --cloud <session_id>
+```
+
+**Lo que hace el humano, porque la sesión no puede.**
+- Reclamar el issue antes de lanzar; `scripts/nube.sh` ya lo hace.
+- Cuando la sesión abra su PR: `gh issue edit <N> --add-label "estado: en revisión" --remove-label "estado: en proceso"`.
+- Revisar y mergear el PR, igual que cualquier otro, y completar en la bitácora la columna "qué se cambió a mano".
+
+**Reglas.**
+- Una sesión por issue, y respeta "Depende de": no lances un issue cuyos contratos aún no están en `main`, o cada sesión inventará los suyos.
+- Mientras la sesión trabaja, nadie más toca ese issue: el reclamo 🔒 vale igual que con un agente local.
+- Seguimiento: el enlace queda en el issue. `claude -p "mensaje" --cloud <session_id>` le manda instrucciones sin abrir el navegador; `claude --teleport <session_id>` la trae a tu terminal cuando ya empujó su rama.
+- Archiva desde claude.ai/code las sesiones que ya terminaron o que lanzaste por error, para no gastar crédito.
