@@ -317,3 +317,32 @@ def test_rendimiento_20_ofertas_por_10_perfiles_menos_de_2s():
     assert duracion < 2.0, f"El solver tardó {duracion:.3f}s (límite: 2.0s)"
     assert len(matches) >= 10
 
+
+def test_nodo_matching_y_redactor_llm():
+    """Verifica que puente.agents.matching llama al solver CP-SAT y registra Decision en EstadoPuente."""
+    from puente.agents.matching import nodo_matching
+
+    yaritza = _perfil_yaritza()
+    oferta = {
+        "id": "OF-CHORRERA-01",
+        "puesto": "Cajera",
+        "empresa": "Fonda Oeste",
+        "corregimiento": "La Chorrera",
+        "salario_mensual": 650.0,
+        "habilidades": ["atencion_cliente", "manejo_caja"],
+        "bloqueada": False,
+    }
+    estado = {
+        "perfiles": [yaritza],
+        "ofertas": [oferta],
+        "decisiones": [],
+        "redactor_matching_llm": lambda m: f"Explicación redactada para {m.perfil_id} ({m.puntaje} pts)",
+    }
+    nuevo = nodo_matching(estado)
+    assert len(nuevo["lista_corta"]) == 1
+    assert nuevo["lista_corta"][0]["puntaje"] == 85
+    assert "Explicación redactada para PERFIL-YARITZA" in nuevo["lista_corta"][0]["explicacion"]
+    assert len(nuevo["decisiones"]) == 1
+    assert nuevo["decisiones"][0]["agente"] == "matching"
+
+
