@@ -15,7 +15,23 @@ Sistema agéntico de inserción laboral juvenil: conecta jóvenes, vacantes y cu
 
 ## Problema
 
-Reto 3 - Empleabilidad
+En Panamá, la Encuesta de Mercado Laboral del INEC de **agosto de 2026** estimó una tasa de desocupación nacional de **8,5 %**. Para las personas de **20 a 24 años** fue **22,6 %**, y para las de **25 a 29 años**, **14,4 %**. El mismo boletín reportó **45,8 %** de empleo informal no agrícola. Son indicadores de contexto nacional, no resultados ni línea base de Puente: [comentario oficial](https://www.inec.gob.pa/archivos/P053342420260930151945Comentarios.pdf), [cuadro de desocupación por edad](https://www.inec.gob.pa/archivos/P0579518620260930152328Cuadro%205.pdf) y [boletín oficial, cuadro 26](https://www.inec.gob.pa/archivos/P0862619320260930153357Bolet%C3%ADn%20de%20la%20Encuesta%20de%20Mercado%20Laboral%20-%20Agosto%202026.pdf).
+
+El reto que aborda esta demo es concreto: una persona joven puede tener habilidades adquiridas en trabajo informal sin un certificado que las haga visibles, mientras una oferta aparentemente cercana puede exigir un viaje o pasaje incompatible con su horario y presupuesto. Puente toma evidencia literal de esas habilidades, evalúa restricciones de traslado, horario y salario, y presenta al orientador humano una lista corta con motivos verificables. La demo usa perfiles y vacantes sintéticos; todavía no demuestra colocaciones ni reducción real del desempleo.
+
+El [plan original de Jesús del 16 de octubre](docs/plan.md) se conserva como documento histórico. Sus cifras de septiembre de 2025 y tecnologías previstas describen la propuesta inicial; para el horario y los recortes vigentes manda [el issue #41](https://github.com/HackathonFISC/equipo-01/issues/41), y esta sección usa los datos oficiales más recientes.
+
+### Cómo mediremos el impacto en la demo
+
+`puente/metricas.py` calcula desde el desglose de los matches: (1) número de ofertas descartadas por traslado o pasaje y motivo; (2) diferencia mensual de minutos de ida y vuelta y de costo frente a **cada** oferta descartada con ruta conocida, con 22 días laborables por defecto, igual que el valor por defecto del solver; y (3) habilidades pedidas por una oferta asignada que el perfil respalda con evidencia literal. El rótulo de salida es **«Ilustrativo, datos de la demo»**. Las comparaciones son alternativas hipotéticas: no se suman entre ofertas ni se presentan como ahorro observado. Si falta una ruta o un match viable, no se calcula una diferencia. La evidencia literal no prueba por sí sola que una habilidad provenga de trabajo informal. Los traslados de la demo se documentan en [`data/FUENTES.md`](data/FUENTES.md); la estimación mensual depende de la cantidad de días laborables elegida.
+
+### Nivel alcanzado: autonomía acotada y verificable
+
+El **documento oficial de retos, sección 7 («Rúbrica base»)** asigna 25 % al diseño agéntico y pide mostrar roles, herramientas, autonomía, componente determinístico y «nivel alcanzado», pero **no publica una escala de niveles**. El taller de preparación *Introducción al Paradigma Agéntico · Prompting avanzado con OpenCode* (Ing. Carlos Rodríguez-Chong, labVIA, 22 de septiembre de 2026, diapositivas 8, 9, 12 y 13) distingue un chatbot que responde, un flujo que sigue pasos programados y un agente que elige la siguiente acción según el objetivo y el resultado. También describe el ciclo de acción y observación, y exige que la autonomía dependa de permisos y condiciones de parada. Usamos esos criterios para describir el comportamiento observable de Puente, sin atribuirle un grado numérico oficial.
+
+Presentamos Puente como un **sistema agéntico de autonomía acotada**. En el código actual, el [router](puente/graph.py) elige la ruta según el tipo de entrada; [Auditor](puente/agents/auditor.py) puede devolver el caso a Matching **una vez** al detectar una diferencia contrafactual y luego entrega el caso al orientador. El [solver](puente/solver/asignacion.py) calcula las restricciones y el puntaje de forma determinística. El grafo conserva estado con un checkpointer SQLite y se detiene con `interrupt()` para que el orientador pueda quitar un candidato y pedir el recálculo, rechazar o aprobar. La aprobación requiere consentimiento confirmado antes de Postulación; las herramientas de esta registran en SQLite y preparan PDF, mensaje y cita. Las rutas y los límites están definidos por código, y el envío depende de autorización humana.
+
+El tablero conectado al grafo (#49) debe demostrar ese recálculo durante la demo. El reacomodo tras rechazo de la empresa o vacante cubierta pertenece a #54 y aún no cuenta como capacidad alcanzada. Perfil usa cinco preguntas fijas; la selección adaptativa de preguntas tampoco se presenta como implementada. Si la organización aclara qué entiende por «nivel alcanzado», se ajustará esta sección con ese criterio.
 
 ## Arquitectura de agentes
 
