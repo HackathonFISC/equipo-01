@@ -473,6 +473,13 @@ def test_modo_terminal_sin_opciones_es_error():
         main([], mostrar=lambda _: None)
 
 
+def test_menor_de_18_se_rechaza(taxonomia):
+    """Los menores quedan fuera de la demo (#42, trabajo futuro en #15)."""
+    entrada = {"id": "x", "edad": 17, "corregimiento": "Tocumen", "respuestas": ["hola"]}
+    with pytest.raises(ValueError, match="perfil inválido"):
+        construir_perfil(entrada, taxonomia=taxonomia, normalizar=normalizar_falso, llm=LLMFalso({"habilidades": []}))
+
+
 # ---------------------------------------------------------------- nodo del grafo
 
 

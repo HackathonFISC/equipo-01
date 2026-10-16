@@ -93,10 +93,24 @@ def test_huella_normaliza_mayusculas_acentos_y_espacios():
     assert huella("Atención al cliente", "Fonda", "Cajero") != huella("Atención al cliente", "Otra", "Cajero")
 
 
-def test_oferta_incompleta_se_descarta_con_error_y_decision():
+def test_oferta_sin_salario_ni_horario_queda_por_confirmar_con_decision():
+    """Regla de #42: lo que la oferta no publica no la descarta."""
     resultado = _procesar(CASOS["vendedor_sin_salario"]["texto"])
+    [oferta] = resultado.ofertas
+    assert oferta.salario_mensual is None and oferta.salario_tipo == "no_publicado"
+    assert oferta.horario is None and oferta.horario_tipo == "no_publicado"
+    assert resultado.errores == []
+    [decision] = resultado.decisiones
+    assert not decision.salida_resumen.startswith("descartada")
+
+
+def test_oferta_con_horario_mal_formado_se_descarta_con_error_y_decision():
+    extraida = dict(CASOS["vendedor_sin_salario"]["extraida"],
+                    horario={"dias": ["lunes"], "hora_inicio": "25:00", "hora_fin": "18:00"})
+    resultado = procesar_ofertas([CASOS["vendedor_sin_salario"]["texto"]], extraer=lambda e: extraida,
+                                 taxonomia=TAXONOMIA)
     assert resultado.ofertas == []
-    assert len(resultado.errores) == 1 and "salario_mensual" in resultado.errores[0]
+    assert len(resultado.errores) == 1 and "horario.hora_inicio" in resultado.errores[0]
     assert resultado.decisiones[0].salida_resumen.startswith("descartada")
 
 
