@@ -23,17 +23,20 @@ cualquier efecto. El consentimiento queda como Decision con fecha y medio.
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from puente.tools import db
-from puente.schemas import SIN_OFERTA, Decision, EstadoPostulacion, Match, Oferta, Perfil
+from puente.schemas import Decision, EstadoPostulacion, Match, Oferta, Perfil
 from puente.tools.agenda import elegir_franja
 from puente.tools.calendario import ZONA_PANAMA, generar_ics
 from puente.tools.pdf import (
+    cegar,
     evidencia_de,
     generar_cv,
     habilidades_para_cv,
@@ -204,12 +207,64 @@ def _validar(
     return planes
 
 
+def _normalizar(texto: str) -> str:
+    """Minúsculas y sin tildes, para comparar nombres."""
+    plano = unicodedata.normalize("NFD", texto)
+    return "".join(c for c in plano if not unicodedata.combining(c)).casefold()
+
+
+def _alias(perfil: Perfil) -> set[str]:
+    """Cómo se puede nombrar a una persona en un mensaje: nombre completo y primer nombre."""
+    nombre = _normalizar(perfil.nombre).strip()
+    partes = nombre.split()
+    return {a for a in (nombre, partes[0] if partes else "") if len(a) >= 3}
+
+
+def _nombra_a(texto: str, alias: set[str]) -> bool:
+    plano = _normalizar(texto)
+    return any(re.search(rf"(?<!\w){re.escape(a)}(?!\w)", plano) for a in alias)
+
+
+def _saludo_a_la_empresa(oferta: Oferta, perfiles_enviados: list[Perfil]) -> str:
+    nombres = ", ".join(p.nombre for p in perfiles_enviados)
+    return (
+        f"Buen día, {oferta.empresa}: desde Puente les presentamos a {nombres} "
+        f"para la vacante de {oferta.puesto}. Quedamos atentos para coordinar entrevistas."
+    )
+
+
+def _mensaje_para_empresa(
+    mensaje: str,
+    oferta: Oferta,
+    perfiles_enviados: list[Perfil],
+    otros: list[Perfil],
+) -> tuple[str, bool]:
+    """El saludo que va a la empresa y si hubo que rearmarlo.
+
+    El mensaje del orientador (por defecto el sugerido por el grafo, que nombra a toda la
+    lista corta) solo se reenvía si no nombra a nadie que no vaya en el envío: los jóvenes sin
+    consentimiento no pueden aparecer ante la empresa (Ley 81 de 2019). Si nombra a alguno,
+    se rearma con los nombres de quienes sí salen.
+    """
+    if not mensaje.strip():
+        return "", False
+    propios = set().union(*(_alias(p) for p in perfiles_enviados)) if perfiles_enviados else set()
+    fuera = set().union(*(_alias(p) for p in otros)) - propios if otros else set()
+    if fuera and _nombra_a(mensaje, fuera):
+        return _saludo_a_la_empresa(oferta, perfiles_enviados), True
+    return mensaje.strip(), False
+
+
 def _texto_lista_corta(
     oferta: Oferta,
     filas: list[tuple[Match, Perfil, datetime]],
     mensaje_orientador: str = "",
 ) -> str:
-    """Mensaje a la empresa. Ciego: no lleva corregimiento, edad ni género de los candidatos."""
+    """Mensaje a la empresa. Ciego: no lleva corregimiento, edad ni género de los candidatos.
+
+    No repite la explicación del Matching: trae el piso salarial, el presupuesto y los
+    descartes de la persona. Solo dice qué habilidades de la oferta cubre.
+    """
     lineas = []
     if mensaje_orientador.strip():
         lineas += [mensaje_orientador.strip(), ""]
@@ -222,16 +277,19 @@ def _texto_lista_corta(
     for i, (match, perfil, inicio) in enumerate(filas, start=1):
         lineas.append(f"{i}. {perfil.nombre}")
         habilidades = habilidades_para_cv(perfil, oferta)
+        propias: list[str] = []
         if habilidades:
-            lineas.append("   Habilidades con evidencia:")
+            propias.append("   Habilidades con evidencia:")
             for h in habilidades:
-                lineas.append(f'   - {skill_id_de(h)}: "{evidencia_de(h).strip()}"')
-        if match.explicacion:
-            lineas.append(f"   Por qué: {match.explicacion}")
-        lineas.append(
+                propias.append(f'   - {skill_id_de(h)}: "{evidencia_de(h).strip()}"')
+            pedidas = [skill_id_de(h) for h in habilidades if skill_id_de(h) in set(oferta.habilidades)]
+            if pedidas:
+                propias.append(f"   Cubre lo que pide la oferta: {', '.join(pedidas)}")
+        propias.append(
             f"   Entrevista propuesta: {inicio.strftime('%Y-%m-%d %H:%M')} "
             "(hora de Panamá, provisional)"
         )
+        lineas += [cegar(linea, perfil) for linea in propias]
         lineas.append("")
     return limpiar_pii("\n".join(lineas)).rstrip() + "\n"
 
@@ -389,9 +447,18 @@ def postular(
 
     for oferta_id, filas in por_oferta.items():
         oferta = ofertas[oferta_id]
-        texto = _texto_lista_corta(
-            oferta, [(m, p, i) for _, m, p, i, _ in filas], limpiar_pii(mensaje_orientador or "")
+        enviados = [p for _, _, p, _, _ in filas]
+        ids_enviados = {p.id for p in enviados}
+        saludo, rearmado = _mensaje_para_empresa(
+            limpiar_pii(mensaje_orientador or ""), oferta, enviados,
+            [p for p in perfiles.values() if p.id not in ids_enviados],
         )
+        if rearmado:
+            decidir(f"oferta {oferta_id}: mensaje del orientador",
+                    "saludo rearmado solo con quienes salen",
+                    "El mensaje nombraba a alguien que no sale en el envío (sin consentimiento o fuera "
+                    "de la aprobación); a la empresa solo llegan los nombres de quienes consintieron")
+        texto = _texto_lista_corta(oferta, [(m, p, i) for _, m, p, i, _ in filas], saludo)
         adjuntos = [a for *_, archivos in filas for a in archivos]
         envio = enviar_lista_corta(texto, adjuntos, outbox=outbox, enviar=enviar)
         resultado.envios.append(envio)
@@ -431,31 +498,23 @@ def _como(modelo, valor):
     return valor if isinstance(valor, modelo) else modelo.model_validate(valor)
 
 
-def _motivo_de_descarte(match: Match) -> str | None:
-    """Motivo por el que el Matching descartó la oferta, o None si no la descartó."""
-    desglose = match.desglose if isinstance(match.desglose, dict) else {}
-    if desglose.get("motivo_descarte"):
-        return str(desglose["motivo_descarte"])
-    if desglose.get("viable") is False:
-        return "no viable"
-    return None
-
-
 def _descartadas_de(
     perfil_id: str, matches: list[Match], ofertas: dict[str, Oferta]
 ) -> list[tuple[str, str]]:
-    """(nombre de la oferta, motivo) de lo que el Matching descartó para esa persona."""
+    """(nombre de la oferta, motivo) de lo que el Matching descartó para esa persona.
+
+    Lee las dos formas del desglose (ver ``db.motivos_de_descarte``): el motivo por pareja y
+    el mapa ``ofertas_descartadas`` que deja el solver real.
+    """
     resultado: list[tuple[str, str]] = []
     for m in matches:
-        if m.perfil_id != perfil_id or m.oferta_id == SIN_OFERTA:
+        if m.perfil_id != perfil_id:
             continue
-        motivo = _motivo_de_descarte(m)
-        if motivo is None:
-            continue
-        oferta = ofertas.get(m.oferta_id)
-        nombre = f"{oferta.puesto} en {oferta.empresa}" if oferta else m.oferta_id
-        if (nombre, motivo) not in resultado:
-            resultado.append((nombre, motivo))
+        for oferta_id, motivo in db.motivos_de_descarte(m):
+            oferta = ofertas.get(oferta_id)
+            nombre = f"{oferta.puesto} en {oferta.empresa}" if oferta else oferta_id
+            if (nombre, motivo) not in resultado:
+                resultado.append((nombre, motivo))
     return resultado
 
 
@@ -606,6 +665,10 @@ def crear_nodo_postulacion(
     def nodo_postulacion(estado: dict) -> dict:
         conn = db.conectar(ruta_db)
         try:
+            # Primero lo que dejaron los nodos anteriores (guardrails, perfil, matching,
+            # aprobación): así las trazas quedan en orden cronológico, antes de las decisiones
+            # que postular() registra directo al actuar.
+            db.volcar_estado(conn, estado)
             cambios = _ejecutar_nodo(
                 estado, conn, outbox=carpeta, enviar=enviar, enviar_joven=enviar_joven, reloj=reloj
             )

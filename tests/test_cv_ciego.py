@@ -145,3 +145,36 @@ def test_contenido_cv_sin_habilidades_con_evidencia():
 )
 def test_formatear_horario(dias, esperado):
     assert formatear_horario(Horario(dias=dias, hora_inicio="08:00", hora_fin="12:00")) == esperado
+
+
+def test_la_evidencia_literal_y_la_explicacion_del_matching_no_filtran_datos(tmp_path):
+    """La evidencia es literal ("tengo 20 años y vivo en Barrio Colón") y la explicación del solver
+    trae el piso salarial y los descartes: nada de eso llega a la empresa."""
+    from puente.agents.postulacion import _texto_lista_corta
+    from puente.tools.pdf import cegar
+
+    perfil, oferta = _perfil(), _oferta()
+    perfil.habilidades[0] = HabilidadPerfil(
+        skill_id="atencion_cliente", evidencia="Tengo 20 años y vivo en barrio colon, atiendo la fonda; soy mujer")
+    assert cegar("tengo 20 años", perfil) == "tengo [dato omitido]"
+    assert cegar("Edad: 20", perfil) == "[dato omitido]"
+    assert cegar("2 años de experiencia", perfil) == "2 años de experiencia"  # no es su edad
+
+    en_cv = "\n".join(contenido_cv(perfil, oferta))
+    for dato in ("20 años", "Colón", "colon", "mujer"):
+        assert dato not in en_cv
+    assert "atiendo la fonda" in en_cv
+    en_pdf = _texto_pdf(generar_cv(perfil, oferta, tmp_path / "cv"))
+    assert "atiendo la fonda" in en_pdf and "colon" not in en_pdf.lower() and "mujer" not in en_pdf
+
+    match = Match(
+        perfil_id=perfil.id, oferta_id=oferta.id, puntaje=90,
+        desglose={"cobertura": 1.0, "minutos_traslado": 35, "pasaje_diario": 1.5, "penalizacion": 0},
+        explicacion="Asignado a o-1 (Barrio Colón): traslado 35 min, pasaje $1.50/día | "
+                    "Descartes: o-2 (salario $200.00 < salario mínimo del perfil ($300.00))",
+    )
+    mensaje = _texto_lista_corta(oferta, [(match, perfil, INICIO)])
+    for dato in ("Barrio Colón", "colon", "Descartes", "300", "pasaje", "20 años", "mujer", "Por qué"):
+        assert dato.lower() not in mensaje.lower()
+    assert "Yaritza Ficticia" in mensaje and "atiendo la fonda" in mensaje
+    assert "Cubre lo que pide la oferta: atencion_cliente" in mensaje

@@ -57,3 +57,4 @@ Cada uso de IA se anota en el momento: hora, quién, herramienta, qué se pidió
 | 2026-10-16 18:29 | jesus12ga | Claude Code · workflow implementar-issues (Sonnet 5.5) | #12 · grupo cv-ciego: CV sin edad, género ni corregimiento | Pendiente de revisión humana en el PR |
 | 2026-10-16 18:29 | jesus12ga | Claude Code · workflow implementar-issues (Sonnet 5.5) | #12 · grupo telegram-joven: enviar_al_joven con respaldo en outbox | Pendiente de revisión humana en el PR |
 | 2026-10-16 18:29 | jesus12ga | Claude Code · workflow implementar-issues (Sonnet 5.5) | #12 · grupo nodo: nodo de Postulación con consentimiento, agenda y mensaje al joven | Pendiente de revisión humana en el PR |
+| 2026-10-16 18:44 | jesus12ga | Claude Code · workflow implementar-issues (Sonnet 5.5) | #12 · corrección de la revisión | Pendiente de revisión humana en el PR |

@@ -117,6 +117,45 @@ def formatear_horario(h: Horario) -> str:
     return f"{texto_dias}, {h.hora_inicio}-{h.hora_fin}"
 
 
+_ACENTOS = {"a": "aáàäâ", "e": "eéèëê", "i": "iíìïî", "o": "oóòöô", "u": "uúùüû", "n": "nñ"}
+_TERMINOS_GENERO = re.compile(
+    r"\b(?:femenin[oa]s?|masculin[oa]s?|mujer(?:es)?|hombres?|var[oó]n(?:es)?|g[eé]nero)\b",
+    re.IGNORECASE,
+)
+
+
+def _patron_literal(texto: str) -> str:
+    """Patrón que encuentra ``texto`` sin importar mayúsculas ni tildes (Colón = colon)."""
+    piezas = []
+    for c in texto.strip():
+        base = c.lower()
+        for plano, variantes in _ACENTOS.items():
+            if base in variantes:
+                piezas.append(f"[{variantes}{variantes.upper()}]")
+                break
+        else:
+            piezas.append(re.escape(c))
+    return "".join(piezas)
+
+
+def cegar(texto: str, perfil: Perfil) -> str:
+    """Quita de un texto que va a la empresa lo que identifica al joven por lo que no es su trabajo.
+
+    Reemplaza por "[dato omitido]" el corregimiento del perfil, su edad ("20 años", "edad 20")
+    y los términos de género. Se aplica a cada línea que sale hacia la empresa (CV y mensaje):
+    la evidencia es literal y puede traer "tengo 20 años y vivo en La Chorrera".
+    """
+    patrones = []
+    if str(perfil.corregimiento or "").strip():
+        patrones.append(rf"(?<!\w){_patron_literal(perfil.corregimiento)}(?!\w)")
+    if perfil.edad is not None:
+        patrones.append(rf"\bedad\s*(?:de|:)?\s*{perfil.edad}\b(?:\s*a[nñ]os)?")
+        patrones.append(rf"\b{perfil.edad}\s*a[nñ]os\b")
+    for patron in patrones:
+        texto = re.sub(patron, "[dato omitido]", texto, flags=re.IGNORECASE)
+    return _TERMINOS_GENERO.sub("[dato omitido]", texto)
+
+
 def contenido_cv(perfil: Perfil, oferta: Oferta) -> list[str]:
     """Líneas del CV ciego para la empresa (issue #12).
 
@@ -124,11 +163,13 @@ def contenido_cv(perfil: Perfil, oferta: Oferta) -> list[str]:
     edad, género, foto ni estado civil: la empresa decide por lo que la persona sabe hacer.
     """
     lineas = [perfil.nombre, f"Postula a: {oferta.puesto} en {oferta.empresa}", "Habilidades"]
+    # Todo lo que sale del perfil pasa por cegar(): la evidencia es literal y puede traer la edad
+    # o el lugar donde vive la persona.
     habilidades = habilidades_para_cv(perfil, oferta)
     if habilidades:
         for h in habilidades:
             lineas.append(skill_id_de(h))
-            lineas.append(f"Evidencia: {evidencia_de(h).strip()}")
+            lineas.append(cegar(f"Evidencia: {evidencia_de(h).strip()}", perfil))
     else:
         lineas.append("Sin habilidades con evidencia registrada.")
     if perfil.horario_libre:

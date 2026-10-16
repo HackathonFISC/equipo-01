@@ -253,34 +253,55 @@ def volcar_decisiones(conn: sqlite3.Connection, decisiones: Iterable[Decision | 
     return insertadas
 
 
+def motivos_de_descarte(match: Match | dict) -> list[tuple[str, str]]:
+    """(oferta_id, motivo) de lo que el Matching descartó en este match.
+
+    Entiende las dos formas del desglose: el motivo por pareja (``motivo_descarte`` o
+    ``viable == False``) y el mapa ``ofertas_descartadas`` {oferta_id: motivo} que deja el
+    solver real (asignacion.py) en los perfiles asignados y en los que quedaron sin vacante.
+    Si el match no es viable y trae el mapa, se usa solo el mapa: el ``motivo_descarte``
+    combinado ("Sin vacante viable (o1: ...; o2: ...)") repite lo mismo y no pertenece a una
+    sola oferta. Los matches sin oferta (``SIN_OFERTA``) no aportan su propio motivo.
+    """
+    desglose = _campo(match, "desglose", None) or {}
+    if not isinstance(desglose, dict):
+        return []
+    resultado: list[tuple[str, str]] = []
+    mapa = desglose.get("ofertas_descartadas") or {}
+    if isinstance(mapa, dict):
+        resultado += [(str(oid), str(mot)) for oid, mot in mapa.items() if oid and mot]
+    if resultado and desglose.get("viable") is False:
+        return resultado
+    oferta_id = str(_campo(match, "oferta_id", "") or "")
+    if oferta_id and oferta_id != SIN_OFERTA:
+        motivo = desglose.get("motivo_descarte")
+        if not motivo and desglose.get("viable") is False:
+            motivo = "no viable"
+        if motivo and (oferta_id, str(motivo)) not in resultado:
+            resultado.append((oferta_id, str(motivo)))
+    return resultado
+
+
 def registrar_descartes(conn: sqlite3.Connection, matches: Iterable[Match | dict]) -> int:
     """Guarda las ofertas que el Matching descartó, con su motivo, y devuelve cuántas son nuevas.
 
-    Cuenta como descarte el match con ``desglose["motivo_descarte"]`` o con
-    ``desglose["viable"] == False`` (entonces el motivo es "no viable"). Los matches
-    sin oferta (``SIN_OFERTA``) no se guardan. INSERT OR IGNORE: es idempotente.
+    Cuenta como descarte lo que dice ``motivos_de_descarte``: el mapa
+    ``desglose["ofertas_descartadas"]`` del solver, o el ``motivo_descarte`` (o
+    ``viable == False``, motivo "no viable") de la pareja. Los matches sin oferta
+    (``SIN_OFERTA``) no guardan motivo propio. INSERT OR IGNORE: es idempotente.
     """
     nuevos = 0
     ahora = _ahora()
     for match in matches or []:
-        desglose = _campo(match, "desglose", None) or {}
-        if not isinstance(desglose, dict):
-            continue
-        motivo = desglose.get("motivo_descarte")
-        if not motivo:
-            if desglose.get("viable") is not False:
-                continue
-            motivo = "no viable"
-        oferta_id = str(_campo(match, "oferta_id", ""))
-        if not oferta_id or oferta_id == SIN_OFERTA:
-            continue
-        with conn:
-            cur = conn.execute(
-                "INSERT OR IGNORE INTO descartes (perfil_id, oferta_id, motivo, origen, timestamp) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (_campo(match, "perfil_id", None), oferta_id, str(motivo), "matching", ahora),
-            )
-        nuevos += max(cur.rowcount, 0)
+        perfil_id = _campo(match, "perfil_id", None)
+        for oferta_id, motivo in motivos_de_descarte(match):
+            with conn:
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO descartes (perfil_id, oferta_id, motivo, origen, timestamp) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (perfil_id, oferta_id, motivo, "matching", ahora),
+                )
+            nuevos += max(cur.rowcount, 0)
     return nuevos
 
 

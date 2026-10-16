@@ -167,3 +167,31 @@ def test_descartes_se_crea_en_una_base_existente(tmp_path):
         assert db.descartes(c) == []
     finally:
         c.close()
+
+
+def test_descartes_con_la_forma_del_solver_real(conn):
+    """asignar() deja el descarte en desglose["ofertas_descartadas"], con viable=True y sin motivo."""
+    asignado = _match(
+        oferta_id="o1", viable=True, motivo_descarte=None,
+        ofertas_descartadas={"of-tocumen": "traslado 95 min > 60"},
+    )
+    sin_vacante = _match(
+        perfil_id="p2", oferta_id="o1", viable=False,
+        motivo_descarte="Sin vacante viable (of-tocumen: traslado 95 min > 60; o2: salario menor al mínimo)",
+        ofertas_descartadas={"of-tocumen": "traslado 95 min > 60", "o2": "salario menor al mínimo"},
+    )
+    assert db.registrar_descartes(conn, [asignado, sin_vacante]) == 3
+    assert db.descartes(conn, perfil_id="p1") == [
+        {"perfil_id": "p1", "oferta_id": "of-tocumen", "motivo": "traslado 95 min > 60", "origen": "matching"}
+    ]
+    # Sin vacante: un motivo por oferta, no el combinado bajo la primera
+    assert [(d["oferta_id"], d["motivo"]) for d in db.descartes(conn, perfil_id="p2")] == [
+        ("of-tocumen", "traslado 95 min > 60"), ("o2", "salario menor al mínimo")]
+    assert db.registrar_descartes(conn, [asignado, sin_vacante]) == 0  # idempotente
+
+
+def test_motivos_de_descarte_sin_mapa_conserva_el_motivo_por_pareja():
+    cupo = _match(oferta_id="o1", viable=False, motivo_descarte="Sin vacante asignada por límite de cupo k=3",
+                  ofertas_descartadas={})
+    assert db.motivos_de_descarte(cupo) == [("o1", "Sin vacante asignada por límite de cupo k=3")]
+    assert db.motivos_de_descarte(_match(viable=True, motivo_descarte=None, ofertas_descartadas={})) == []

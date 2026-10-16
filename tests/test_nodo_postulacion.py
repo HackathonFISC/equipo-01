@@ -67,7 +67,7 @@ class Doble:
 class Caso:
     """Grafo real con el nodo inyectado, detenido en el interrupt del orientador."""
 
-    def __init__(self, tmp_path, *, estado_extra=None, con_tocumen=False, **nodo):
+    def __init__(self, tmp_path, *, estado_extra=None, con_tocumen=False, matching=None, **nodo):
         self.tmp_path = tmp_path
         self.empresa, self.joven = Doble(), Doble()
         self.ruta_db = tmp_path / "puente.db"
@@ -86,7 +86,7 @@ class Caso:
                         "corregimiento": "Tocumen", "habilidades": ["soldadura"]}
             )
             estado["ofertas"] = [*estado["ofertas"], tocumen]
-            nodos["matching"] = _matching_con_descarte_por_traslado
+            nodos["matching"] = matching or _matching_con_descarte_por_traslado
         self.grafo = construir_grafo(nodos=nodos, checkpointer=checkpointer_sqlite(tmp_path / "checkpoints.db"))
         self.config = config_caso(thread)
         self.grafo.invoke(estado, self.config)
@@ -154,6 +154,11 @@ def test_aprobar_en_el_tablero_envia_a_la_empresa_y_actualiza_el_embudo(tmp_path
         assert sum(db.embudo(conn).values()) == len(aprobados)
         agentes = {t["agente"] for t in db.trazas(conn)}
         assert {"postulacion", "aprobacion", "matching"} <= agentes  # el volcado trae lo de los otros nodos
+        # Cronológico: la aprobación del orientador va antes de lo que Postulación hizo con ella.
+        trazas = db.trazas(conn)
+        ids_aprobacion = [t["id"] for t in trazas if t["agente"] == "aprobacion"]
+        ids_postulacion = [t["id"] for t in trazas if t["agente"] == "postulacion"]
+        assert ids_aprobacion and ids_postulacion and max(ids_aprobacion) < min(ids_postulacion)
         consentimientos = [t for t in db.trazas(conn, agente="postulacion") if "consentimiento de" in t["razon"]]
         assert len(consentimientos) == len(aprobados)
         assert "por orientador el" in consentimientos[0]["razon"]
@@ -227,12 +232,12 @@ def test_sin_consentido_postulacion_no_envia_nada(tmp_path):
 def test_un_otorgado_false_solo_frena_a_esa_pareja(tmp_path):
     caso = Caso(tmp_path, estado_extra={"consentimientos": [
         {"perfil_id": "yaritza", "oferta_id": CAJERO, "otorgado": False, "medio": "joven"}]})
-    # El orientador aprueba a Carlos y a Yaritza. Con `mensaje` propio: el sugerido por el grafo
-    # nombra a toda la lista corta, también a quien no consintió.
-    caso.aprobar(mensaje="Buen día: les presentamos a una persona para la caja.")
+    # El orientador aprueba a Carlos y a Yaritza sin escribir `mensaje`: el grafo deja el sugerido,
+    # que nombra a toda la lista corta. A la empresa no puede llegar el nombre de quien no consintió.
+    caso.aprobar()
 
     (token, chat_id, texto, adjuntos) = caso.empresa.mensajes[0]
-    assert "Carlos Ficticio" in texto and "Yaritza Ficticia" not in texto
+    assert "Carlos Ficticio" in texto and "Yaritza" not in texto
     assert caso.valores["postulaciones"] == {f"carlos:{CAJERO}": EstadoPostulacion.ENVIADO}
     conn = caso.conexion()
     try:
@@ -374,3 +379,69 @@ def test_texto_para_joven_cuenta_a_donde_se_postulo_y_que_se_descarto():
     assert ".ics" in texto
     sin_envio = texto_para_joven(perfil, [], [("Operario en Tocumen", MOTIVO_TOCUMEN)])
     assert "no te postulamos" in sin_envio and ".ics" not in sin_envio
+
+
+def test_sin_mensaje_del_orientador_la_empresa_no_ve_a_quien_no_consintio(tmp_path):
+    """El mensaje sugerido por el grafo nombra a toda la lista corta; se rearma con los consentidos."""
+    caso = Caso(tmp_path)
+    assert "Yaritza Ficticia" in caso.solicitud["mensaje_sugerido"]  # el sugerido sí la nombra
+    caso.aprobar(consentidos=["carlos"])
+
+    (mensaje,) = caso.empresa.mensajes
+    texto = mensaje[2]
+    assert "Yaritza" not in texto and "Ficticia" not in texto.replace("Carlos Ficticio", "")
+    assert texto.startswith("Buen día, Minisúper Ficticio El Ahorro: desde Puente les presentamos a Carlos Ficticio")
+    assert caso.valores["aprobacion"]["sin_consentimiento"] == ["yaritza"]
+    assert caso.valores["postulaciones"] == {f"carlos:{CAJERO}": EstadoPostulacion.ENVIADO}
+    assert {a.name for a in mensaje[3]} == {f"cv_carlos_{CAJERO}.pdf", f"entrevista_carlos_{CAJERO}.ics"}
+    conn = caso.conexion()
+    try:
+        assert any("rearmado" in t["salida_resumen"] for t in db.trazas(conn, agente="postulacion"))
+    finally:
+        conn.close()
+
+
+def test_un_mensaje_propio_que_nombra_a_quien_no_sale_tambien_se_rearma(tmp_path):
+    caso = Caso(tmp_path)
+    caso.aprobar(consentidos=["carlos"], mensaje="Buen día: les presentamos a Carlos y a yaritza para la caja.")
+    texto = caso.empresa.mensajes[0][2]
+    assert "yaritza" not in texto.lower()
+    assert "Carlos Ficticio" in texto
+
+
+def test_un_mensaje_propio_que_solo_nombra_a_quienes_salen_se_respeta(tmp_path):
+    caso = Caso(tmp_path)
+    caso.aprobar(consentidos=["carlos"], mensaje="Buen día: les presento a Carlos para la caja.")
+    assert caso.empresa.mensajes[0][2].startswith("Buen día: les presento a Carlos para la caja.")
+
+
+def _matching_con_forma_del_solver(estado):
+    """Como el solver real: el descarte viaja en desglose["ofertas_descartadas"], sin motivo por pareja."""
+    salida = g.stub_matching(estado)
+    matches = []
+    for m in salida["matches"]:
+        if (m.perfil_id, m.oferta_id) == ("yaritza", CAJERO):
+            m = m.model_copy(update={
+                "explicacion": f"Asignado a {CAJERO}: cobertura 100%, traslado 40 min, pasaje $1.00/día | "
+                               f"Descartes: {TOCUMEN} (salario $200.00 < salario mínimo del perfil ($300.00))",
+                "desglose": {**m.desglose, "viable": True, "motivo_descarte": None,
+                             "ofertas_descartadas": {TOCUMEN: MOTIVO_TOCUMEN}}})
+        matches.append(m)
+    return {**salida, "matches": matches}
+
+
+def test_con_el_matching_real_el_descarte_llega_a_la_tabla_y_al_joven_sin_filtrarse_a_la_empresa(tmp_path):
+    caso = Caso(tmp_path, con_tocumen=True, matching=_matching_con_forma_del_solver)
+    caso.aprobar()
+
+    textos = {m[2].split(".")[0].removeprefix("Hola, "): m[2] for m in caso.joven.mensajes}
+    assert MOTIVO_TOCUMEN in textos["Yaritza Ficticia"] and "Bodega Ficticia" in textos["Yaritza Ficticia"]
+    empresa = caso.empresa.mensajes[0][2]
+    for privado in ("Descartes", "salario mínimo", "$300", "pasaje", MOTIVO_TOCUMEN, "Por qué"):
+        assert privado not in empresa
+    conn = caso.conexion()
+    try:
+        assert {"perfil_id": "yaritza", "oferta_id": TOCUMEN, "motivo": MOTIVO_TOCUMEN, "origen": "matching"} \
+            in db.descartes(conn, perfil_id="yaritza")
+    finally:
+        conn.close()
