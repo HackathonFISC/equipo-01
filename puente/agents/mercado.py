@@ -217,8 +217,11 @@ def _procesar_entrada(
             puesto=extraida.puesto,
             empresa=extraida.empresa,
             corregimiento=extraida.corregimiento,
-            salario_mensual=extraida.salario_mensual,
-            horario=extraida.horario.model_dump(),
+            # Lo que la oferta no publica queda en None y por confirmar, no se descarta (#42).
+            salario_mensual=extraida.salario_mensual or None,
+            salario_tipo=None if extraida.salario_mensual else "no_publicado",
+            horario=extraida.horario.model_dump() if any(extraida.horario.model_dump().values()) else None,
+            horario_tipo=None if any(extraida.horario.model_dump().values()) else "no_publicado",
             habilidades=habilidades,
             requisitos_texto=extraida.requisitos_texto,
             alertas=alertas,
