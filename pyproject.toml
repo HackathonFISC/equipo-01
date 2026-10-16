@@ -1,0 +1,26 @@
+[project]
+name = "puente"
+version = "0.1.0"
+description = "Sistema agéntico de inserción laboral juvenil — Hackathon FISC AI Agents 2026, Reto 3"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fpdf2",
+    "ics",
+    "langchain-google-genai",
+    "langgraph",
+    "langgraph-checkpoint-sqlite",
+    "langsmith",
+    "ortools",
+    "pydantic",
+    "python-dotenv",
+    "pyyaml",
+    "streamlit",
+]
+
+[dependency-groups]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

@@ -25,7 +25,15 @@ Agentes, herramientas, flujos y punto de intervención humana (incluir el diagra
 
 ## Instalación y ejecución
 
-Pasos para instalar y correr el proyecto. Credenciales de demo sin claves reales (usar `.env.example`).
+Requisitos: [uv](https://docs.astral.sh/uv/). `uv` descarga Python 3.12 si no está instalado.
+
+```bash
+uv sync
+cp .env.example .env   # llenar con claves propias; .env nunca se sube
+uv run pytest
+```
+
+Credenciales de demo sin claves reales: ver `.env.example`.
 
 ## Evals
 
