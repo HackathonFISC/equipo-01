@@ -87,7 +87,10 @@ class Caso:
             )
             estado["ofertas"] = [*estado["ofertas"], tocumen]
             nodos["matching"] = matching or _matching_con_descarte_por_traslado
-        self.grafo = construir_grafo(nodos=nodos, checkpointer=checkpointer_sqlite(tmp_path / "checkpoints.db"))
+        # Stubs de la Fase 1 para lo demás: desde #10 fase 2, construir_grafo usa los agentes reales.
+        self.grafo = construir_grafo(
+            nodos={**g.NODOS_FASE_1, **nodos}, checkpointer=checkpointer_sqlite(tmp_path / "checkpoints.db")
+        )
         self.config = config_caso(thread)
         self.grafo.invoke(estado, self.config)
 
