@@ -37,10 +37,10 @@ El grafo de `main` es la fase 1 de #10: recorre todo el flujo, con el `interrupt
 
 | Agente sugerido (5.4) | En Puente | Issue | Estado | Qué falta |
 |---|---|---|---|---|
-| 1. Inteligencia de mercado: normaliza ofertas a una taxonomía, detecta requisitos y extrae tendencias | Agente Mercado y reglas de la Ley 11 de 2005 en código | #5, #43 | Parcial | Entrar al grafo (#10 fase 2); la taxonomía real, `data/taxonomia.csv` (pendiente de #3); tendencias del mercado |
+| 1. Inteligencia de mercado: normaliza ofertas a una taxonomía, detecta requisitos y extrae tendencias | Agente Mercado, reglas de la Ley 11 de 2005 en código y taxonomía enlazada a ESCO | #5, #43, #51 | Parcial | Entrar al grafo (#10 fase 2); tendencias del mercado |
 | 2. Perfil: lee el CV y entrevista para descubrir habilidades no declaradas | Agente Perfil: formulario fijo, CV o entrevista de 5 preguntas, habilidades con evidencia literal | #6, #44 | Parcial | Entrar al grafo (#10 fase 2); la entrevista de Yaritza en el tablero (#52); notas de voz (#55) |
 | 3. Matching: asignación con capacidades y restricciones de transporte, horario y salario | Solver CP-SAT con restricciones duras | #4, #48 | Parcial | Entrar al grafo (#10 fase 2); tope por joven y umbrales con fuente (#48) |
-| 4. Ruta de formación: plan de cursos con cupos, horarios, costo y transporte | Agente Formación, set cover voraz (no óptimo) | #14, #53 | Parcial | Entrar al flujo principal (#53); cupos y horarios rotulados como datos de prueba (#51) |
+| 4. Ruta de formación: plan de cursos con cupos, horarios, costo y transporte | Agente Formación, set cover voraz (no óptimo), sobre 9 cursos del INADEH | #14, #51, #53 | Parcial | Entrar al flujo principal (#53) |
 | 5. Postulación: adapta CV, agenda entrevistas y envía listas cortas | Herramientas de Postulación: SQLite, CV en PDF, Telegram con respaldo, `.ics` | #7, #12 | Parcial | Conectarla al grafo tras la aprobación (#12); carta por oferta y CV ciego |
 | 6. Entrevista simulada con retroalimentación | No se construye | — | Fuera de alcance | — |
 | 7. Auditor: mide sesgo por nombre, género o corregimiento y bloquea ofertas discriminatorias | Agente Auditor v2; el bloqueo de ofertas lo hacen las reglas de Mercado | #8, #50, #5 | Parcial | Entrar al grafo (#10 fase 2) |
@@ -121,20 +121,15 @@ El `interrupt()` del orientador va antes de Postulación: sin su aprobación y s
 
 ## Fuentes de datos
 
-Los datos de personas son siempre sintéticos, y las empresas de la demo llevan nombres de prueba. Las ofertas no llevan datos personales. Cada archivo de datos se documentará con su fuente en `data/FUENTES.md` (pendiente de #3).
+Los datos de personas son siempre sintéticos, y las empresas de la demo llevan nombres de prueba. Las ofertas no llevan datos personales. [`data/FUENTES.md`](data/FUENTES.md) documenta cada archivo con su fuente y separa lo que es dato medido, dato de prueba y supuesto del equipo (#51).
 
-- Traslados (minutos y pasaje entre corregimientos): `data/traslados.csv` (pendiente de #3 y #51).
-- Cursos con cupo y sede: `data/cursos.csv` (pendiente de #3 y #51).
-- Taxonomía de habilidades con `skill_id`: `data/taxonomia.csv` (pendiente de #3). Mientras no exista, Mercado descarta todas las habilidades, y el modo terminal de Perfil usa la taxonomía mínima de prueba `tests/fixtures/taxonomia_mini.csv`.
-- Ofertas y perfiles sintéticos: carpetas `data/ofertas/` y `data/perfiles/` (pendiente de #3). El caso de la demo del grafo está en `tests/fixtures/caso_yaritza.json`.
+- **Traslados**, `data/traslados.csv`. Dato medido: minutos en transporte público a hora pico (07:00) consultados en Google Maps Transit y Moovit el 2026-10-16, y pasajes con las tarifas de MiBus, el Metro y la ATTT. Cubre 13 nodos de Panamá Oeste, el centro, San Miguelito y Panamá Este; `puente/rules/traslados.py` resuelve barrios y terminales a su nodo con una tabla de alias. Por ejemplo, La Chorrera a Tocumen son 95 minutos y US$2.35 por viaje.
+- **Taxonomía**, `data/taxonomia.csv`. 21 habilidades, cada una con su `skill_id`, sinónimos y su URI de la clasificación europea ESCO.
+- **Cursos**, `data/cursos.csv`. 9 cursos con títulos y áreas reales de la oferta del INADEH. **Los cupos y los horarios son datos de prueba**, rotulados así para probar las restricciones de Formación.
+- **Supuestos del equipo**, configurables en el solver: el máximo de 60 minutos por trayecto, el tope de 15 % del salario para el pasaje y que la ida y la vuelta duran y cuestan lo mismo.
+- **Ofertas y perfiles**: carpetas `data/ofertas/` y `data/perfiles/` (pendiente de #3). El caso de la demo del grafo está en `tests/fixtures/caso_yaritza.json`.
 
-**Aviso: los traslados y los cursos de hoy son estimados, no mediciones.** Mientras no existan `data/traslados.csv` y `data/cursos.csv` (pendiente de #51, medidos en Google Maps a hora pico, con fecha y método), el sistema usa tablas de respaldo estimadas en código:
-
-- la matriz de traslados de `puente/rules/traslados.py`;
-- el catálogo de cursos de `puente/agents/formacion.py`;
-- los casos de ejemplo fijos del tablero en `app/server.py`.
-
-Los minutos y pasajes que se ven hoy en la demo (por ejemplo, 95 minutos de La Chorrera a Tocumen) salen de esas tablas y no deben presentarse como datos medidos.
+Si falta un CSV, el código cae a una tabla de respaldo estimada: la matriz de `puente/rules/traslados.py` o el catálogo de `puente/agents/formacion.py`. Los casos de ejemplo del tablero, en `app/server.py`, son fijos y de prueba.
 
 ## Instalación y ejecución
 
@@ -265,7 +260,7 @@ Qué partes se hicieron con IA, con qué herramienta y qué se modificó a mano.
 | Guardrails | #9, #56 | Claude Code (nube) | Nada registrado todavía |
 | Tablero | #11, #33 | Antigravity (Gemini) | Reemplazo de Streamlit por un servidor ASGI con HTML, CSS y JS limpios; verificación de los artefactos de `outbox/`; ADR en `docs/decisiones.md` y pruebas de regresión |
 | Evals | #13 | Claude Code (flujo implementar-issues) | Pendiente: la rama de #13 aún no está en `main` |
-| Datos | #3 | Codex (ChatGPT) | Sin edición humana registrada; pendiente: PR #27 sin fusionar, su fila de bitácora aún no está en `main` |
+| Datos | #3, #51 | Codex (ChatGPT) en #3; Antigravity (Gemini) en #51 | #51: revisión de los pares de Yaritza (La Chorrera a San Miguelito, Tocumen y Calidonia) y de las tarifas de ATTT, MiBus y Metro. #3: PR #27 sin fusionar, su fila aún no está en `main` |
 
 Otras partes hechas con IA, también registradas en la bitácora (la herramienta se copia de sus filas):
 

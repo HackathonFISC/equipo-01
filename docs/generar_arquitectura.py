@@ -188,9 +188,9 @@ def dibujar() -> Image.Image:
     d.rounded_rectangle(e(1530, 130, 1960, 1135), radius=14 * E, fill=relleno, outline=borde, width=3 * E)
     texto_centrado(d, 1745, 150, "Herramientas y datos", fuente(26, True))
     elementos = [
-        ("Traslados", "minutos y pasaje entre corregimientos (Matching, Formación, Auditor). Hoy, tabla estimada en código; medidos con #51"),
-        ("Taxonomía", "skill_id de cada habilidad (Mercado, Perfil); data/taxonomia.csv con #3"),
-        ("Cursos INADEH", "cupo, sede y horario (Formación). Hoy, catálogo estimado; datos de prueba rotulados con #51"),
+        ("traslados.csv", "minutos a hora pico y pasaje entre 13 nodos, medidos con fuente y fecha (Matching, Formación, Auditor)"),
+        ("taxonomia.csv", "21 habilidades con skill_id y URI de ESCO (Mercado, Perfil)"),
+        ("cursos.csv", "9 cursos con títulos reales del INADEH; cupos y horarios de prueba (Formación)"),
         ("Reglas Ley 11 de 2005", "en código, sin LLM (Mercado)"),
         ("Checkpointer SQLite", "guarda cada caso por thread_id y lo reanuda tras el interrupt()"),
         ("Decisiones", "cada nodo agrega una Decision con su razón; tabla decisiones en SQLite con #12"),

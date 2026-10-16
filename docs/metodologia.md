@@ -62,15 +62,15 @@ Para reiniciar la demo desde cero se borran esos dos archivos y la carpeta `outb
    - Las ofertas repetidas se unen por similitud: mismo puesto y textos al menos 85 % parecidos. Gana la primera que llegó.
 4. **Perfil (#6, #44).** Yaritza llena un formulario fijo que se valida en código: edad, corregimiento, horario de clases y horario libre, salario mínimo y presupuesto diario de pasaje. Como no tiene CV, responde una entrevista de 5 preguntas sobre lo que sabe hacer. La entrevista ocurre fuera del grafo, por terminal o en el tablero (#52), y entra completa como un solo dato.
    - Antes de llamar al LLM se quitan cédula, teléfono y dirección exacta; solo queda el corregimiento.
-   - Cada habilidad lleva su `skill_id` y una frase literal de Yaritza que la evidencia. La taxonomía real es `data/taxonomia.csv` (pendiente de #3). Lo que no está en la taxonomía se descarta y se registra.
+   - Cada habilidad lleva su `skill_id` y una frase literal de Yaritza que la evidencia. La taxonomía es `data/taxonomia.csv`: 21 habilidades enlazadas a ESCO (#51). Lo que no está en la taxonomía se descarta y se registra.
 5. **Matching (#4, #48).** OR-Tools CP-SAT asigna sin LLM y con resultado reproducible (un solo hilo y semilla fija). Restricciones duras:
    - Traslado <= 60 minutos desde el corregimiento del joven. Si no hay dato de traslado para el par, no es viable.
-   - Pasaje mensual (ida y vuelta, 22 días) <= 15 % del salario, y pasaje diario <= el presupuesto del joven.
+   - Pasaje mensual (ida y vuelta por los días laborables; 22 por defecto en el solver) <= 15 % del salario, y pasaje diario <= el presupuesto del joven.
    - Horario sin cruce con sus clases y dentro de su horario libre.
    - Salario >= el mínimo que pide el joven.
    - Hasta 3 candidatos por vacante.
 
-   Los minutos y pasajes salen hoy de una tabla de respaldo estimada en `puente/rules/traslados.py`, no de mediciones. `data/traslados.csv`, medido en Google Maps a hora pico con fecha y método, está pendiente de #51.
+   Los minutos y pasajes salen de `data/traslados.csv`, medido a hora pico con Google Maps Transit y Moovit y las tarifas de MiBus, el Metro y la ATTT (#51). Para Yaritza, por ejemplo, La Chorrera a Tocumen son 95 minutos y queda fuera; a Calidonia son 55. Los umbrales de 60 minutos y 15 % son supuestos del equipo, rotulados así en `data/FUENTES.md`.
 
    El LLM solo redacta por qué cada match puntúa como puntúa; no cambia puntajes ni viabilidad.
 6. **Auditor (#8, #50).** Vuelve a correr Perfil y Matching con variantes contrafactuales:
@@ -78,7 +78,7 @@ Para reiniciar la demo desde cero se borran esos dos archivos y la carpeta `outb
    - otro corregimiento que conserva la misma fila de traslados. Así se mide si el resultado cambia solo por el nombre del lugar, sin tocar el traslado real, que es una restricción legítima.
 
    Una línea base de 3 corridas del perfil original descuenta la variación propia del LLM. Si una variante cambia el resultado, el grafo recalcula una sola vez. Si la diferencia persiste, no hay bucle: pasa al orientador como alerta.
-7. **Formación (#14, #53).** Para las brechas de habilidades, propone cursos del INADEH con cupo, horario sin cruce con las clases, traslado <= 60 minutos y pasaje dentro del presupuesto. El algoritmo es un set cover voraz. Hoy usa un catálogo estimado de respaldo en `puente/agents/formacion.py`. `data/cursos.csv`, con cupos y horarios rotulados como datos de prueba, está pendiente de #51.
+7. **Formación (#14, #53).** Para las brechas de habilidades, propone cursos del INADEH con cupo, horario sin cruce con las clases, traslado <= 60 minutos y pasaje dentro del presupuesto. El algoritmo es un set cover voraz. Los cursos salen de `data/cursos.csv` (#51): 9 cursos con títulos reales del INADEH, cuyos cupos y horarios son datos de prueba rotulados como tales.
 8. **Orientador, con `interrupt()` (#10, #11).** El grafo se detiene en cada vacante con su lista corta. El orientador:
    - ve los candidatos con su puntaje y sus brechas, la alerta del Auditor y el mensaje sugerido para la empresa;
    - confirma el consentimiento de cada joven;
@@ -104,7 +104,7 @@ Para reiniciar la demo desde cero se borran esos dos archivos y la carpeta `outb
 - **Decisiones.** Cada nodo agrega una `Decision` (agente, resumen de entrada y salida, razón y hora) al estado del grafo, y el checkpointer las guarda con el caso. Al final de la demo, el grafo imprime la cadena de agentes que decidieron. La copia en la tabla `decisiones` de SQLite llega con #12.
 - **LangSmith.** Se activa solo con `LANGSMITH_TRACING=true` y `LANGSMITH_API_KEY`, y oculta entradas y salidas con `LANGSMITH_HIDE_INPUTS` y `LANGSMITH_HIDE_OUTPUTS`.
 
-**Datos.** Los datos de personas son siempre sintéticos. Las fuentes de cada archivo van en `data/FUENTES.md` (pendiente de #3). Los traslados y cursos que muestra hoy el sistema son estimados de respaldo, no mediciones.
+**Datos.** Los datos de personas son siempre sintéticos. `data/FUENTES.md` documenta la fuente de cada archivo y separa dato medido (traslados, taxonomía), dato de prueba (cupos y horarios de cursos, perfiles) y supuesto del equipo (umbrales del solver). Si falta un CSV, el código usa una tabla de respaldo estimada que no debe presentarse como medición. Las ofertas y perfiles de `data/` están pendientes de #3.
 
 ## Arquitectura
 
@@ -157,7 +157,7 @@ El registro completo de decisiones de stack, arquitectura y forma de trabajo est
 
 Hoy el solver usa un máximo fijo de 60 minutos y resta los minutos en el puntaje de cada par. El máximo por joven, que el puntaje no castigue la distancia y los umbrales con fuente son #48.
 
-**3. Datos de prueba rotulados.** Las personas son sintéticas (Yaritza Ficticia, Carlos Ficticio) y las empresas llevan nombres de prueba (Minisúper Ficticio El Ahorro). Los cupos y horarios de los cursos del INADEH son datos de prueba y así se rotulan. Los traslados son estimados hasta que #51 los mida. Ninguna cifra de la demo se presenta como medición real.
+**3. Datos de prueba rotulados.** Las personas son sintéticas (Yaritza Ficticia, Carlos Ficticio) y las empresas llevan nombres de prueba (Minisúper Ficticio El Ahorro). Los cupos y horarios de los cursos del INADEH son datos de prueba y así se rotulan. Los traslados sí están medidos, con fuente y fecha, y los umbrales de 60 minutos y 15 % se declaran como supuestos del equipo (`data/FUENTES.md`, #51). Ninguna cifra de prueba se presenta como medición real.
 
 **4. Menores de 18 fuera de la demo, como trabajo futuro.** La demo atiende de 18 a 29 años, y el guardrail rechaza otras edades. El grupo de 15 a 19 años tiene la tasa de desocupación más alta según el INEC, pero contratar a menores de edad tiene reglas propias que el sistema todavía no modela. Queda como trabajo futuro, no como un caso que se resuelve a medias.
 
