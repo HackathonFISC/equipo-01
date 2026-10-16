@@ -6,8 +6,8 @@ evals/resultados.md junto con el registro de fallos.
 
 - Los casos de categorías con LLM (extracción de ofertas y perfil sin CV) se corren 3 veces y se reporta la
   tasa de acierto. Sin GOOGLE_API_KEY esos casos quedan "omitido".
-- Si el módulo o la función que ejecuta un caso todavía no está fusionado (issues #4, #5, #6, #8 y #9), el
-  caso queda "pendiente" y no rompe el runner.
+- Si el módulo o la función que ejecuta un caso todavía no está fusionado (a la fecha #4 y #8 ya están en
+  main; faltan #5, #6 y #9), el caso queda "pendiente (#N sin fusionar)" y no rompe el runner.
 - Este módulo no llama al LLM: solo lo hacen los agentes de #5 y #6 a través de sus ejecutores. Nunca
   reescribe casos.yaml: los fallos se anotan a mano en el campo "fallos" de cada caso.
 """
