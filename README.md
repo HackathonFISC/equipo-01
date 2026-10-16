@@ -7,9 +7,9 @@ Reto: 0
 
 ## Equipo
 
-- Integrante 1
-- Integrante 2
-- Integrante 3
+- Jesus Guerra (@jesus12ga)
+- Cornelio Guerra (@Cornelio-Guerra)
+- Miguel Vasquez (@Migue0714)
 
 ## Problema
 
