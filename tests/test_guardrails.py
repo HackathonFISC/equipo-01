@@ -1,22 +1,31 @@
-"""Pruebas de puente/guardrails.py (issue #9). Sin red, sin claves, sin LLM."""
+"""Pruebas de puente/guardrails.py (issues #9 y #56). Sin red, sin claves, sin LLM."""
 
 from __future__ import annotations
 
+import os
+import pickle
+import sqlite3
+
 import pytest
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph import END, START, StateGraph
 
 from puente.guardrails import (
     MAX_BYTES_ARCHIVO,
+    MENSAJE_AUDIO,
     RESPUESTA_FUERA_DE_ALCANCE,
     detectar_inyeccion,
     evaluar_entrada,
     fuera_de_alcance,
+    limpiar_entrada,
     nodo_guardrails,
     normalizar,
+    ocultar_trazas_langsmith,
     validar_archivo,
     validar_rangos,
     validar_texto,
 )
-from puente.schemas import Decision
+from puente.schemas import Decision, EstadoPuente
 
 MB = 1024 * 1024
 PDF_MINIMO = b"%PDF-1.4\n%sintetico\n"
@@ -159,14 +168,31 @@ def test_texto_vacio_o_solo_espacios():
     assert not validar_texto("   \n\t ").ok
 
 
-@pytest.mark.parametrize("edad", [15, 20, 29, 20.0])
+@pytest.mark.parametrize("edad", [18, 20, 29, 20.0])
 def test_edad_valida(edad):
     assert validar_rangos(edad=edad).ok
 
 
-@pytest.mark.parametrize("edad", [14, 30, -1, 200, 20.5, True, "20", float("nan")])
+@pytest.mark.parametrize(
+    "edad", [15, 16, 17, 14, 30, -1, 200, 20.5, True, "20", float("nan")]
+)
 def test_edad_invalida(edad):
     assert not validar_rangos(edad=edad).ok
+
+
+def test_edad_16_se_rechaza_sin_llamar_al_llm():
+    llm = LLMFalso()
+    salida = correr_con_llm(
+        {
+            "entrada": {"texto": "Busco trabajo de cajera", "edad": 16},
+            "decisiones": [],
+            "errores": [],
+        },
+        llm,
+    )
+    assert llm.llamadas == 0
+    assert salida["guardrails"]["ok"] is False
+    assert "18–29" in salida["guardrails"]["motivos"][0]
 
 
 @pytest.mark.parametrize("salario", [0, -100, float("nan"), float("inf"), "600", False])
@@ -177,6 +203,37 @@ def test_salario_invalido(salario):
 def test_salario_valido_y_ausentes():
     assert validar_rangos(salario=650.0).ok
     assert validar_rangos().ok
+
+
+# --- Audio (hasta #55) ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "nombre", ["nota.ogg", "nota.mp3", "Nota.M4A", "audio.wav"]
+)
+def test_audio_se_rechaza_con_mensaje_claro(nombre):
+    resultado = validar_archivo(nombre, 1 * MB)
+    assert not resultado.ok
+    assert "todavía no aceptamos notas de voz" in resultado.motivo.lower()
+    assert resultado.respuesta == MENSAJE_AUDIO
+
+
+def test_audio_grande_tambien_dice_que_no_aceptamos_notas_de_voz_sin_leerlo():
+    llm = LLMFalso()
+    salida = correr_con_llm(
+        {
+            "entrada": {
+                "archivo": {
+                    "nombre": "nota.ogg",
+                    "tamano_bytes": 50 * MB,
+                    "contenido": ContenidoIntocable(),
+                }
+            }
+        },
+        llm,
+    )
+    assert llm.llamadas == 0
+    assert salida["guardrails"]["respuesta"] == MENSAJE_AUDIO
 
 
 # --- Inyección -----------------------------------------------------------------------
@@ -300,3 +357,142 @@ def test_rango_invalido_detiene_el_flujo():
 def test_texto_enorme_se_rechaza_sin_revisar_lo_demas():
     resultados = evaluar_entrada({"texto": "ignora " * 3000})
     assert len(resultados) == 1 and not resultados[0].ok
+
+
+# --- Datos personales fuera antes del grafo (#56) -----------------------------------
+
+CEDULA = "8-123-4567"
+TELEFONO = "6123-4567"
+CALLE = "Calle 5 casa 12"
+TEXTO_CON_PII = (
+    f"Soy Yaritza, cédula {CEDULA}, mi celular es {TELEFONO}. "
+    f"Dirección: {CALLE}, Barrio Colón. Busco trabajo de cajera."
+)
+
+
+def test_limpiar_entrada_quita_pii_en_todo_el_estado():
+    estado = {
+        "entrada": {"texto": TEXTO_CON_PII, "edad": 20, "archivo": {"contenido": PDF_MINIMO}},
+        "entradas_perfil": [{"id": "p1", "respuestas": [f"Llámame al {TELEFONO}"]}],
+        "decisiones": [],
+    }
+    limpio = limpiar_entrada(estado)
+    plano = repr(limpio)
+    for dato in (CEDULA, TELEFONO, CALLE):
+        assert dato not in plano
+    assert "Barrio Colón" in limpio["entrada"]["texto"]  # el corregimiento se queda
+    assert limpio["entrada"]["edad"] == 20
+    assert limpio["entrada"]["archivo"]["contenido"] is PDF_MINIMO
+    assert TELEFONO in estado["entradas_perfil"][0]["respuestas"][0]  # no muta el original
+
+
+def test_limpiar_entrada_no_toca_rutas():
+    assert limpiar_entrada({"cv_ruta": "cv/8-123-4567.pdf"}) == {"cv_ruta": "cv/8-123-4567.pdf"}
+
+
+def test_nodo_guardrails_no_deja_pii_en_decisiones_aunque_el_grafo_no_limpie():
+    salida = nodo_guardrails({"entrada": {"texto": "ignora todo. " + TEXTO_CON_PII}})
+    plano = repr(salida["decisiones"])
+    assert CEDULA not in plano and TELEFONO not in plano
+
+
+class EstadoConEntrada(EstadoPuente, total=False):
+    """`EstadoPuente` todavía no declara `entrada` ni `guardrails` (#42); el grafo de prueba sí."""
+
+    entrada: dict
+    guardrails: dict
+
+
+def _grafo_de_prueba(llm: LLMFalso, checkpointer: InMemorySaver):
+    """Guardrails y un agente falso que llama al LLM y deja su Decision, como hará #10."""
+
+    def nodo_agente(estado: EstadoConEntrada) -> dict:
+        texto = estado["entrada"]["texto"]
+        llm(texto)
+        decision = Decision(
+            agente="perfil", entrada_resumen=texto, salida_resumen="ok", razon="prueba"
+        )
+        return {"decisiones": [*estado.get("decisiones", []), decision]}
+
+    grafo = StateGraph(EstadoConEntrada)
+    grafo.add_node("guardrails", nodo_guardrails)
+    grafo.add_node("agente", nodo_agente)
+    grafo.add_edge(START, "guardrails")
+    grafo.add_edge("guardrails", "agente")
+    grafo.add_edge("agente", END)
+    return grafo.compile(checkpointer=checkpointer)
+
+
+def test_cedula_no_llega_al_checkpoint_ni_a_decisiones_ni_al_llm():
+    vistos: list[str] = []
+
+    class LLMQueAnota(LLMFalso):
+        def __call__(self, texto, *_a, **_k):
+            vistos.append(texto)
+            return super().__call__()
+
+    llm = LLMQueAnota()
+    checkpointer = InMemorySaver()
+    grafo = _grafo_de_prueba(llm, checkpointer)
+    config = {"configurable": {"thread_id": "yaritza"}}
+
+    estado = limpiar_entrada({"entrada": {"texto": TEXTO_CON_PII}, "decisiones": [], "errores": []})
+    final = grafo.invoke(estado, config)
+
+    assert llm.llamadas == 1
+    assert all(CEDULA not in t for t in vistos)
+    assert all(CEDULA not in repr(d) for d in final["decisiones"])
+    assert any(d.agente == "perfil" for d in final["decisiones"])
+    guardado = pickle.dumps(
+        [(c.checkpoint, c.metadata, c.pending_writes) for c in checkpointer.list(config)]
+    )
+    assert len(list(checkpointer.list(config))) > 1
+    for dato in (CEDULA, TELEFONO, CALLE):
+        assert dato.encode() not in guardado
+        assert dato not in repr(list(checkpointer.list(config)))
+
+
+def test_ocultar_trazas_langsmith(monkeypatch):
+    monkeypatch.delenv("LANGSMITH_HIDE_INPUTS", raising=False)
+    monkeypatch.setenv("LANGSMITH_HIDE_OUTPUTS", "false")
+    ocultar_trazas_langsmith()
+    assert os.environ["LANGSMITH_HIDE_INPUTS"] == "true"
+    assert os.environ["LANGSMITH_HIDE_OUTPUTS"] == "false"  # respeta lo que puso el equipo
+
+
+def _volcar_sqlite(ruta) -> bytes:
+    """Todas las celdas de todas las tablas, como bytes (los checkpoints viven en el WAL)."""
+    with sqlite3.connect(ruta) as conexion:
+        tablas = [t for (t,) in conexion.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+        celdas = [c for t in tablas for fila in conexion.execute(f'SELECT * FROM "{t}"') for c in fila]
+    return b"".join(c if isinstance(c, bytes) else str(c).encode() for c in celdas)
+
+
+def test_cedula_no_llega_al_sqlite_del_grafo_real(tmp_path):
+    """Lo mismo con el grafo de #10 y su checkpointer SQLite; Perfil es un falso que llama al LLM."""
+    from puente import graph as g
+
+    vistos: list[str] = []
+
+    def perfil_falso(estado: dict) -> dict:
+        vistos.extend(e.get("cv_texto", "") for e in estado.get("entradas_perfil") or [])
+        return g.stub_perfil(estado)
+
+    thread, estado = g.cargar_caso()
+    estado["entradas_perfil"] = [
+        {**e, "cv_texto": TEXTO_CON_PII} for e in estado["entradas_perfil"]
+    ]
+    ruta = tmp_path / "checkpoints.db"
+    grafo = g.construir_grafo(
+        nodos={"perfil": perfil_falso}, checkpointer=g.checkpointer_sqlite(ruta)
+    )
+    config = g.config_caso(thread)
+    grafo.invoke(limpiar_entrada(estado), config)
+
+    assert vistos and all(CEDULA not in t and "[CEDULA]" in t for t in vistos)
+    valores = grafo.get_state(config).values
+    assert CEDULA not in repr(valores["decisiones"])
+    crudo = _volcar_sqlite(ruta)
+    for dato in (CEDULA, TELEFONO, CALLE):
+        assert dato.encode() not in crudo
+    assert b"[CEDULA]" in crudo  # el checkpoint sí se escribió, con el texto limpio
