@@ -18,7 +18,8 @@ function escaparHtml(str) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 async function cargarEstado() {
@@ -200,29 +201,41 @@ function renderizarListaCorta() {
             />
             <button
               type="button"
-              class="btn btn-success"
-              onclick="ejecutarAccionOrientador('aprobar', '${escaparHtml(m.perfil_id)}', '${escaparHtml(m.oferta_id)}', '${escaparHtml(notaId)}')"
+              class="btn btn-success btn-accion-hitl"
+              data-accion="aprobar"
+              data-perfil-id="${escaparHtml(m.perfil_id)}"
+              data-oferta-id="${escaparHtml(m.oferta_id)}"
+              data-input-id="${escaparHtml(notaId)}"
             >
               ✓ Aprobar y Enviar
             </button>
             <button
               type="button"
-              class="btn btn-primary"
-              onclick="ejecutarAccionOrientador('editar', '${escaparHtml(m.perfil_id)}', '${escaparHtml(m.oferta_id)}', '${escaparHtml(notaId)}')"
+              class="btn btn-primary btn-accion-hitl"
+              data-accion="editar"
+              data-perfil-id="${escaparHtml(m.perfil_id)}"
+              data-oferta-id="${escaparHtml(m.oferta_id)}"
+              data-input-id="${escaparHtml(notaId)}"
             >
               ✎ Guardar Edición
             </button>
             <button
               type="button"
-              class="btn btn-warning"
-              onclick="ejecutarAccionOrientador('quitar_candidato', '${escaparHtml(m.perfil_id)}', '${escaparHtml(m.oferta_id)}', '${escaparHtml(notaId)}')"
+              class="btn btn-warning btn-accion-hitl"
+              data-accion="quitar_candidato"
+              data-perfil-id="${escaparHtml(m.perfil_id)}"
+              data-oferta-id="${escaparHtml(m.oferta_id)}"
+              data-input-id="${escaparHtml(notaId)}"
             >
               ⟳ Quitar Candidato y Recalcular
             </button>
             <button
               type="button"
-              class="btn btn-danger"
-              onclick="ejecutarAccionOrientador('rechazar', '${escaparHtml(m.perfil_id)}', '${escaparHtml(m.oferta_id)}', '${escaparHtml(notaId)}')"
+              class="btn btn-danger btn-accion-hitl"
+              data-accion="rechazar"
+              data-perfil-id="${escaparHtml(m.perfil_id)}"
+              data-oferta-id="${escaparHtml(m.oferta_id)}"
+              data-input-id="${escaparHtml(notaId)}"
             >
               ✕ Rechazar Match
             </button>
@@ -247,7 +260,12 @@ async function ejecutarAccionOrientador(accion, perfilId, ofertaId, inputId) {
       nota_edicion: nota,
     }),
   });
-  estadoActual = await resp.json();
+  const payload = await resp.json();
+  if (!resp.ok) {
+    mostrarToast(`Error (${resp.status}): ${JSON.stringify(payload.detail || payload)}`);
+    return;
+  }
+  estadoActual = payload;
   renderizarTodo();
   mostrarToast(`Acción ejecutada: ${accion.toUpperCase()} (${perfilId} → ${ofertaId})`);
 }
@@ -440,6 +458,18 @@ document.addEventListener("DOMContentLoaded", () => {
   // Filtros
   document.getElementById("filtro-perfil").addEventListener("change", renderizarListaCorta);
   document.getElementById("filtro-agente").addEventListener("change", renderizarTrazas);
+
+  // Delegación de eventos para botones HITL (data-* sin onclick inline)
+  document.getElementById("contenedor-matches").addEventListener("click", (ev) => {
+    const btn = ev.target.closest(".btn-accion-hitl");
+    if (!btn) return;
+    ejecutarAccionOrientador(
+      btn.dataset.accion,
+      btn.dataset.perfilId,
+      btn.dataset.ofertaId,
+      btn.dataset.inputId
+    );
+  });
 
   // Reiniciar demo
   document.getElementById("btn-reset").addEventListener("click", async () => {

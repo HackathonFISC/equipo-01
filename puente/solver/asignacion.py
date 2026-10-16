@@ -436,7 +436,7 @@ def evaluar_factibilidad_par(
         minutos_traslado = 999
         pasaje_diario = 999.0
         pasaje_mensual = 999.0 * config.dias_laborables
-        motivos.append(f"sin ruta de traslado registrada entre {origen} y {destino}")
+        motivos.append(f"sin dato de traslado ({origen} -> {destino})")
     else:
         minutos_traslado = int(info_traslado.minutos_hora_pico)
         pasaje_diario = info_traslado.pasaje_diario_usd
