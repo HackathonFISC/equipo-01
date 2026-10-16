@@ -1,0 +1,17 @@
+{
+  "id": "P03",
+  "nombre": "Perfil C (ficticio)",
+  "edad": 19,
+  "corregimiento": "Juan Díaz",
+  "horario_libre": "Lunes a viernes 13:00-21:00; clases 07:00-12:00",
+  "horario_clases": "07:00-12:00",
+  "salario_minimo": 550,
+  "presupuesto_pasaje_diario": 2.00,
+  "experiencia_texto": "Organicé una feria escolar: registré asistentes en una hoja de cálculo y respondí consultas en la mesa de información.",
+  "habilidades": [
+    {"skill_id": "registro_datos", "evidencia": "registré asistentes en una hoja de cálculo"},
+    {"skill_id": "excel_basico", "evidencia": "en una hoja de cálculo"},
+    {"skill_id": "atencion_cliente", "evidencia": "respondí consultas en la mesa de información"}
+  ],
+  "datos_sinteticos": true
+}
