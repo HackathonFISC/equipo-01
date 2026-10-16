@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Puente · Tablero del Orientador Laboral (Reto 3)</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-brand">
+      <span class="brand-badge">PUENTE · RETO 3</span>
+      <div>
+        <h1>Tablero del Orientador Laboral</h1>
+        <p class="subtitle">Empleabilidad Juvenil Justa en Panamá · Supervisión Humana (HITL) · Ley 11 de 2005</p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <span id="badge-grafo" class="status-pill status-paused">⏸ Pausa HITL: interrupt(orientador)</span>
+      <button id="btn-reset" class="btn btn-outline" type="button" title="Restaurar datos iniciales del caso Yaritza">
+        ↺ Reiniciar Demo
+      </button>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- KPIs principales -->
+    <section class="kpi-grid" aria-label="Indicadores del sistema">
+      <article class="kpi-card">
+        <span class="kpi-label">Perfiles Jóvenes (18–28)</span>
+        <strong id="kpi-perfiles" class="kpi-value">0</strong>
+        <span class="kpi-foot">Sin PII expuesta a empresas</span>
+      </article>
+      <article class="kpi-card">
+        <span class="kpi-label">Ofertas Válidas / Bloqueadas</span>
+        <strong id="kpi-ofertas" class="kpi-value">0 / 0</strong>
+        <span class="kpi-foot">Filtro Ley 11 de 2005 (edad/sexo)</span>
+      </article>
+      <article class="kpi-card">
+        <span class="kpi-label">Matches en Lista Corta</span>
+        <strong id="kpi-matches" class="kpi-value">0</strong>
+        <span class="kpi-foot">CP-SAT · Traslado ≤ 60 min · Pasaje ≤ 15%</span>
+      </article>
+      <article class="kpi-card">
+        <span class="kpi-label">Auditoría Contrafactual</span>
+        <strong id="kpi-auditoria" class="kpi-value">100%</strong>
+        <span id="kpi-auditoria-foot" class="kpi-foot">0 sesgos por nombre o género</span>
+      </article>
+    </section>
+
+    <!-- Navegación por pestañas -->
+    <nav class="tabs-nav" role="tablist">
+      <button class="tab-btn active" data-tab="tab-lista-corta" role="tab" aria-selected="true">
+        1. Lista Corta y Aprobación (HITL)
+      </button>
+      <button class="tab-btn" data-tab="tab-ofertas-ley11" role="tab" aria-selected="false">
+        2. Ofertas Bloqueadas y Alertas (Ley 11)
+      </button>
+      <button class="tab-btn" data-tab="tab-trazas" role="tab" aria-selected="false">
+        3. Trazas de Decisiones
+      </button>
+      <button class="tab-btn" data-tab="tab-embudo" role="tab" aria-selected="false">
+        4. Embudo de Postulaciones
+      </button>
+      <button class="tab-btn" data-tab="tab-auditor" role="tab" aria-selected="false">
+        5. Agente Auditor (Sesgo)
+      </button>
+    </nav>
+
+    <!-- Notificación flotante de acciones -->
+    <div id="toast-msg" class="toast hidden" role="status" aria-live="polite"></div>
+
+    <!-- TAB 1: LISTA CORTA Y APROBACIÓN -->
+    <section id="tab-lista-corta" class="tab-panel active" role="tabpanel">
+      <div class="panel-header">
+        <div>
+          <h2>Lista Corta Explicable · Punto de Pausa <code>interrupt()</code></h2>
+          <p>
+            Ninguna postulación se envía automáticamente. El orientador revisa evidencia literal, traslado en hora pico y pasaje antes de aprobar.
+          </p>
+        </div>
+        <div class="filter-group">
+          <label for="filtro-perfil">Filtrar candidato:</label>
+          <select id="filtro-perfil" class="input-select">
+            <option value="TODOS">Todos los perfiles</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="info-banner" style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.75rem;">
+        <div>
+          <strong>📂 Cargar desde <code>data/</code>:</strong> Selecciona una oferta o perfil del repositorio para procesarlo en vivo.
+        </div>
+        <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;">
+          <select id="select-data-oferta" class="input-select"></select>
+          <button type="button" id="btn-cargar-data-oferta" class="btn btn-primary">Cargar Oferta</button>
+          <select id="select-data-perfil" class="input-select"></select>
+          <button type="button" id="btn-cargar-data-perfil" class="btn btn-primary">Cargar Perfil</button>
+        </div>
+      </div>
+
+      <div id="contenedor-matches" class="cards-stack"></div>
+
+      <details class="collapsible-form">
+        <summary>+ Registrar nuevo perfil joven (entrevista conversacional sin CV)</summary>
+        <form id="form-nuevo-perfil" class="form-grid">
+          <label>
+            Nombre del joven
+            <input type="text" id="np-nombre" required placeholder="Ej. Mariela" />
+          </label>
+          <label>
+            Edad (15–29)
+            <input type="number" id="np-edad" min="15" max="29" value="20" required />
+          </label>
+          <label>
+            Corregimiento de residencia
+            <select id="np-corregimiento">
+              <option value="La Chorrera">La Chorrera</option>
+              <option value="Vista Alegre">Vista Alegre</option>
+              <option value="Arraiján">Arraiján</option>
+            </select>
+          </label>
+          <label>
+            Salario mínimo esperado (USD/mes)
+            <input type="number" id="np-salario" min="400" max="2000" step="10" value="600" required />
+          </label>
+          <label>
+            Presupuesto pasaje diario (USD/día)
+            <input type="number" id="np-pasaje" min="1" max="15" step="0.25" value="3.00" required />
+          </label>
+          <label>
+            Habilidades demostradas
+            <select id="np-habilidades" multiple>
+              <option value="atencion_cliente" selected>atencion_cliente</option>
+              <option value="manejo_caja" selected>manejo_caja</option>
+              <option value="inventario">inventario</option>
+              <option value="excel_basico">excel_basico</option>
+            </select>
+          </label>
+          <label class="full-width">
+            Evidencia literal del relato (experiencia informal / comunitaria)
+            <input
+              type="text"
+              id="np-evidencia"
+              required
+              value="Atiende pedidos y cobra en efectivo y Yappy en el puesto de comida familiar"
+            />
+          </label>
+          <div class="form-actions full-width">
+            <button type="submit" class="btn btn-primary">Extraer Habilidades y Recalcular Solver CP-SAT</button>
+          </div>
+        </form>
+      </details>
+    </section>
+
+    <!-- TAB 2: OFERTAS BLOQUEADAS Y ALERTAS (LEY 11 DE 2005) -->
+    <section id="tab-ofertas-ley11" class="tab-panel" role="tabpanel">
+      <div class="panel-header">
+        <div>
+          <h2>Vigilancia Legal de Vacantes · Ley 11 de 2005 (Panamá)</h2>
+          <p>
+            El Agente de Mercado bloquea ofertas que discriminan por edad o sexo y marca alertas preventivas de apariencia (<em>«buena presencia»</em>, fotografía o estado civil) con la frase exacta.
+          </p>
+        </div>
+      </div>
+
+      <div class="two-columns">
+        <div>
+          <h3 class="section-subtitle">🚫 Ofertas Bloqueadas (No entran al Solver)</h3>
+          <div id="contenedor-ofertas-bloqueadas" class="cards-stack"></div>
+        </div>
+        <div>
+          <h3 class="section-subtitle">✅ Ofertas Válidas y Alertas Preventivas</h3>
+          <div id="contenedor-ofertas-validas" class="cards-stack"></div>
+        </div>
+      </div>
+
+      <details class="collapsible-form" open>
+        <summary>+ Evaluar nueva oferta de empleo en tiempo real (Agente de Mercado)</summary>
+        <form id="form-nueva-oferta" class="form-grid">
+          <label>
+            Puesto
+            <input type="text" id="no-puesto" required placeholder="Ej. Auxiliar de Tienda" />
+          </label>
+          <label>
+            Empresa
+            <input type="text" id="no-empresa" required placeholder="Ej. Almacenes del Oeste" />
+          </label>
+          <label>
+            Corregimiento de la vacante
+            <select id="no-corregimiento">
+              <option value="La Chorrera">La Chorrera</option>
+              <option value="Vista Alegre">Vista Alegre</option>
+              <option value="Arraiján">Arraiján</option>
+              <option value="Bella Vista">Bella Vista</option>
+              <option value="Tocumen">Tocumen</option>
+            </select>
+          </label>
+          <label>
+            Salario mensual (USD)
+            <input type="number" id="no-salario" min="400" max="3000" step="10" value="650" required />
+          </label>
+          <label class="full-width">
+            Texto de requisitos de la oferta (prueba escribir «18 a 25 años», «solo hombres» o «buena presencia»)
+            <input
+              type="text"
+              id="no-requisitos"
+              required
+              placeholder="Ej. Se busca joven de 18 a 24 años con excelente buena presencia para atención en mostrador."
+            />
+          </label>
+          <div class="form-actions full-width">
+            <button type="submit" class="btn btn-primary">Analizar con Agente de Mercado</button>
+          </div>
+        </form>
+      </details>
+    </section>
+
+    <!-- TAB 3: TRAZAS DE DECISIONES -->
+    <section id="tab-trazas" class="tab-panel" role="tabpanel">
+      <div class="panel-header">
+        <div>
+          <h2>Trazabilidad y Registro de Decisiones (<code>decisiones</code>)</h2>
+          <p>Cada nodo del grafo deja registro auditable con timestamp, resumen de entrada/salida y justificación.</p>
+        </div>
+        <div class="filter-group">
+          <label for="filtro-agente">Filtrar por agente:</label>
+          <select id="filtro-agente" class="input-select">
+            <option value="TODOS">Todos los agentes</option>
+            <option value="guardrails">guardrails</option>
+            <option value="mercado">mercado</option>
+            <option value="perfil">perfil</option>
+            <option value="matching">matching</option>
+            <option value="auditor">auditor</option>
+            <option value="orientador_humano">orientador_humano</option>
+            <option value="postulacion">postulacion</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="table-wrapper">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              <th>Agente</th>
+              <th>Entrada</th>
+              <th>Salida</th>
+              <th>Razón / Regla Aplicada</th>
+            </tr>
+          </thead>
+          <tbody id="tabla-decisiones-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- TAB 4: EMBUDO DE POSTULACIONES -->
+    <section id="tab-embudo" class="tab-panel" role="tabpanel">
+      <div class="panel-header">
+        <div>
+          <h2>Embudo de Postulaciones y Artefactos Generados</h2>
+          <p>Seguimiento del ciclo de vida desde <code>perfil_listo</code> hasta <code>contratado</code> o <code>no_seleccionado</code>.</p>
+        </div>
+      </div>
+
+      <div id="contenedor-embudo" class="funnel-grid"></div>
+
+      <h3 class="section-subtitle">Detalle de Postulaciones y Archivos en <code>outbox/</code></h3>
+      <div class="table-wrapper">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>ID Postulación</th>
+              <th>Candidato</th>
+              <th>Oferta / Empresa</th>
+              <th>Puntaje</th>
+              <th>Estado Actual</th>
+              <th>Observación Orientador</th>
+              <th>Artefactos (<code>outbox/</code>)</th>
+            </tr>
+          </thead>
+          <tbody id="tabla-postulaciones-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- TAB 5: AGENTE AUDITOR (SESGO CONTRAFACTUAL) -->
+    <section id="tab-auditor" class="tab-panel" role="tabpanel">
+      <div class="panel-header">
+        <div>
+          <h2>Agente Auditor · Pruebas Contrafactuales de Sesgo</h2>
+          <p>
+            Re-ejecuta Perfil y Matching con 4 variantes de nombre y género manteniendo fijo el corregimiento de residencia.
+          </p>
+        </div>
+        <div>
+          <button id="btn-toggle-sesgo" class="btn btn-warning" type="button">
+            🧪 Simular Inyección de Sesgo de Género
+          </button>
+        </div>
+      </div>
+
+      <div id="alerta-nota-metodologica" class="info-banner"></div>
+      <div id="alerta-sesgo-banner" class="alert-banner hidden"></div>
+
+      <div class="table-wrapper">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Perfil</th>
+              <th>Nombre / Género Original</th>
+              <th>Corregimiento (Fijo)</th>
+              <th>Variantes Idénticas</th>
+              <th>% Idéntico</th>
+              <th>Estado Auditoría</th>
+              <th>Detalle de Diferencias</th>
+            </tr>
+          </thead>
+          <tbody id="tabla-auditoria-body"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
+
