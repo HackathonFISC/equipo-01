@@ -35,9 +35,11 @@ def _postulacion(conn):
     return db.crear_postulacion(conn, "p1", "o1")
 
 
-def test_crea_las_cinco_tablas(conn):
+def test_crea_las_seis_tablas(conn):
     nombres = {f["name"] for f in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert {"perfiles", "ofertas", "postulaciones", "postulaciones_historial", "decisiones"} <= nombres
+    assert {
+        "perfiles", "ofertas", "postulaciones", "postulaciones_historial", "decisiones", "descartes",
+    } <= nombres
 
 
 def test_crear_tablas_es_idempotente(conn):
@@ -81,12 +83,12 @@ def test_clave_foranea_exige_perfil_y_oferta(conn):
 
 def test_embudo_completo_deja_historial_en_orden(conn):
     pid = _postulacion(conn)
-    for estado in ["aprobado", "enviado", "entrevista", "contratado"]:
+    for estado in ["aprobado", "consentido", "enviado", "entrevista", "contratado"]:
         db.cambiar_estado(conn, pid, estado, f"paso a {estado}")
     h = db.historial(conn, pid)
     assert [(x["estado_anterior"], x["estado_nuevo"]) for x in h] == [
-        (None, "preseleccionado"), ("preseleccionado", "aprobado"), ("aprobado", "enviado"),
-        ("enviado", "entrevista"), ("entrevista", "contratado"),
+        (None, "preseleccionado"), ("preseleccionado", "aprobado"), ("aprobado", "consentido"),
+        ("consentido", "enviado"), ("enviado", "entrevista"), ("entrevista", "contratado"),
     ]
     assert h[1]["motivo"] == "paso a aprobado"
     assert db.obtener_postulacion(conn, pid)["estado"] == "contratado"
@@ -103,6 +105,7 @@ def test_no_seleccionado_es_final(conn):
 def test_transicion_invalida_desde_enviado(conn, nuevo):
     pid = _postulacion(conn)
     db.cambiar_estado(conn, pid, "aprobado", "ok")
+    db.cambiar_estado(conn, pid, "consentido", "ok")
     db.cambiar_estado(conn, pid, "enviado", "ok")
     antes = db.historial(conn, pid)
     with pytest.raises(ValueError):
@@ -116,6 +119,16 @@ def test_saltarse_aprobado_es_invalido(conn):
     with pytest.raises(ValueError):
         db.cambiar_estado(conn, pid, "enviado", "sin aprobación humana")
     assert len(db.historial(conn, pid)) == 1
+
+
+def test_saltarse_consentido_es_invalido(conn):
+    """aprobado -> enviado ya no existe: sin consentimiento del joven no se envía (Ley 81 de 2019)."""
+    pid = _postulacion(conn)
+    db.cambiar_estado(conn, pid, "aprobado", "ok")
+    with pytest.raises(ValueError):
+        db.cambiar_estado(conn, pid, "enviado", "sin consentimiento")
+    assert db.obtener_postulacion(conn, pid)["estado"] == "aprobado"
+    assert len(db.historial(conn, pid)) == 2
 
 
 def test_cambiar_estado_de_postulacion_inexistente(conn):
