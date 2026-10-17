@@ -1291,7 +1291,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const previos = idsActuales(clave);
     await conBoton(boton, async () => {
       if (aplicarEstado(await llamarApi("/api/cargar-data", { tipo, item_id: itemId }))) {
-        mostrarToast(`${tipo === "oferta" ? "Oferta cargada" : "Perfil cargado"} desde data/: ${itemId}`);
+        const origen = itemId.startsWith("data/") ? `desde ${itemId}` : "(ejemplo sintético)";
+        mostrarToast(`${tipo === "oferta" ? "Oferta cargada" : "Perfil cargado"} ${origen}`);
         if (tipo === "oferta") activarPestana("tab-ofertas-ley11");
         senalarNuevo(clave, previos, tipo === "oferta" ? "data-oferta" : "data-perfil");
       }

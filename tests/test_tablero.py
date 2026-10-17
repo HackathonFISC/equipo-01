@@ -784,3 +784,43 @@ def test_api_no_aprueba_si_el_auditor_detecto_sesgo(tmp_path: Path, monkeypatch:
             assert (await client.post("/api/orientador/accion", json=aprobar)).status_code == 200
 
     asyncio.run(_ejecutar())
+
+
+def test_cargar_desde_data_lee_el_archivo_y_rotula_lo_sintetico(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """«Cargar desde data/» lee el archivo elegido; lo escrito en el código se rotula como ejemplo sintético (#188)."""
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path)
+
+    async def _ejecutar() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            assert (await client.post("/api/reset")).status_code == 200
+            catalogo = srv.listar_catalogo_data()
+            for item in catalogo["ofertas"] + catalogo["perfiles"]:
+                if item["id"].startswith("data/"):
+                    assert item["etiqueta"].startswith(item["id"])
+                else:
+                    assert item["etiqueta"].startswith("ejemplo sintético")
+
+            # Oferta: el anuncio de data/ofertas pasa por Mercado (reproducir, grabaciones de #139) y la Ley 11
+            # se aplica sobre su texto: CT02 pide edad y queda bloqueada.
+            r = await client.post("/api/cargar-data", json={"tipo": "oferta", "item_id": "data/ofertas/CT02.txt"})
+            assert r.status_code == 200, r.text
+            oferta = next(o for o in r.json()["ofertas"] if o["fuente"] == "data/ofertas/CT02.txt")
+            assert "Recaudaci" in oferta["puesto"] and oferta["bloqueada"] is True
+            assert "sintético" not in oferta["fuente"]
+
+            # Perfil: el JSON de data/perfiles, con sus horarios y evidencias del archivo.
+            r = await client.post("/api/cargar-data", json={"tipo": "perfil", "item_id": "data/perfiles/yaritza.json"})
+            assert r.status_code == 200, r.text
+            perfil = next(p for p in r.json()["perfiles"] if p["id"] == "PERFIL-DATA-P01")
+            assert perfil["modalidad_ingreso"] == "data/perfiles/yaritza.json (sintético)"
+            assert {h["evidencia"] for h in perfil["habilidades"]} >= {"cobro en caja", "atiendo pedidos"}
+            assert perfil["horario_clases_bloques"][0]["hora_inicio"] == "18:30"
+
+            # El mismo archivo dos veces no duplica: 422.
+            r = await client.post("/api/cargar-data", json={"tipo": "perfil", "item_id": "data/perfiles/yaritza.json"})
+            assert r.status_code == 422 and "ya está en el tablero" in r.json()["detail"]
+
+    asyncio.run(_ejecutar())
