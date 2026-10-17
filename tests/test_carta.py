@@ -199,3 +199,50 @@ def test_generar_carta_escribe_el_pdf_ciego(tmp_path):
 def test_la_carta_no_usa_el_llm():
     fuente = Path("puente/tools/carta.py").read_text(encoding="utf-8")
     assert "puente.llm" not in fuente and "generar_estructurado" not in fuente and "generar_texto" not in fuente
+
+
+# ---------------------------------------------------------------- #226: revisión posterior al merge del #217
+
+
+def test_el_texto_de_la_oferta_no_se_ciega_y_la_evidencia_si():
+    """Tapar el corregimiento en el nombre de la empresa («Farmacia [dato omitido]») se lo revelaría a la empresa."""
+    perfil = _perfil(habilidades=[
+        HabilidadPerfil(skill_id="atencion_cliente", evidencia="atiendo pedidos; vivo en Vista Alegre y tengo 20 años"),
+    ])
+    perfil = perfil.model_copy(update={"corregimiento": "Vista Alegre"})
+    oferta = _oferta(habilidades=("atencion_cliente",)).model_copy(update={
+        "empresa": "Farmacia Vista Alegre (Empresa de Prueba)",
+        "puesto": "Cajero(a) con 20 años o más de experiencia, sucursal Vista Alegre",
+    })
+    lineas = contenido_carta(perfil, oferta, taxonomia=TAXONOMIA)
+    assert lineas[0] == "Al equipo de selección de Farmacia Vista Alegre (Empresa de Prueba):"
+    assert lineas[1].startswith("Me postulo al puesto de Cajero(a) con 20 años o más de experiencia, sucursal Vista Alegre.")
+    assert lineas[2] == "- Asistir a clientes: «atiendo pedidos; vivo en [dato omitido] y tengo [dato omitido]»"
+
+
+def test_horario_rotativo_no_se_presenta_como_compatible():
+    rotativo = _oferta().model_copy(update={"horario_tipo": "rotativo"})
+    disponibilidad = next(linea for linea in contenido_carta(_perfil(), rotativo) if linea.startswith("Disponibilidad:"))
+    assert disponibilidad == "Disponibilidad: lunes a viernes, 08:00-17:00."
+
+
+@pytest.mark.parametrize(
+    ("libre", "puesto"),
+    [
+        (("18:00", "23:00"), ("22:00", "06:00")),  # el turno cruza la medianoche
+        (("18:00", "02:00"), ("19:00", "22:00")),  # la disponibilidad cruza la medianoche
+    ],
+)
+def test_franjas_que_cruzan_la_medianoche_no_se_dan_por_compatibles(libre, puesto):
+    perfil = _perfil(horario_libre=[Horario(dias=LUNES_A_VIERNES, hora_inicio=libre[0], hora_fin=libre[1])])
+    oferta = _oferta(horario=Horario(dias=LUNES_A_VIERNES, hora_inicio=puesto[0], hora_fin=puesto[1]))
+    disponibilidad = next(linea for linea in contenido_carta(perfil, oferta) if linea.startswith("Disponibilidad:"))
+    assert "cabe" not in disponibilidad
+
+
+def test_sin_puesto_ni_empresa_no_quedan_huecos():
+    oferta = _oferta().model_copy(update={"puesto": "  ", "empresa": ""})
+    lineas = contenido_carta(_perfil(), oferta, taxonomia=TAXONOMIA)
+    assert lineas[0] == "Al equipo de selección:"
+    assert lineas[1].startswith("Me postulo a esta vacante. Estas son")
+    assert not any(" de :" in linea or "de ." in linea for linea in lineas)
