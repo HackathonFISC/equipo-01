@@ -24,11 +24,12 @@ import math
 import os
 import re
 import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from puente.agents.perfil import quitar_pii
+from puente.agents.perfil import quitar_cedula_y_telefono, quitar_pii
 from puente.schemas import Decision, EstadoPuente
 
 AGENTE = "guardrails"
@@ -51,8 +52,13 @@ MENSAJE_AUDIO = "Todavía no aceptamos notas de voz; escribe tu mensaje o sube u
 RESPUESTA_FUERA_DE_ALCANCE = "Solo atiendo empleo y formación."
 
 # Rutas de archivo: se dejan intactas para no romper la lectura; el texto que sale de ellas
-# lo limpia el agente que lo extrae (Perfil quita la PII antes del LLM).
-CLAVES_SIN_LIMPIAR = frozenset({"cv_ruta", "ruta"})
+# lo limpia el agente que lo extrae (Perfil quita la PII antes del LLM). El corregimiento del
+# formulario también (#95): es justo lo que se guarda del domicilio, y «Barrio Norte» o «Barrio Sur»
+# no pueden quedar como «[DIRECCION]».
+CLAVES_SIN_LIMPIAR = frozenset({"cv_ruta", "ruta", "corregimiento"})
+# Ofertas de empresas: su dirección es la de la empresa, no la de una persona, y Mercado la necesita
+# ("Entrevistas en Edificio Ficticio, piso 2"). De ellas solo se quitan cédula y teléfono (#95).
+CLAVES_OFERTA = frozenset({"ofertas_crudas", "ofertas"})
 
 # Las reglas se aplican sobre el texto normalizado: minúsculas, sin acentos, espacios simples.
 REGLAS_INYECCION: dict[str, re.Pattern[str]] = {
@@ -377,18 +383,24 @@ def limpiar_entrada(valor: Any) -> Any:
     """Copia de `valor` con cédula, teléfono y dirección exacta quitados de cada texto.
 
     Recorre dicts, listas y tuplas; los bytes, números y objetos se dejan igual, y las claves
-    de `CLAVES_SIN_LIMPIAR` (rutas) también. El grafo (#10) la llama sobre el estado inicial
-    antes de `graph.invoke`, así el dato crudo nunca se guarda en el checkpoint.
+    de `CLAVES_SIN_LIMPIAR` (rutas, corregimiento) también. Dentro de `CLAVES_OFERTA` solo se
+    quitan cédula y teléfono. El grafo (#10) la llama sobre el estado inicial antes de
+    `graph.invoke`, así el dato crudo nunca se guarda en el checkpoint.
     """
+    return _limpiar(valor, quitar_pii)
+
+
+def _limpiar(valor: Any, limpiar_texto: Callable[[str], str]) -> Any:
     if isinstance(valor, str):
-        return quitar_pii(valor)
+        return limpiar_texto(valor)
     if isinstance(valor, dict):
         return {
-            k: v if k in CLAVES_SIN_LIMPIAR else limpiar_entrada(v)
+            k: v if k in CLAVES_SIN_LIMPIAR
+            else _limpiar(v, quitar_cedula_y_telefono if k in CLAVES_OFERTA else limpiar_texto)
             for k, v in valor.items()
         }
     if isinstance(valor, (list, tuple)):
-        return type(valor)(limpiar_entrada(v) for v in valor)
+        return type(valor)(_limpiar(v, limpiar_texto) for v in valor)
     return valor
 
 
