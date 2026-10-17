@@ -565,6 +565,38 @@ def _calcular_metricas_impacto(estado: dict[str, Any]) -> dict[str, Any]:
     return base_metricas
 
 
+# Trazas honestas (#193): lo que hace el código del tablero (stubs, altas desde el formulario o el catálogo)
+# queda a nombre de «tablero». «mercado» y «perfil» solo aparecen cuando corre su agente de `puente/agents`
+# (la vista del joven sí usa el agente Perfil). Las acciones de personas siguen como «orientador_humano».
+AGENTE_TABLERO = "tablero"
+
+
+def _stub_del_tablero(stub: Callable[[dict], dict], agente: str) -> Callable[[dict], dict]:
+    """El stub del grafo para el nodo `agente`, con sus Decisiones a nombre de «tablero» (#193).
+
+    En el tablero las ofertas y los perfiles ya llegan estructurados: el stub solo los valida y el agente
+    Mercado o Perfil no corre. Llamar a los agentes reales pediría LLM o una grabación por cada texto nuevo.
+    """
+
+    def nodo(estado_g: dict[str, Any]) -> dict[str, Any]:
+        cambios = stub(estado_g)
+        previas = len(estado_g.get("decisiones") or [])
+        decisiones = list(cambios.get("decisiones") or [])
+        nuevas = [Decision.model_validate(_serializar_decision(d)) for d in decisiones[previas:]]
+        decisiones[previas:] = [
+            d.model_copy(
+                update={
+                    "agente": AGENTE_TABLERO,
+                    "razon": f"Stub del nodo {agente} en el tablero; el agente {agente} no corrió. {d.razon}",
+                }
+            )
+            for d in nuevas
+        ]
+        return {**cambios, "decisiones": decisiones}
+
+    return nodo
+
+
 def _compilar_grafo_tablero(
     estado: dict[str, Any],
     modelos_perfiles: list[Perfil],
@@ -645,8 +677,8 @@ def _compilar_grafo_tablero(
     checkpointer = checkpointer_sqlite(ruta_cp)
     grafo = construir_grafo(
         nodos={
-            "mercado": stub_mercado,
-            "perfil": stub_perfil,
+            "mercado": _stub_del_tablero(stub_mercado, "mercado"),
+            "perfil": _stub_del_tablero(stub_perfil, "perfil"),
             "matching": nodo_matching_grafo,
             "auditor": _nodo_auditor_tablero,
             "formacion": nodo_formacion,
@@ -803,7 +835,7 @@ def recalcular_pipeline_tablero(
             for d in (salida_grafo.get("decisiones") or [])
             if _serializar_decision(d).get("agente") in ("matching", "formacion", "auditor")
         ]
-        # Si ya había decisiones manuales previas (orientador, mercado, perfil, guardrails), conservarlas antes
+        # Si ya había decisiones manuales previas (orientador, tablero, guardrails), conservarlas antes
         previas_manuales = [
             d
             for d in (estado.get("decisiones") or [])
@@ -1338,6 +1370,12 @@ def procesar_accion_orientador(
 
     # 4. APROBAR: exige el consentimiento explícito del joven o del orientador, registra Consentimiento + Decision y reanuda el grafo (#49, #124)
     if req.accion == "aprobar":
+        # Con sesgo del Auditor el caso volvió a Matching: la API frena igual que el botón, 422 sin efectos (#189).
+        if (estado.get("auditoria") or {}).get("sesgo_detectado"):
+            raise ErrorValidacionTablero(
+                "El Auditor detectó sesgo en este lote: cambiar el nombre o el género altera el resultado. "
+                "No se puede aprobar hasta que el caso vuelva a pasar el Auditor sin sesgo; no se envió nada."
+            )
         # El «no» del joven en /joven (#52) manda sobre la casilla del orientador: 422 sin efectos.
         if _consentimiento_rechazado_por_joven(estado, req.perfil_id, req.oferta_id):
             raise ErrorValidacionTablero(
@@ -1584,13 +1622,13 @@ def analizar_nueva_oferta_texto(
         estado,
         {
             "timestamp": ahora,
-            "agente": "mercado",
+            # El tablero revisa la oferta con las reglas en código; el agente Mercado (LLM) no corre aquí (#193).
+            "agente": AGENTE_TABLERO,
             "entrada_resumen": f"Nueva oferta {nuevo_id} ({puesto_limpio} en {req.corregimiento})",
             "salida_resumen": f"bloqueada={bloqueada} | alertas={len(alertas)}",
             "razon": (
-                alertas[0]["regla"]
-                if alertas
-                else "Oferta validada sin requisitos discriminatorios y mapeada a taxonomía."
+                (alertas[0]["regla"] if alertas else "Reglas de la Ley 11 de 2005 en código: sin requisitos discriminatorios")
+                + " · campos y habilidades tal como llegaron del formulario o del catálogo, sin el agente Mercado"
             ),
         },
     )
@@ -1690,10 +1728,14 @@ def registrar_nuevo_perfil(
         estado,
         {
             "timestamp": ahora,
-            "agente": "perfil",
+            # El tablero arma el perfil con lo que llegó; el agente Perfil (LLM) no corre aquí (#193).
+            "agente": AGENTE_TABLERO,
             "entrada_resumen": f"Nuevo perfil {nuevo_id} ({req.corregimiento})",
-            "salida_resumen": f"{len(habs)} habilidad(es) con evidencia literal sin PII; Matching recalculado",
-            "razon": "Extracción de habilidades con cita literal limpia de PII.",
+            "salida_resumen": f"{len(habs)} habilidad(es) registradas; Matching recalculado",
+            "razon": (
+                "Habilidades tal como llegaron del formulario o del catálogo, cada una con el relato sin PII "
+                "como evidencia; sin el agente Perfil, que no extrajo ni verificó nada."
+            ),
         },
     )
     return recalcular_pipeline_tablero(estado, registrar_trazas=True)
