@@ -1,0 +1,32 @@
+{
+  "hash": "709376a6d96084131613b528f728a95d134646d67c7a8c6b1d8513920ad3b95d",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "perfil",
+  "esquema": "PerfilExtraido",
+  "salida": {
+    "habilidades": [
+      {
+        "skill_id": "registro_datos",
+        "evidencia": "Registro los datos de las ventas del taller de mi papá en una planilla cada semana."
+      },
+      {
+        "skill_id": "excel_basico",
+        "evidencia": "Hice un curso de Excel básico en el colegio."
+      }
+    ],
+    "edad": null,
+    "corregimiento": null,
+    "ubicacion_texto": null,
+    "salario_minimo": null,
+    "horario_libre": [],
+    "horario_clases": [],
+    "transcripcion_literal": null
+  },
+  "uso": {
+    "entrada": 2518,
+    "salida": 167
+  },
+  "creado": "2026-10-17T03:19:42+00:00"
+}

@@ -922,9 +922,11 @@ def _entorno_llm() -> Iterator[None]:
         from dotenv import load_dotenv
 
         load_dotenv(override=False)
-    previos = {nombre: os.environ.get(nombre) for nombre in ("LLM_MODO", "LLM_DIR_GRABACIONES")}
-    os.environ.setdefault("LLM_MODO", MODO_LLM_POR_DEFECTO)
-    os.environ.setdefault("LLM_DIR_GRABACIONES", str(DIR_GRABACIONES))
+    por_defecto = {"LLM_MODO": MODO_LLM_POR_DEFECTO, "LLM_DIR_GRABACIONES": str(DIR_GRABACIONES)}
+    previos = {nombre: os.environ.get(nombre) for nombre in por_defecto}
+    for nombre, valor in por_defecto.items():
+        if not (os.environ.get(nombre) or "").strip():  # vacío cuenta como no definido (.env.example trae «LLM_DIR_GRABACIONES=»)
+            os.environ[nombre] = valor
     try:
         yield
     finally:
