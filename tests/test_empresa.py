@@ -374,3 +374,64 @@ def test_con_puente_outbox_el_ics_que_confirma_la_empresa_va_a_esa_carpeta(
         assert _accion(cliente, estado, accion="aceptar", oferta_id=CHORRERA, ref=ref).status_code == 200
         assert cliente.get(f"/api/empresa/{SUPER}/ics/{CHORRERA}/{ref}", headers=_cred(estado)).status_code == 200
     assert list(carpeta.glob(f"{empresa.PREFIJO_ICS}{CHORRERA}_*.ics"))  # el .ics confirmado quedó ahí
+
+
+# ---------------------------------------------------------------- #235: las rutas viejas ya no saltan el código de la empresa
+
+
+def _estado_y_avisos(cliente: TestClient, estado: dict, tmp_path: Path) -> tuple[str, int]:
+    """Estado de la postulación de Yaritza a la vacante del súper y cuántos avisos al joven hay en outbox."""
+    post = next(p for p in estado["postulaciones"] if p["perfil_id"] == YARITZA and p["oferta_id"] == CHORRERA)
+    avisos = len(list((tmp_path / "outbox").glob("joven_*"))) if (tmp_path / "outbox").exists() else 0
+    return post["estado"], avisos
+
+
+@pytest.mark.parametrize("tipo", ["rechaza", "cubierta"])
+def test_evento_de_empresa_sin_codigo_ya_no_rechaza_ni_cubre(entorno, tipo: str) -> None:
+    """`POST /api/empresa/evento` con rechaza o cubierta daba 200 sin código y dejaba la pareja en no_seleccionado sin
+    avisar al joven. Ahora responde 409 y no cambia nada (#235)."""
+    cliente, estado, tmp_path = entorno
+    _aprobar(cliente, YARITZA, CHORRERA)
+    antes = _estado_y_avisos(cliente, estado, tmp_path)
+    assert antes[0] == "enviado"
+
+    r = cliente.post(
+        "/api/empresa/evento",
+        json={"tipo": tipo, "perfil_id": YARITZA, "oferta_id": CHORRERA, "empresa": "Cualquiera", "nota": "x"},
+    )
+    assert r.status_code == 409
+    assert "/empresa/lista-corta" in r.json()["detail"] and "código" in r.json()["detail"]
+    assert _estado_y_avisos(cliente, estado, tmp_path) == antes  # ni estado ni avisos cambiaron
+    assert _estado_sqlite(tmp_path / "empresa.db", YARITZA, CHORRERA) == "enviado"
+
+
+def test_la_ruta_oficial_para_rechazar_sigue_funcionando_con_codigo(entorno) -> None:
+    """El 409 no toca el camino bueno: rechazar con el código de la empresa, por la lista corta, sigue dando 200."""
+    cliente, estado, _ = entorno
+    _aprobar(cliente, YARITZA, CHORRERA)
+    [candidato] = _vacante(_lista(cliente, estado), CHORRERA)["candidatos"]
+    r = _accion(cliente, estado, accion="rechazar", oferta_id=CHORRERA, ref=candidato["ref"], nota="eligió otro perfil")
+    assert r.status_code == 200, r.text
+
+
+def test_postulaciones_de_la_empresa_piden_codigo_y_son_ciegas(entorno) -> None:
+    """Sin código no hay lista; con el código, cada empresa ve solo lo suyo y sin `perfil_id` ni nombre (#235)."""
+    cliente, estado, _ = entorno
+    _aprobar(cliente, YARITZA, CHORRERA)
+    assert cliente.get("/api/empresa/postulaciones").status_code == 401
+    assert cliente.get("/api/empresa/postulaciones", headers={"X-Token-Empresa": "no-es-el-codigo"}).status_code == 401
+
+    r = cliente.get("/api/empresa/postulaciones", headers=_cred(estado, SUPER))
+    assert r.status_code == 200
+    [fila] = r.json()["postulaciones"]
+    assert fila["oferta_id"] == CHORRERA and fila["estado"] == "enviado"
+    texto = r.text
+    for dato in ("perfil_id", "nombre_perfil", "PERFIL-", "Yaritza", "yaritza"):
+        assert dato not in texto, dato
+    # La misma referencia opaca con que la empresa responde en la lista corta.
+    [candidato] = _vacante(_lista(cliente, estado), CHORRERA)["candidatos"]
+    assert fila["ref"] == candidato["ref"]
+
+    # Otra empresa, con su propio código, no ve las postulaciones del súper.
+    ajena = cliente.get("/api/empresa/postulaciones", headers=_cred(estado, PROGRESO))
+    assert ajena.status_code == 200 and ajena.json()["postulaciones"] == []

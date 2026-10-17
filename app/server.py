@@ -272,6 +272,11 @@ class UmbralesSolverRequest(BaseModel):
     orientador: str = Field(default="Orientadora Ana Gómez", min_length=2, max_length=120)
 
 
+MENSAJE_RESPUESTA_SOLO_EN_LISTA_CORTA = (
+    "Rechazar o cubrir una vacante se hace desde /empresa/lista-corta, con el código de la empresa."
+)
+
+
 class EventoEmpresaTableroRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -2988,22 +2993,19 @@ async def endpoint_empresa_pagina(_request: Request) -> FileResponse:
     return FileResponse(RUTA_STATIC / "empresa.html")
 
 
-async def endpoint_empresa_postulaciones(_request: Request) -> JSONResponse:
-    """Devuelve las postulaciones enviadas a la empresa sin exponer datos internos del orientador (#168)."""
-    postulaciones_empresa = [
-        {
-            "id": p.get("id"),
-            "perfil_id": p.get("perfil_id"),
-            "nombre_perfil": p.get("nombre_perfil"),
-            "oferta_id": p.get("oferta_id"),
-            "puesto": p.get("puesto"),
-            "empresa": p.get("empresa"),
-            "estado": p.get("estado"),
-        }
-        for p in ESTADO_GLOBAL.get("postulaciones", [])
-        if p.get("estado") in (db.ENVIADO, db.ENTREVISTA, db.CONTRATADO, db.NO_SELECCIONADO)
-    ]
-    return JSONResponse({"postulaciones": postulaciones_empresa})
+async def endpoint_empresa_postulaciones(request: Request) -> JSONResponse:
+    """Las postulaciones enviadas a la empresa dueña del código, ciegas y solo de sus vacantes (#235).
+
+    Antes no pedía código y mezclaba las de todas las empresas con el nombre de cada joven.
+    """
+    estado = empresa._estado_actual()
+    empresa_id = empresa.empresa_del_token(estado, empresa._token_de(request))
+    if empresa_id is None:
+        return JSONResponse(
+            {"detail": "Falta el código de la empresa o no es correcto. Usa el enlace que te dio Puente."},
+            status_code=401,
+        )
+    return JSONResponse({"postulaciones": empresa.postulaciones_ciegas(estado, empresa_id)})
 
 
 async def endpoint_empresa_evento(request: Request) -> JSONResponse:
@@ -3012,6 +3014,9 @@ async def endpoint_empresa_evento(request: Request) -> JSONResponse:
         return err_resp  # type: ignore[return-value]
     try:
         req = EventoEmpresaTableroRequest.model_validate(datos)
+        if req.tipo in ("rechaza", "cubierta"):
+            # Sin código de empresa y sin `evento_empresa` (que avisa al joven y recalcula) solo cambiaba el estado.
+            return JSONResponse({"detail": MENSAJE_RESPUESTA_SOLO_EN_LISTA_CORTA}, status_code=409)
         if req.perfil_id and not _buscar_perfil(ESTADO_GLOBAL, req.perfil_id):
             return JSONResponse({"detail": f"Perfil '{req.perfil_id}' no encontrado."}, status_code=404)
         registrar_evento_empresa_tablero(

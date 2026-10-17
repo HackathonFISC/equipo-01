@@ -1004,8 +1004,10 @@ def test_issue_168_roles_umbrales_tocumen_y_panel_operacion(
             assert r_emp.json().get("ok") is True
             assert "decisiones_db" not in r_emp.json()
 
-            # En /api/empresa/postulaciones la empresa solo ve postulaciones enviadas
-            r_post_emp = await client.get("/api/empresa/postulaciones")
+            # En /api/empresa/postulaciones cada empresa ve solo las suyas, con su código y sin datos de la persona (#235)
+            assert (await client.get("/api/empresa/postulaciones")).status_code == 401
+            token_empresa = srv.ESTADO_GLOBAL["_tokens_empresa"]["supermercado-oeste-s-a"]
+            r_post_emp = await client.get("/api/empresa/postulaciones", headers={"X-Token-Empresa": token_empresa})
             assert r_post_emp.status_code == 200
             assert "postulaciones" in r_post_emp.json()
 
