@@ -5,7 +5,7 @@ habilidades que la oferta pide y el perfil respalda (si son menos de 2, completa
 evidencia), cada una con su frase literal, y la disponibilidad. Nunca lleva edad, género,
 corregimiento, estado civil, hijos, presupuesto, salario pedido ni ofertas descartadas.
 
-La evidencia del joven pasa por `cegar()`, igual que en el CV; toda línea pasa por `limpiar_pii()`.
+La evidencia del joven y el nombre de cada habilidad pasan por `cegar()`, igual que en el CV; toda línea pasa por `limpiar_pii()`.
 El texto de la oferta (empresa y puesto) no se ciega: lo escribió la empresa, y tapar ahí el
 corregimiento del joven ("Farmacia [dato omitido]") se lo revelaría (#226). El nombre va tal como lo
 da la persona y solo si lo dio (#123); Puente no lo agrega ni lo quita.
