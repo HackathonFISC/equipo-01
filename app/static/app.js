@@ -31,6 +31,7 @@ const AGENTES = {
   auditor: { nombre: "Auditor", icono: "flask" },
   formacion: { nombre: "Formación", icono: "cap" },
   orientador_humano: { nombre: "Orientador", icono: "check" },
+  tablero: { nombre: "Tablero", icono: "list" },
   consentimiento: { nombre: "Consentimiento", icono: "check" },
   postulacion: { nombre: "Postulación", icono: "send" },
 };
@@ -1359,7 +1360,7 @@ document.addEventListener("DOMContentLoaded", () => {
         document.getElementById("no-puesto").value = "";
         document.getElementById("no-empresa").value = "";
         document.getElementById("no-requisitos").value = "";
-        mostrarToast("El agente Mercado analizó la oferta con la Ley 11 de 2005.");
+        mostrarToast("Oferta revisada con las reglas de la Ley 11 de 2005 y Matching recalculado.");
         senalarNuevo("ofertas", previas, "data-oferta");
       }
     });
@@ -1395,7 +1396,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const previos = idsActuales(clave);
     await conBoton(boton, async () => {
       if (aplicarEstado(await llamarApi("/api/cargar-data", { tipo, item_id: itemId }))) {
-        mostrarToast(`${tipo === "oferta" ? "Oferta cargada" : "Perfil cargado"} desde data/: ${itemId}`);
+        const origen = itemId.startsWith("data/") ? `desde ${itemId}` : "(ejemplo sintético)";
+        mostrarToast(`${tipo === "oferta" ? "Oferta cargada" : "Perfil cargado"} ${origen}`);
         if (tipo === "oferta") activarPestana("tab-ofertas-ley11");
         senalarNuevo(clave, previos, tipo === "oferta" ? "data-oferta" : "data-perfil");
       }

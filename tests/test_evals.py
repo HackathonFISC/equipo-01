@@ -31,6 +31,7 @@ CONTEO_ESPERADO = {
     "horario_tirilla": 1,
     "horario_validacion": 1,
     "redactor_puente": 3,  # #157: edad con presencia, sexo y «vivir cerca de».
+    "micromision": 4,  # #158: correcta, incorrecta, vacía y el contrafactual del Auditor
 }
 
 
@@ -114,6 +115,7 @@ def test_ids_siguen_el_formato_pedido(casos):
         "horario_tirilla": "HOR",
         "horario_validacion": "HOR",
         "redactor_puente": "RED",
+        "micromision": "MIC",
     }
     for caso in casos["casos"]:
         assert caso["id"].startswith(prefijos[caso["categoria"]] + "-")
