@@ -759,7 +759,7 @@ def test_fase2_demo_con_llm_claude_usa_llm_puente(tmp_path, monkeypatch, capsys,
 TELEGRAM_FALSO = {
     "TELEGRAM_BOT_TOKEN": "token-ficticio",
     "TELEGRAM_CHAT_ID_EMPRESA": "chat-empresa-ficticio",
-    "TELEGRAM_CHAT_ID_JOVEN": "chat-joven-ficticio",
+    "TELEGRAM_CHATS_JOVENES": "yaritza=chat-joven-ficticio",  # un chat por joven (#84)
 }
 
 

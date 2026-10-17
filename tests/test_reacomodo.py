@@ -356,7 +356,7 @@ def test_demo_por_consola_con_vacante_cubierta_mientras_espera(tmp_path, capsys)
 def test_nodo_avisos_manda_los_del_joven_y_deja_los_del_orientador(tmp_path, monkeypatch, caso):
     _, estado = caso
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token-ficticio")
-    monkeypatch.setenv("TELEGRAM_CHAT_ID_JOVEN", "chat-joven-ficticio")
+    monkeypatch.setenv("TELEGRAM_CHATS_JOVENES", "carlos=chat-carlos-ficticio,maria=chat-maria-ficticio")
     enviados = []
 
     def transporte(token, chat_id, texto, adjuntos):
@@ -367,7 +367,7 @@ def test_nodo_avisos_manda_los_del_joven_y_deja_los_del_orientador(tmp_path, mon
     nodo = g.crear_nodo_avisos(outbox=tmp_path / "outbox", enviar_joven=transporte)
     cambios = nodo({**estado, "avisos_pendientes": pendientes})
 
-    assert [chat for chat, _ in enviados] == ["chat-joven-ficticio"] * 2
+    assert [chat for chat, _ in enviados] == ["chat-carlos-ficticio", "chat-maria-ficticio"]  # cada joven, su chat
     assert "Carlos Ficticio" in enviados[0][1] and "María Ficticia" in enviados[1][1]
     assert [a["para"] for a in cambios["avisos_pendientes"]] == ["orientador"]
     decisiones = [d for d in cambios["decisiones"] if d.agente == "avisos"]

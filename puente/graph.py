@@ -758,7 +758,10 @@ def crear_nodo_avisos(*, outbox: str | Path | None = None, enviar_joven: Enviado
             if aviso.get("para") != "joven":
                 quedan.append(aviso)
                 continue
-            envio = enviar_al_joven(aviso["texto"], outbox=carpeta, enviar=enviar_joven)
+            # perfil_id elige el chat propio del joven (TELEGRAM_CHATS_JOVENES, #84) y nombra su outbox/joven_<id>_*.txt
+            envio = enviar_al_joven(
+                aviso["texto"], perfil_id=aviso.get("perfil_id") or "", outbox=carpeta, enviar=enviar_joven
+            )
             if not envio.ok:
                 quedan.append(aviso)
             archivo = f", {envio.ruta.name}" if envio.ruta else ""
