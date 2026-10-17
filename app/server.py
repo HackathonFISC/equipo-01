@@ -10,6 +10,7 @@ Toda la lógica de negocio vive en `puente/`:
 from __future__ import annotations
 
 import copy
+import json
 import os
 import re
 import sqlite3
@@ -19,7 +20,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from starlette.applications import Starlette
@@ -33,6 +33,7 @@ from puente.agents.formacion import nodo_formacion
 from puente.agents.postulacion import consentimiento_otorgado, consentimientos_para, postular
 from puente.graph import (
     aprobacion_pendiente,
+    checkpointer_sqlite,
     config_caso,
     construir_grafo,
     negaron_consentimiento,
@@ -106,9 +107,9 @@ class AccionOrientadorRequest(BaseModel):
     nota_edicion: str = Field(default="", max_length=500)
     mensaje_empresa: str = Field(default="", max_length=1000)
     orientador: str = Field(default="Orientadora Ana Gómez", min_length=2, max_length=120)
-    consentimiento_joven: bool = Field(
-        default=True,
-        description="Casilla 'el joven consintió' confirmada por el orientador (#49)",
+    consentimiento_joven: bool | None = Field(
+        default=None,
+        description="Casilla 'el joven consintió' confirmada explícitamente por el orientador (#49, #124)",
     )
     consentidos: list[str] | None = Field(
         default=None,
@@ -221,6 +222,120 @@ def _conectar_db_estado(estado: dict[str, Any]) -> sqlite3.Connection:
     return db.conectar(ruta_db)
 
 
+def _ruta_checkpoints_para_db(ruta_db: str | Path) -> Path:
+    """Archivo SQLite propio para el checkpointer de LangGraph (aparte de puente.db, #122)."""
+    env_cp = os.getenv("PUENTE_CHECKPOINTS")
+    if env_cp:
+        return Path(env_cp).resolve()
+    p = Path(ruta_db).resolve()
+    return p.with_name(f"{p.stem}_checkpoints.db")
+
+
+def _asegurar_tabla_tablero_estado(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tablero_estado (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            estado_json TEXT NOT NULL,
+            actualizado_en TEXT NOT NULL
+        )
+        """
+    )
+    conn.commit()
+
+
+def _guardar_estado_tablero_db(estado: dict[str, Any]) -> None:
+    """Persiste el estado del tablero en SQLite (`tablero_estado`) para sobrevivir reinicios (#122)."""
+    if not estado.get("_persistir_tablero", True):
+        return
+    serializable = {
+        k: v
+        for k, v in estado.items()
+        if not k.startswith("_") or k == "_tokens_joven"
+    }
+    conn = _conectar_db_estado(estado)
+    try:
+        _asegurar_tabla_tablero_estado(conn)
+        conn.execute(
+            """
+            INSERT INTO tablero_estado (id, estado_json, actualizado_en)
+            VALUES (1, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                estado_json = excluded.estado_json,
+                actualizado_en = excluded.actualizado_en
+            """,
+            (
+                json.dumps(serializable, ensure_ascii=False),
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _cargar_estado_tablero_db(ruta_db: Path) -> dict[str, Any] | None:
+    """Recupera el estado persistido en `tablero_estado` si la base ya existe (#122)."""
+    if not ruta_db.exists():
+        return None
+    conn = db.conectar(ruta_db)
+    try:
+        _asegurar_tabla_tablero_estado(conn)
+        fila = conn.execute(
+            "SELECT estado_json FROM tablero_estado WHERE id = 1"
+        ).fetchone()
+        if fila is None or not fila["estado_json"]:
+            return None
+        cargado = json.loads(str(fila["estado_json"]))
+        if not isinstance(cargado, dict) or not cargado.get("perfiles"):
+            return None
+        cargado["_db_path"] = str(ruta_db)
+        return cargado
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
+def _limpiar_db_y_checkpoints(ruta_db: Path) -> None:
+    """Limpia todas las tablas de SQLite y del checkpointer para un reset limpio (#122)."""
+    if ruta_db.exists():
+        conn = db.conectar(ruta_db)
+        try:
+            _asegurar_tabla_tablero_estado(conn)
+            conn.execute("PRAGMA foreign_keys = OFF;")
+            tablas = [
+                str(r[0])
+                for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                ).fetchall()
+            ]
+            for tabla in tablas:
+                try:
+                    conn.execute(f'DELETE FROM "{tabla}"')
+                except sqlite3.OperationalError:
+                    pass
+            conn.commit()
+            conn.execute("PRAGMA foreign_keys = ON;")
+        finally:
+            conn.close()
+    ruta_cp = _ruta_checkpoints_para_db(ruta_db)
+    if ruta_cp.exists():
+        cp = checkpointer_sqlite(ruta_cp)
+        try:
+            tablas_cp = [
+                str(r[0])
+                for r in cp.conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                ).fetchall()
+            ]
+            for t_cp in tablas_cp:
+                cp.conn.execute(f'DELETE FROM "{t_cp}"')
+            cp.conn.commit()
+        except Exception:
+            pass
+
+
 def _registrar_decision_db(estado: dict[str, Any], decision: Decision | dict[str, Any]) -> dict[str, Any]:
     """Guarda una Decision en SQLite (`decisiones`) y en la lista en memoria del estado."""
     serializada = _serializar_decision(decision)
@@ -290,13 +405,23 @@ def _consentimientos_combinados(estado: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _consentimiento_vigente(estado: dict[str, Any], perfil_id: str, oferta_id: str) -> bool:
-    """False solo si el último registro de la pareja es un «no» (#52); sin registro, lo confirma el orientador (#49)."""
+    """True solo si existe un registro explícito de la pareja y el último es «sí» (#124, #52)."""
     propios = [
         c
         for c in _consentimientos_combinados(estado)
         if c.get("perfil_id") == perfil_id and c.get("oferta_id") == oferta_id
     ]
-    return not propios or bool(propios[-1].get("otorgado"))
+    return bool(propios and propios[-1].get("otorgado"))
+
+
+def _consentimiento_rechazado_por_joven(estado: dict[str, Any], perfil_id: str, oferta_id: str) -> bool:
+    """True si el último registro de la pareja en consentimientos es un «no» (#52, #54)."""
+    propios = [
+        c
+        for c in _consentimientos_combinados(estado)
+        if c.get("perfil_id") == perfil_id and c.get("oferta_id") == oferta_id
+    ]
+    return bool(propios and not propios[-1].get("otorgado"))
 
 
 def _construir_modelos_desde_estado(
@@ -436,15 +561,12 @@ def _calcular_metricas_impacto(estado: dict[str, Any]) -> dict[str, Any]:
     return base_metricas
 
 
-def recalcular_pipeline_tablero(
+def _compilar_grafo_tablero(
     estado: dict[str, Any],
-    *,
-    registrar_trazas: bool = True,
-) -> dict[str, Any]:
-    """Compila y ejecuta el grafo real de `puente.graph` hasta el `interrupt()` del orientador (#10, #49)."""
-    modelos_perfiles, mapa_perfiles, modelos_ofertas, mapa_ofertas = (
-        _construir_modelos_desde_estado(estado)
-    )
+    modelos_perfiles: list[Perfil],
+    modelos_ofertas: list[Oferta],
+) -> tuple[Any, dict[str, Any]]:
+    """Compila el grafo del tablero respaldado por `checkpointer_sqlite` (#122)."""
     inyeccion_sesgo = bool(estado.get("sesgo_inyectado_demo", False))
 
     def _nodo_auditor_tablero(estado_g: dict[str, Any]) -> dict[str, Any]:
@@ -500,14 +622,6 @@ def recalcular_pipeline_tablero(
                 aprobacion=aprobacion,
                 conn=conn,
                 outbox=RUTA_OUTBOX,
-                enviar=lambda _chat, _txt, _adj: None if False else {},  # pragma: no cover
-            ) if False else postular(
-                matches_aprob,
-                perfiles_map,
-                ofertas_map,
-                aprobacion=aprobacion,
-                conn=conn,
-                outbox=RUTA_OUTBOX,
                 consentimientos=consentimientos,
             )
         finally:
@@ -521,7 +635,10 @@ def recalcular_pipeline_tablero(
             "decisiones": [*(estado_g.get("decisiones") or []), *res.decisiones],
         }
 
-    checkpointer = InMemorySaver()
+    ruta_db = estado.get("_db_path") or os.getenv("PUENTE_DB") or str(RUTA_DB_TABLERO)
+    estado["_db_path"] = str(ruta_db)
+    ruta_cp = _ruta_checkpoints_para_db(ruta_db)
+    checkpointer = checkpointer_sqlite(ruta_cp)
     grafo = construir_grafo(
         nodos={
             "mercado": stub_mercado,
@@ -533,9 +650,22 @@ def recalcular_pipeline_tablero(
         },
         checkpointer=checkpointer,
     )
-    thread_id = estado.get("thread_id") or f"tablero-{uuid.uuid4().hex[:8]}"
+    thread_id = estado.get("thread_id") or os.getenv("PUENTE_THREAD_ID") or "tablero-principal"
     estado["thread_id"] = thread_id
     cfg_grafo = config_caso(thread_id)
+    return grafo, cfg_grafo
+
+
+def recalcular_pipeline_tablero(
+    estado: dict[str, Any],
+    *,
+    registrar_trazas: bool = True,
+) -> dict[str, Any]:
+    """Compila y ejecuta el grafo real de `puente.graph` hasta el `interrupt()` del orientador (#10, #49)."""
+    modelos_perfiles, mapa_perfiles, modelos_ofertas, mapa_ofertas = (
+        _construir_modelos_desde_estado(estado)
+    )
+    grafo, cfg_grafo = _compilar_grafo_tablero(estado, modelos_perfiles, modelos_ofertas)
 
     excluidos_actuales = list(estado.get("excluidos") or [])
     entradas_perfil = [
@@ -549,6 +679,10 @@ def recalcular_pipeline_tablero(
         "excluidos": excluidos_actuales,
         # Lo que el joven decidió en /joven (#52) llega al grafo: `negaron_consentimiento` (#109) lo lee.
         "consentimientos": list(estado.get("consentimientos") or []),
+        "vacantes_resueltas": [],
+        "reintentos_auditor": 0,
+        "devolver_a_matching": False,
+        "aprobacion": None,
         "decisiones": [],
         "errores": [],
     }
@@ -658,7 +792,7 @@ def recalcular_pipeline_tablero(
     estado["descartados"] = list(descartados_map.values())
     estado["auditoria"] = salida_grafo.get("auditoria") or {}
 
-    # Registrar las decisiones de los nodos centrales en puente.tools.db y mantener compatibilidad
+    # Registrar las decisiones de los nodos centrales en puente.tools.db en orden cronológico real (#124)
     if registrar_trazas:
         decisiones_nodos = [
             _serializar_decision(d)
@@ -671,8 +805,6 @@ def recalcular_pipeline_tablero(
             for d in (estado.get("decisiones") or [])
             if d.get("agente") not in ("matching", "formacion", "auditor")
         ]
-        orden_agentes = {"matching": 0, "formacion": 1, "auditor": 2}
-        decisiones_nodos.sort(key=lambda d: orden_agentes.get(d.get("agente", ""), 99))
 
         conn = _conectar_db_estado(estado)
         try:
@@ -729,6 +861,8 @@ def recalcular_pipeline_tablero(
 
     estado["postulaciones"] = nuevas_postulaciones
     estado["metricas"] = _calcular_metricas_impacto(estado)
+    if registrar_trazas:
+        _guardar_estado_tablero_db(estado)
     return estado
 
 
@@ -745,24 +879,41 @@ def calcular_matches_tablero(
         "excluidos": [],
         "consentimientos": [],
         "sesgo_inyectado_demo": False,
+        "_persistir_tablero": False,
         "_db_path": str(Path(tempfile.gettempdir()) / f"puente_calc_{uuid.uuid4().hex[:8]}.db"),
     }
     recalcular_pipeline_tablero(estado_temp, registrar_trazas=False)
     return estado_temp["matches"]
 
 
-def obtener_datos_iniciales_demo(db_path: str | Path | None = None) -> dict[str, Any]:
-    """Construye el estado inicial ejecutando el grafo real sobre datos de ejemplo (sintéticos)."""
+def obtener_datos_iniciales_demo(
+    db_path: str | Path | None = None,
+    *,
+    reiniciar: bool = False,
+) -> dict[str, Any]:
+    """Construye o recupera el estado del tablero sobre SQLite y `checkpointer_sqlite` (#122)."""
     ruta_db = Path(
         db_path
         or os.getenv("PUENTE_DB")
-        or (Path(tempfile.gettempdir()) / f"puente_demo_{uuid.uuid4().hex[:8]}.db")
-    )
-    if ruta_db.exists() and db_path is None and not os.getenv("PUENTE_DB"):
-        try:
-            ruta_db.unlink()
-        except OSError:
-            pass
+        or RUTA_DB_TABLERO
+    ).resolve()
+
+    if reiniciar:
+        _limpiar_db_y_checkpoints(ruta_db)
+    else:
+        estado_previo = _cargar_estado_tablero_db(ruta_db)
+        if estado_previo is not None:
+            modelos_perfiles, _, modelos_ofertas, _ = _construir_modelos_desde_estado(estado_previo)
+            grafo, cfg_grafo = _compilar_grafo_tablero(
+                estado_previo, modelos_perfiles, modelos_ofertas
+            )
+            estado_previo["_grafo"] = grafo
+            estado_previo["_config_grafo"] = cfg_grafo
+            solicitud_int = aprobacion_pendiente(grafo, cfg_grafo)
+            if solicitud_int is not None:
+                estado_previo["interrupt_pendiente"] = solicitud_int
+            estado_previo["metricas"] = _calcular_metricas_impacto(estado_previo)
+            return estado_previo
 
     perfiles = [
         {
@@ -976,7 +1127,7 @@ def procesar_accion_orientador(
     nota_edicion: str = "",
     mensaje_empresa: str = "",
     orientador: str = "Orientadora Ana Gómez",
-    consentimiento_joven: bool = True,
+    consentimiento_joven: bool | None = None,
     consentidos: list[str] | None = None,
 ) -> dict[str, Any]:
     """Ejecuta aprobar, editar, quitar/quitar_candidato o rechazar reanudando el grafo y registrando en SQLite (#49)."""
@@ -1044,9 +1195,10 @@ def procesar_accion_orientador(
             },
         )
         estado["metricas"] = _calcular_metricas_impacto(estado)
+        _guardar_estado_tablero_db(estado)
         return estado
 
-    # 2. QUITAR CANDIDATO: excluye la pareja, reanuda el grafo con Command(resume={"accion": "quitar", ...}) y recalcula (#49)
+    # 2. QUITAR CANDIDATO: excluye solo el par (perfil_id, oferta_id), reanuda el grafo y recalcula (#49, #124)
     if req.accion in ("quitar_candidato", "quitar"):
         exclusion = {
             "perfil_id": req.perfil_id,
@@ -1056,14 +1208,28 @@ def procesar_accion_orientador(
             "timestamp": ahora,
         }
         estado.setdefault("excluidos", []).append(exclusion)
-        estado["perfiles"] = [
-            p for p in estado["perfiles"] if p["id"] != req.perfil_id
-        ]
+
+        conn = _conectar_db_estado(estado)
+        try:
+            fila = conn.execute(
+                "SELECT id, estado FROM postulaciones WHERE perfil_id = ? AND oferta_id = ?",
+                (req.perfil_id, req.oferta_id),
+            ).fetchone()
+            if fila is not None and fila["estado"] == db.PRESELECCIONADO:
+                db.cambiar_estado(
+                    conn,
+                    int(fila["id"]),
+                    db.NO_SELECCIONADO,
+                    req.nota_edicion or "Retirado de esta vacante por el orientador; Matching recalculado.",
+                )
+        finally:
+            conn.close()
+
         for post in estado["postulaciones"]:
-            if post["perfil_id"] == req.perfil_id:
+            if post["perfil_id"] == req.perfil_id and post["oferta_id"] == req.oferta_id:
                 post["estado"] = EstadoPostulacion.NO_SELECCIONADO.value
                 post["comentario_orientador"] = (
-                    req.nota_edicion or "Retirado por el orientador; Matching recalculado."
+                    req.nota_edicion or "Retirado de esta vacante por el orientador; Matching recalculado."
                 )
 
         if grafo is not None and cfg_grafo is not None:
@@ -1096,7 +1262,7 @@ def procesar_accion_orientador(
                 "entrada_resumen": f"Quitar candidato {req.perfil_id} de {req.oferta_id}",
                 "salida_resumen": f"Pareja ({req.perfil_id}, {req.oferta_id}) excluida; Matching recalculado",
                 "razon": req.nota_edicion
-                or "El orientador retiró al candidato y solicitó recálculo de asignaciones.",
+                or "El orientador retiró al candidato de esta vacante y solicitó recálculo de asignaciones.",
             },
         )
         return recalcular_pipeline_tablero(estado, registrar_trazas=True)
@@ -1163,28 +1329,36 @@ def procesar_accion_orientador(
             },
         )
         estado["metricas"] = _calcular_metricas_impacto(estado)
+        _guardar_estado_tablero_db(estado)
         return estado
 
-    # 4. APROBAR: exige el consentimiento del joven, registra Consentimiento + Decision y reanuda el grafo con Command(resume=...) (#49)
+    # 4. APROBAR: exige el consentimiento explícito del joven o del orientador, registra Consentimiento + Decision y reanuda el grafo (#49, #124)
     if req.accion == "aprobar":
         # El «no» del joven en /joven (#52) manda sobre la casilla del orientador: 422 sin efectos.
-        if not _consentimiento_vigente(estado, req.perfil_id, req.oferta_id):
+        if _consentimiento_rechazado_por_joven(estado, req.perfil_id, req.oferta_id):
             raise ErrorValidacionTablero(
                 f"{req.perfil_id} negó su consentimiento: no acepta que su CV llegue a {req.oferta_id}. "
                 "Postulación no envía nada; el joven puede cambiar su decisión en /joven."
             )
+        tiene_consentimiento = (
+            req.consentimiento_joven is True
+            or (
+                req.consentimiento_joven is None
+                and _consentimiento_vigente(estado, req.perfil_id, req.oferta_id)
+            )
+        )
         lista_consentidos = (
             req.consentidos
             if req.consentidos is not None
-            else ([req.perfil_id] if req.consentimiento_joven else [])
+            else ([req.perfil_id] if tiene_consentimiento else [])
         )
-        if not req.consentimiento_joven or req.perfil_id not in lista_consentidos:
+        if not tiene_consentimiento or req.perfil_id not in lista_consentidos:
             raise ErrorValidacionTablero(
                 f"El candidato {req.perfil_id} no tiene el consentimiento confirmado ('el joven consintió'). "
                 "Postulación no envía ningún dato a la empresa sin consentimiento."
             )
 
-        #Validación de ruta segura en outbox para el par antes de ejecutar
+        # Validación de ruta segura en outbox para el par antes de ejecutar
         _ = _ruta_segura_en_outbox(
             RUTA_OUTBOX, f"cv_{req.perfil_id}_{req.oferta_id}.pdf"
         )
@@ -1307,12 +1481,14 @@ def procesar_accion_orientador(
 
         post_activo["estado"] = EstadoPostulacion.ENVIADO.value
         post_activo["consentimiento_joven"] = True
+        match_activo["consentimiento_joven"] = True
         post_activo["comentario_orientador"] = (
             req.nota_edicion or "Aprobado con consentimiento del joven y enviado a la empresa."
         )
         post_activo["archivos_generados"] = archivos_generados
         estado["estado_grafo"] = "postulacion_ejecutada"
         estado["metricas"] = _calcular_metricas_impacto(estado)
+        _guardar_estado_tablero_db(estado)
         return estado
 
     return estado
@@ -1329,7 +1505,7 @@ def analizar_nueva_oferta_texto(
     habilidades: list[str],
     fuente: str = "Cargada desde Tablero Web (sintética)",
 ) -> dict[str, Any]:
-    """Agrega una nueva oferta validada con Pydantic y `puente.rules.discriminacion` usando ID único con uuid."""
+    """Agrega una nueva oferta tras pasar por `limpiar_entrada`, `evaluar_entrada` y `puente.rules.discriminacion` (#120)."""
     req = NuevaOfertaRequest(
         puesto=puesto,
         empresa=empresa,
@@ -1339,30 +1515,39 @@ def analizar_nueva_oferta_texto(
         habilidades=habilidades,
     )
     ahora = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    texto_lower = req.requisitos_texto.lower()
 
-    patrones_inyeccion = ("ignora", "olvida tus instrucciones", "eres ahora", "system prompt")
-    if any(p in texto_lower for p in patrones_inyeccion):
-        _registrar_decision_db(
-            estado,
-            {
-                "timestamp": ahora,
-                "agente": "guardrails",
-                "entrada_resumen": f"Oferta '{req.puesto}' con intento de prompt injection",
-                "salida_resumen": "Inyección marcada; el texto se procesa únicamente como dato literal",
-                "razon": "Regla determinística anti-inyección activada antes de invocar al modelo.",
-            },
-        )
+    # Limpieza de PII (cédula y teléfono en ofertas) y guardrails reales (#9, #120)
+    limpio_oferta = limpiar_entrada(
+        {
+            "ofertas": {
+                "puesto": req.puesto.strip(),
+                "empresa": req.empresa.strip(),
+                "requisitos_texto": req.requisitos_texto,
+            }
+        }
+    )["ofertas"]
+    puesto_limpio = str(limpio_oferta["puesto"])
+    empresa_limpia = str(limpio_oferta["empresa"])
+    requisitos_limpios = str(limpio_oferta["requisitos_texto"])
 
-    bloqueada, alertas = _evaluar_reglas_discriminacion(req.requisitos_texto)
+    resultados_gr = evaluar_entrada(
+        {"texto": f"{puesto_limpio}\n{requisitos_limpios}", "salario": req.salario_mensual}
+    )
+    for r_gr in resultados_gr:
+        _registrar_decision_db(estado, r_gr.decision)
+    rechazo_gr = next((r for r in resultados_gr if not r.ok), None)
+    if rechazo_gr is not None:
+        raise ErrorValidacionTablero(rechazo_gr.respuesta or rechazo_gr.motivo)
+
+    bloqueada, alertas = _evaluar_reglas_discriminacion(requisitos_limpios)
 
     sufijo_uuid = uuid.uuid4().hex[:8].upper()
     nuevo_id = f"OF-{sufijo_uuid}"
 
     _ = Oferta(
         id=nuevo_id,
-        puesto=req.puesto,
-        empresa=req.empresa,
+        puesto=puesto_limpio,
+        empresa=empresa_limpia,
         corregimiento=req.corregimiento,
         salario_mensual=req.salario_mensual,
         horario=Horario(
@@ -1371,7 +1556,7 @@ def analizar_nueva_oferta_texto(
             hora_fin="17:00",
         ),
         habilidades=req.habilidades,
-        requisitos_texto=req.requisitos_texto,
+        requisitos_texto=requisitos_limpios,
         alertas=[a["frase"] for a in alertas],
         bloqueada=bloqueada,
         fuente=fuente,
@@ -1379,13 +1564,13 @@ def analizar_nueva_oferta_texto(
 
     nueva_oferta = {
         "id": nuevo_id,
-        "puesto": req.puesto,
-        "empresa": req.empresa,
+        "puesto": puesto_limpio,
+        "empresa": empresa_limpia,
         "corregimiento": req.corregimiento,
         "salario_mensual": req.salario_mensual,
         "horario": "Lunes a Viernes 08:00-17:00",
         "habilidades": req.habilidades,
-        "requisitos_texto": req.requisitos_texto,
+        "requisitos_texto": requisitos_limpios,
         "alertas": alertas,
         "bloqueada": bloqueada,
         "fuente": fuente,
@@ -1396,7 +1581,7 @@ def analizar_nueva_oferta_texto(
         {
             "timestamp": ahora,
             "agente": "mercado",
-            "entrada_resumen": f"Nueva oferta {nuevo_id} ({req.puesto} en {req.corregimiento})",
+            "entrada_resumen": f"Nueva oferta {nuevo_id} ({puesto_limpio} en {req.corregimiento})",
             "salida_resumen": f"bloqueada={bloqueada} | alertas={len(alertas)}",
             "razon": (
                 alertas[0]["regla"]
@@ -1420,7 +1605,7 @@ def registrar_nuevo_perfil(
     habilidades_ids: list[str] | None = None,
     modalidad_ingreso: str = "Entrevista en Tablero Web (sintético)",
 ) -> dict[str, Any]:
-    """Registra un nuevo joven con validación Pydantic y UUID único (sin sobrescribir perfiles existentes)."""
+    """Registra un nuevo joven tras limpiar PII (`limpiar_entrada`) y evaluar `guardrails` (#9, #120)."""
     req = NuevoPerfilRequest(
         nombre=nombre,
         edad=edad,
@@ -1431,7 +1616,26 @@ def registrar_nuevo_perfil(
         habilidades=habilidades_ids or ["atencion_cliente", "manejo_caja"],
     )
     ahora = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    slug_nom = _slug_seguro(req.nombre, prefijo="JOVEN")
+
+    # Quitar cédula, teléfono y dirección exacta antes de guardar en estado, SQLite o decisiones (#120)
+    entrada_limpia = limpiar_entrada(
+        {
+            "nombre": req.nombre.strip(),
+            "relato_experiencia": req.relato_experiencia,
+            "corregimiento": req.corregimiento,
+        }
+    )
+    nombre_limpio = str(entrada_limpia["nombre"]).strip() or "Joven"
+    relato_limpio = str(entrada_limpia["relato_experiencia"])
+
+    resultados_gr = evaluar_entrada({"texto": relato_limpio, "edad": req.edad})
+    for r_gr in resultados_gr:
+        _registrar_decision_db(estado, r_gr.decision)
+    rechazo_gr = next((r for r in resultados_gr if not r.ok), None)
+    if rechazo_gr is not None:
+        raise ErrorValidacionTablero(rechazo_gr.respuesta or rechazo_gr.motivo)
+
+    slug_nom = _slug_seguro(nombre_limpio, prefijo="JOVEN")
     sufijo_uuid = uuid.uuid4().hex[:6].upper()
     nuevo_id = f"PERFIL-{slug_nom}-{sufijo_uuid}"
 
@@ -1439,14 +1643,14 @@ def registrar_nuevo_perfil(
         {
             "skill_id": sid,
             "nombre": sid.replace("_", " ").title(),
-            "evidencia": req.relato_experiencia,
+            "evidencia": relato_limpio,
         }
         for sid in req.habilidades
     ]
 
     _ = Perfil(
         id=nuevo_id,
-        nombre=req.nombre,
+        nombre=nombre_limpio,
         genero=None,
         edad=req.edad,
         corregimiento=req.corregimiento,
@@ -1467,7 +1671,7 @@ def registrar_nuevo_perfil(
 
     nuevo_p = {
         "id": nuevo_id,
-        "nombre": req.nombre,
+        "nombre": nombre_limpio,
         "genero": "no_especificado",
         "edad": req.edad,
         "corregimiento": req.corregimiento,
@@ -1484,8 +1688,8 @@ def registrar_nuevo_perfil(
             "timestamp": ahora,
             "agente": "perfil",
             "entrada_resumen": f"Nuevo perfil {nuevo_id} ({req.corregimiento})",
-            "salida_resumen": f"{len(habs)} habilidad(es) con evidencia literal; Matching recalculado",
-            "razon": "Extracción de habilidades con cita literal de experiencia informal.",
+            "salida_resumen": f"{len(habs)} habilidad(es) con evidencia literal sin PII; Matching recalculado",
+            "razon": "Extracción de habilidades con cita literal limpia de PII.",
         },
     )
     return recalcular_pipeline_tablero(estado, registrar_trazas=True)
@@ -1536,8 +1740,16 @@ def cargar_desde_catalogo_data(
     tipo: str,
     item_id: str,
 ) -> dict[str, Any]:
-    """Carga una oferta o perfil de ejemplo y ejecuta el grafo real del sistema."""
+    """Carga una oferta o perfil validando que `item_id` pertenezca al catálogo permitido (#120)."""
     req = CargarDataRequest(tipo=tipo, item_id=item_id)  # type: ignore[arg-type]
+    catalogo = listar_catalogo_data()
+    clave_cat = "ofertas" if req.tipo == "oferta" else "perfiles"
+    ids_permitidos = {item["id"] for item in catalogo.get(clave_cat, [])}
+    if ".." in req.item_id or "\\" in req.item_id or req.item_id not in ids_permitidos:
+        raise ErrorValidacionTablero(
+            f"El item_id '{req.item_id}' no existe en el catálogo permitido de '{req.tipo}'."
+        )
+
     if req.tipo == "oferta":
         if "CT11" in req.item_id:
             return analizar_nueva_oferta_texto(
@@ -1779,9 +1991,11 @@ async def endpoint_simular_sesgo(request: Request) -> JSONResponse:
 
 
 async def endpoint_reset(request: Request) -> JSONResponse:
+    ruta_actual = ESTADO_GLOBAL.get("_db_path")
     ESTADO_GLOBAL.clear()
-    ESTADO_GLOBAL.update(obtener_datos_iniciales_demo())
+    ESTADO_GLOBAL.update(obtener_datos_iniciales_demo(db_path=ruta_actual, reiniciar=True))
     anunciar_codigos_joven(ESTADO_GLOBAL)  # #52: códigos nuevos de /joven en la consola
+    _guardar_estado_tablero_db(ESTADO_GLOBAL)
     return await endpoint_estado(request)
 
 
@@ -2136,6 +2350,7 @@ def registrar_consentimiento_joven(
         if m.get("perfil_id") == req.perfil_id and m.get("oferta_id") == req.oferta_id:
             m["consentimiento_joven"] = req.otorgado
     estado["metricas"] = _calcular_metricas_impacto(estado)
+    _guardar_estado_tablero_db(estado)
     return estado
 
 
