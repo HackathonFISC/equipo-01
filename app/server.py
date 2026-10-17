@@ -69,6 +69,8 @@ from urllib.parse import urlsplit
 from pydantic import StrictBool, TypeAdapter
 from starlette.concurrency import run_in_threadpool
 
+# Lista corta ciega de la empresa (#167): su lógica vive en app/empresa.py; aquí solo rutas y anuncio de códigos.
+from app import empresa
 from puente.agents.perfil import (
     MAX_PREGUNTAS,
     PREGUNTAS_ENTREVISTA,
@@ -81,6 +83,8 @@ from puente.graph import cargar_taxonomia_grafo
 from puente.guardrails import EDAD_MAX, EDAD_MIN, evaluar_entrada, limpiar_entrada
 from puente.rules.taxonomia import normalizar_habilidad
 from puente.schemas import DIAS_VALIDOS, EntradaPerfil
+
+from app import joven_fase2  # Vista del joven, fase 2 (#166): la lógica vive en app/joven_fase2.py
 
 RUTA_APP = Path(__file__).resolve().parent
 RUTA_STATIC = RUTA_APP / "static"
@@ -1995,6 +1999,7 @@ async def endpoint_reset(request: Request) -> JSONResponse:
     ESTADO_GLOBAL.clear()
     ESTADO_GLOBAL.update(obtener_datos_iniciales_demo(db_path=ruta_actual, reiniciar=True))
     anunciar_codigos_joven(ESTADO_GLOBAL)  # #52: códigos nuevos de /joven en la consola
+    empresa.anunciar_codigos_empresa(ESTADO_GLOBAL)  # #167: y los de /empresa/lista-corta
     _guardar_estado_tablero_db(ESTADO_GLOBAL)
     return await endpoint_estado(request)
 
@@ -2608,6 +2613,7 @@ RUTA_STATIC.mkdir(parents=True, exist_ok=True)
 @contextlib.asynccontextmanager
 async def _ciclo_de_vida(_app: Starlette):
     anunciar_codigos_joven(ESTADO_GLOBAL)
+    empresa.anunciar_codigos_empresa(ESTADO_GLOBAL)  # #167
     yield
 
 
@@ -2631,6 +2637,18 @@ app = Starlette(
         Route("/api/joven/consentimiento", endpoint_joven_consentimiento, methods=["POST"]),
         Route("/api/joven/{perfil_id}/resultado", endpoint_joven_resultado, methods=["GET"]),
         Route("/api/joven/{perfil_id}/ics/{oferta_id}", endpoint_joven_ics, methods=["GET"]),
+        # Vista del joven, fase 2 (#166)
+        Route("/api/joven/entrevista", joven_fase2.endpoint_iniciar_entrevista, methods=["POST"]),
+        Route("/api/joven/{perfil_id}/entrevista", joven_fase2.endpoint_entrevista, methods=["GET", "POST"]),
+        Route("/api/joven/{perfil_id}/entrevista/terminar", joven_fase2.endpoint_terminar_entrevista, methods=["POST"]),
+        Route("/api/joven/{perfil_id}/tirilla", joven_fase2.endpoint_tirilla, methods=["POST"]),
+        Route("/api/joven/{perfil_id}/tirilla/confirmar", joven_fase2.endpoint_confirmar_tirilla, methods=["POST"]),
+        Route("/api/joven/{perfil_id}/postulaciones", joven_fase2.endpoint_postulaciones, methods=["GET"]),
+        # Lista corta ciega de la empresa (#167)
+        Route("/empresa/lista-corta", empresa.endpoint_pagina, methods=["GET"]),
+        Route("/api/empresa/{empresa_id}/lista-corta", empresa.endpoint_lista, methods=["GET"]),
+        Route("/api/empresa/{empresa_id}/responder", empresa.endpoint_responder, methods=["POST"]),
+        Route("/api/empresa/{empresa_id}/ics/{oferta_id}/{ref}", empresa.endpoint_ics, methods=["GET"]),
         Mount("/static", app=StaticFiles(directory=str(RUTA_STATIC)), name="static"),
     ],
 )

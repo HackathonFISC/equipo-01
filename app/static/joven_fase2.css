@@ -1,0 +1,212 @@
+/* Puente · vista del joven, fase 2 (#166): chat, tirilla y «Mis postulaciones».
+   Usa las variables y clases de joven.css (fase 1); aquí solo lo nuevo. La carga joven_fase2.js. */
+
+/* ---------- Entrevista por chat ---------- */
+
+.f2-mensajes {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.f2-msg {
+  max-width: 88%;
+  padding: 0.55rem 0.8rem;
+  border-radius: var(--radio-l);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.f2-msg[data-de="puente"] {
+  align-self: flex-start;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-bottom-left-radius: var(--radio-s);
+}
+
+.f2-msg[data-de="joven"] {
+  align-self: flex-end;
+  background: var(--brand-soft);
+  border: 1px solid transparent;
+  border-bottom-right-radius: var(--radio-s);
+}
+
+.f2-msg-num {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-2);
+}
+
+.f2-chat-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.f2-etiqueta {
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+
+.acciones.f2-izq {
+  justify-content: flex-start;
+  margin-top: 0.75rem;
+}
+
+/* ---------- Tirilla ---------- */
+
+.f2-revision {
+  border-top: 1px solid var(--border);
+  margin-top: 1rem;
+  padding-top: 1rem;
+}
+
+.f2-bloques {
+  list-style: none;
+  margin: 0.75rem 0;
+  padding: 0;
+  display: grid;
+  gap: 0.6rem;
+}
+
+/* En el teléfono: día, desde y hasta en una fila; materia y «Quitar» en la siguiente. */
+.f2-bloque {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr 1fr;
+  gap: 0.5rem;
+  align-items: end;
+  border: 1px solid var(--border);
+  border-radius: var(--radio);
+  background: var(--surface-2);
+  padding: 0.6rem;
+}
+
+.f2-bloque select,
+.f2-bloque input {
+  padding-left: 0.5rem;
+  padding-right: 0.4rem;
+}
+
+.f2-materia {
+  grid-column: 1 / 3;
+}
+
+.f2-quitar {
+  justify-self: end;
+}
+
+.f2-bloque .f2-problemas {
+  grid-column: 1 / -1;
+}
+
+.f2-problemas {
+  margin: 0.25rem 0 0.5rem;
+  padding: 0.4rem 0.6rem 0.4rem 1.6rem;
+  background: var(--bad-soft);
+  color: var(--bad);
+  border-radius: var(--radio-s);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.f2-guardado {
+  background: var(--ok-soft);
+  color: var(--ok);
+  border-radius: var(--radio);
+  padding: 0.6rem 0.8rem;
+  font-weight: 600;
+  margin-top: 0.75rem;
+}
+
+/* ---------- Mis postulaciones ---------- */
+
+.f2-embudo {
+  list-style: none;
+  counter-reset: f2-paso;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0 0 0.6rem;
+  padding: 0;
+  font-size: 0.85rem;
+}
+
+.f2-embudo li {
+  counter-increment: f2-paso;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.6rem 0.2rem 0.3rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+}
+
+.f2-embudo li::before {
+  content: counter(f2-paso);
+  display: inline-grid;
+  place-items: center;
+  width: 1.3rem;
+  height: 1.3rem;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  font-weight: 700;
+  font-size: 0.75rem;
+}
+
+.f2-embudo li[data-alcanzado="si"] {
+  border-color: var(--ok);
+  background: var(--ok-soft);
+  color: var(--ok);
+  font-weight: 600;
+}
+
+.f2-embudo li[data-alcanzado="si"]::before {
+  content: "✓";
+  border-color: var(--ok);
+  background: var(--ok);
+  color: var(--surface);
+}
+
+.f2-aviso {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border-radius: var(--radio);
+  padding: 0.6rem 0.8rem;
+  margin: 0.5rem 0;
+}
+
+.f2-aviso p {
+  margin: 0.25rem 0 0;
+  color: var(--text);
+}
+
+.f2-no {
+  background: var(--bad-soft);
+  color: var(--bad);
+  border-radius: var(--radio);
+  padding: 0.5rem 0.75rem;
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+
+.btn[aria-pressed="true"] {
+  border-color: var(--brand);
+  box-shadow: inset 0 0 0 1px var(--brand);
+  font-weight: 700;
+}
+
+@media (min-width: 640px) {
+  .f2-bloque {
+    grid-template-columns: 1.4fr 1fr 1fr 2fr auto;
+  }
+
+  .f2-materia {
+    grid-column: auto;
+  }
+}
