@@ -2814,3 +2814,87 @@ mark.m-alerta {
     height: 360px;
   }
 }
+
+/* ---------- Tablero de agentes en Trazas (#315) ---------- */
+
+.agentes-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.agente-card {
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  display: grid;
+  gap: 0.4rem;
+  align-content: start;
+  min-height: 132px;
+  padding: 1rem 1.1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-l);
+}
+
+.agente-card:hover {
+  border-color: var(--border-strong);
+}
+
+.agente-card:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+.agente-card--activo {
+  border-color: var(--accent);
+  box-shadow: var(--ring);
+}
+
+.agente-card__cabeza {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.95rem;
+}
+
+.agente-card__cabeza .icon {
+  color: var(--agente, var(--accent));
+}
+
+.agente-card__n {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-size: 1.9rem;
+  font-weight: 600;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.agente-card__n small {
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-3);
+}
+
+.agente-card__ultima {
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--text-3);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.agente-card__ultima time {
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.agente-card--vacio .agente-card__n {
+  color: var(--text-3);
+}
