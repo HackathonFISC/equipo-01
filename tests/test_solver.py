@@ -579,7 +579,7 @@ def test_cobertura_cero_descarta_en_lista_corta_salvo_oferta_sin_habilidades():
         "puesto": "Cajero(a) de minisúper",
         "empresa": "Minisúper Ficticio El Ahorro",
         "corregimiento": "Vista Alegre",
-        "salario_mensual": 550.0,
+        "salario_mensual": 650.0,
         "habilidades": ["manejo_caja", "atencion_cliente"],
         "bloqueada": False,
     }
@@ -595,17 +595,19 @@ def test_cobertura_cero_descarta_en_lista_corta_salvo_oferta_sin_habilidades():
 
     traslados = construir_matriz_default()
     matches = asignar([maria, yaritza], [oferta_cajero], traslados)
-    ids_corta = [m.perfil_id for m in matches if m.en_lista_corta]
+    ids_corta = [m.perfil_id for m in matches if m.oferta_id != SIN_OFERTA and m.desglose.get("viable")]
     assert "PERFIL-YARITZA" in ids_corta
     assert "maria" not in ids_corta
 
-    descarte_maria = next(m for m in matches if m.perfil_id == "maria" and m.oferta_id == "of-cajero-vista-alegre")
-    assert descarte_maria.en_lista_corta is False
+    descarte_maria = next(m for m in matches if m.perfil_id == "maria")
+    assert descarte_maria.oferta_id == SIN_OFERTA
+    assert descarte_maria.desglose.get("viable") is False
     assert "ninguna habilidad requerida en común" in str(descarte_maria.desglose.get("motivo_descarte"))
     assert set(descarte_maria.brechas) == {"manejo_caja", "atencion_cliente"}
 
     # Si la vacante no exige habilidades, nadie se descarta por cobertura
     matches_sin_req = asignar([maria], [oferta_sin_requisitos], traslados)
-    assert [m.perfil_id for m in matches_sin_req if m.en_lista_corta] == ["maria"]
+    assert [m.perfil_id for m in matches_sin_req if m.oferta_id != SIN_OFERTA and m.desglose.get("viable")] == ["maria"]
+
 
 
