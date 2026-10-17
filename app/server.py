@@ -30,7 +30,13 @@ from starlette.staticfiles import StaticFiles
 
 from puente.agents.auditor import nodo_auditor
 from puente.agents.formacion import nodo_formacion
-from puente.agents.postulacion import agendar_entrevistas, consentimiento_otorgado, consentimientos_para, postular
+from puente.agents.postulacion import (
+    agendar_entrevistas,
+    consentimiento_otorgado,
+    consentimientos_para,
+    decisiones_de_agenda,
+    postular,
+)
 from puente.tools.calendario import ZONA_PANAMA
 from puente.graph import (
     aprobacion_pendiente,
@@ -634,11 +640,15 @@ def _compilar_grafo_tablero(
         conn = _conectar_db_estado(estado)
         try:
             # Cada candidato en su propia franja, con la agenda del nodo de Postulación (#186).
-            matches_aprob, inicios, _avisos = agendar_entrevistas(
+            matches_aprob, inicios, avisos = agendar_entrevistas(
                 matches_aprob, perfiles_map, ofertas_map, conn, desde=datetime.now(ZONA_PANAMA)
             )
+            # Hora de respaldo «por confirmar» o sin ninguna hora: la misma Decision que deja el nodo.
+            de_agenda = decisiones_de_agenda(avisos)
+            for decision in de_agenda:
+                db.registrar_decision(conn, decision)
             if not matches_aprob:
-                return {}
+                return {"decisiones": [*(estado_g.get("decisiones") or []), *de_agenda]} if de_agenda else {}
             res = postular(
                 matches_aprob,
                 perfiles_map,
@@ -659,7 +669,7 @@ def _compilar_grafo_tablero(
                 arch.name for arch in res.archivos
             ]
         return {
-            "decisiones": [*(estado_g.get("decisiones") or []), *res.decisiones],
+            "decisiones": [*(estado_g.get("decisiones") or []), *de_agenda, *res.decisiones],
         }
 
     ruta_db = estado.get("_db_path") or os.getenv("PUENTE_DB") or str(RUTA_DB_TABLERO)
@@ -1484,6 +1494,9 @@ def procesar_accion_orientador(
                 con_fecha, inicios, avisos = agendar_entrevistas(
                     [m_schema], perfiles_map, ofertas_map, conn, desde=datetime.now(ZONA_PANAMA)
                 )
+                for decision in decisiones_de_agenda(avisos):
+                    db.registrar_decision(conn, decision)
+                    estado["decisiones"].append(_serializar_decision(decision))
                 if not con_fecha:
                     raise ValueError(f"sin franja compatible ({avisos[0][1] if avisos else 'sin hora posible'})")
                 res_post = postular(

@@ -750,3 +750,33 @@ def test_el_tablero_respeta_puente_outbox(tmp_path: Path, monkeypatch: pytest.Mo
     )
     assert (carpeta / "cv_PERFIL-YARITZA_OF-CHORRERA-01.pdf").exists()
     assert (carpeta / "entrevista_PERFIL-YARITZA_OF-CHORRERA-01.ics").exists()
+
+
+def test_el_tablero_registra_la_decision_cuando_la_hora_queda_por_confirmar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Si la agenda propone una hora de respaldo, el tablero deja la misma Decision que el nodo (#186)."""
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path)
+    original = srv.agendar_entrevistas
+
+    def con_aviso(matches, *args, **kwargs):
+        siguen, inicios, avisos = original(matches, *args, **kwargs)
+        extra = [((m.perfil_id, m.oferta_id), "aviso de prueba", inicios[(m.perfil_id, m.oferta_id)]) for m in siguen]
+        return siguen, inicios, [*avisos, *extra]
+
+    monkeypatch.setattr(srv, "agendar_entrevistas", con_aviso)
+    estado = obtener_datos_iniciales_demo(db_path=tmp_path / "test_puente.db")
+    procesar_accion_orientador(
+        estado, accion="aprobar", perfil_id="PERFIL-YARITZA", oferta_id="OF-CHORRERA-01", consentimiento_joven=True,
+    )
+    conn = db.conectar(tmp_path / "test_puente.db")
+    try:
+        trazas = db.trazas(conn, agente="postulacion")
+    finally:
+        conn.close()
+    assert any(
+        t["salida_resumen"] == "sin franja compatible: fecha por confirmar" and "aviso de prueba" in t["razon"]
+        for t in trazas
+    )

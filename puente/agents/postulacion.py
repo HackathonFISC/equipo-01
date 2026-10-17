@@ -611,6 +611,28 @@ def agendar_entrevistas(
     return siguen, inicios, avisos
 
 
+def decisiones_de_agenda(avisos: list[tuple[tuple[str, str], str, datetime | None]]) -> list[Decision]:
+    """Las Decision que deja la agenda: hora de respaldo «por confirmar» o pareja sin ninguna hora.
+
+    Las usan el nodo y el tablero (#186) con el mismo texto, para que las trazas digan lo mismo.
+    """
+    decisiones: list[Decision] = []
+    for par, aviso, inicio in avisos:
+        if inicio is None:
+            # Sin ninguna hora que no cruce sus clases ni el traslado, esta persona no sale (no se
+            # inventa una fecha), pero el resto de la lista corta sí.
+            salida = "no se envió nada"
+            razon = (f"sin franja compatible: fecha por confirmar ({aviso}). Sin .ics ni CV para esta "
+                     "persona; los demás candidatos de la oferta siguen")
+        else:
+            # La fecha queda por confirmar y nunca se propone una que cruce las clases del joven.
+            salida = "sin franja compatible: fecha por confirmar"
+            razon = f"{aviso}. Fecha propuesta: {inicio.strftime('%Y-%m-%d %H:%M')}"
+        decisiones.append(Decision(agente=AGENTE, entrada_resumen=f"{par[0]} -> {par[1]}",
+                                   salida_resumen=salida, razon=razon))
+    return decisiones
+
+
 def _ejecutar_nodo(
     estado: dict,
     conn: sqlite3.Connection,
@@ -672,34 +694,24 @@ def _ejecutar_nodo(
         perfiles = {**{p.id: p for p in db.listar_perfiles(conn)}, **perfiles}
     if any(m.oferta_id not in ofertas for m in matches):
         ofertas = {**{o.id: o for o in db.listar_ofertas(conn, no_bloqueadas=False)}, **ofertas}
-    completos: list[Match] = []
-    for match in matches:
+    completos = [m for m in matches if m.perfil_id in perfiles and m.oferta_id in ofertas]
+    con_fecha, inicios, avisos = agendar_entrevistas(completos, perfiles, ofertas, conn, desde=reloj())
+    aviso_de = {par: (aviso, inicio) for par, aviso, inicio in avisos}
+    for match in matches:  # en el orden de la aprobación
         par = _par(match)
         if par[0] not in perfiles or par[1] not in ofertas:
             # Ni en el estado ni en la base: esta pareja no sale, pero no frena a las demás.
             falta = f"el perfil {par[0]}" if par[0] not in perfiles else f"la oferta {par[1]}"
             errores.append(f"postulacion: falta {falta} en el estado y en puente.db; no se envió")
             anotar(f"{par[0]} -> {par[1]}", "no se envió nada", f"Falta {falta} en el estado y en puente.db")
-            continue
-        completos.append(match)
-
-    con_fecha, inicios, avisos = agendar_entrevistas(completos, perfiles, ofertas, conn, desde=reloj())
-    for par, aviso, inicio in avisos:
-        if inicio is None:
-            # Sin ninguna hora que no cruce sus clases ni el traslado, esta persona no sale (no se
-            # inventa una fecha), pero el resto de la lista corta sí.
-            errores.append(
-                f"postulacion: {par[0]} / {par[1]} sin franja compatible: fecha por confirmar "
-                f"({aviso}); no se envió"
-            )
-            anotar(f"{par[0]} -> {par[1]}", "no se envió nada",
-                   f"sin franja compatible: fecha por confirmar ({aviso}). Sin .ics ni CV para esta "
-                   "persona; los demás candidatos de la oferta siguen")
-        else:
-            # Sin franja que cumpla todo no se inventa una hora: la fecha queda por confirmar y
-            # nunca se propone una que cruce las clases del joven.
-            anotar(f"{par[0]} -> {par[1]}", "sin franja compatible: fecha por confirmar",
-                   f"{aviso}. Fecha propuesta: {inicio.strftime('%Y-%m-%d %H:%M')}")
+        elif par in aviso_de:
+            aviso, inicio = aviso_de[par]
+            if inicio is None:
+                errores.append(
+                    f"postulacion: {par[0]} / {par[1]} sin franja compatible: fecha por confirmar "
+                    f"({aviso}); no se envió"
+                )
+            nuevas.extend(decisiones_de_agenda([(par, aviso, inicio)]))
     if not con_fecha:
         return cambios(consentimientos)
 
