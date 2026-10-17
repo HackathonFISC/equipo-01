@@ -79,11 +79,12 @@ NODOS: dict[str, dict] = {
     ),
     "avisos": dict(
         col=1, fila=2, estilo="codigo", titulo="Avisos",
-        cuerpo="Avisa al joven (outbox/ o Telegram) y al orientador. Después se recalcula en Matching",
+        cuerpo="Avisa al joven (outbox/ o Telegram); el aviso del orientador lo muestra el tablero. Después se recalcula en Matching",
     ),
     "evento_empresa": dict(
         col=2, fila=2, estilo="codigo", titulo="Evento de la empresa",
-        cuerpo="La empresa rechaza o cubre una vacante en su lista ciega: se excluye la pareja y el caso se reacomoda",
+        cuerpo="La empresa rechaza a un candidato o cubre una vacante en su lista ciega: al rechazar se excluye la pareja; "
+        "al cubrir, la vacante sale del Matching. En los dos casos el caso se reacomoda",
     ),
     "perfil": dict(
         col=3, fila=2, estilo="llm", titulo="Perfil", insignia="LLM extrae",
@@ -92,8 +93,9 @@ NODOS: dict[str, dict] = {
     ),
     "matching": dict(
         col=4, fila=2, estilo="codigo", titulo="Matching",
-        cuerpo="OR-Tools CP-SAT: traslado hasta 60 min, pasaje hasta 15 % del salario y del presupuesto, horario sin "
-        "cruce, salario mínimo; hasta 3 candidatos por plaza y 2 vacantes por joven",
+        cuerpo="OR-Tools CP-SAT: traslado hasta 60 min y pasaje mensual hasta 15 % del salario (por defecto, editables); "
+        "pasaje diario dentro del presupuesto, horario sin cruce, salario mínimo del joven; 3 candidatos por plaza y "
+        "2 vacantes por joven",
     ),
     "sin_matches": dict(
         col=5, fila=2, estilo="codigo", titulo="Sin matches", fin=True,
@@ -131,7 +133,7 @@ PANEL = (
     ("Datos", (
         ("traslados.csv", "minutos a hora pico y pasaje entre 13 nodos (91 filas), medidos con fuente y fecha "
          "(Matching, Formación, Auditor)"),
-        ("taxonomia.csv", "51 habilidades con skill_id y URI de ESCO (Mercado, Perfil)"),
+        ("taxonomia.csv", "51 habilidades con skill_id; 47 con URI de ESCO (Mercado, Perfil)"),
         ("cursos.csv", "9 cursos con títulos reales del INADEH; cupos y horarios de prueba (Formación)"),
     )),
     ("Reglas y LLM", (
@@ -291,7 +293,7 @@ def _rutas() -> list[tuple[Arista, list[tuple[float, float]], tuple[float, float
     ruta = recta("formacion", "izq", "aprobacion", "der")
     hay(Arista("formacion", "aprobacion", "lista corta"), ruta, (mitad(ruta)[0], ruta[0][1] - 14))
     ruta = recta("aprobacion", "izq", "postulacion", "der", -30)
-    hay(Arista("aprobacion", "postulacion", "aprobar"), ruta, (mitad(ruta)[0], ruta[0][1] - 14))
+    hay(Arista("aprobacion", "postulacion", "aprobar\no editar"), ruta, (mitad(ruta)[0], ruta[0][1] - 24))
     ruta = recta("postulacion", "der", "aprobacion", "izq", 30)
     hay(Arista("postulacion", "aprobacion", "siguiente"), ruta, (mitad(ruta)[0], ruta[0][1] + 14))
     x_a, y_a = centro_x("aprobacion"), caja_de(NODOS["aprobacion"])[3]
@@ -369,10 +371,14 @@ def flecha(d, puntos, color=TINTA, ancho=3):
 
 
 def rotulo(d, x, y, texto, color=TINTA, tamano=14, ancla="mm"):
+    """Rótulo sobre fondo blanco; un salto de línea parte el texto en renglones centrados en (x, y)."""
     letra = fuente(tamano)
-    caja_texto = d.textbbox(e(x, y), texto, font=letra, anchor=ancla)
-    d.rectangle((caja_texto[0] - 4 * E, caja_texto[1] - 2 * E, caja_texto[2] + 4 * E, caja_texto[3] + 2 * E), fill="white")
-    d.text(e(x, y), texto, font=letra, fill=color, anchor=ancla)
+    renglones = texto.split("\n")
+    for i, renglon in enumerate(renglones):
+        yy = y + (i - (len(renglones) - 1) / 2) * (tamano + 3)
+        caja_texto = d.textbbox(e(x, yy), renglon, font=letra, anchor=ancla)
+        d.rectangle((caja_texto[0] - 4 * E, caja_texto[1] - 2 * E, caja_texto[2] + 4 * E, caja_texto[3] + 2 * E), fill="white")
+        d.text(e(x, yy), renglon, font=letra, fill=color, anchor=ancla)
 
 
 def dibujar() -> Image.Image:

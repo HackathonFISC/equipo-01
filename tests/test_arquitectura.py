@@ -79,6 +79,23 @@ def test_el_diagrama_no_dice_stubs_ni_gemini() -> None:
     assert "claude opus 5.5" in texto
 
 
+def test_las_cifras_del_panel_son_las_de_los_datos() -> None:
+    """El panel cita cifras de data/: si un CSV cambia y el panel no, falla (el PNG decía 51 con URI y son 47)."""
+    import csv
+
+    def filas(nombre: str) -> list[dict]:
+        with open(RAIZ / "data" / nombre, encoding="utf-8", newline="") as archivo:
+            return list(csv.DictReader(archivo))
+
+    taxonomia, traslados, cursos = filas("taxonomia.csv"), filas("traslados.csv"), filas("cursos.csv")
+    con_uri = sum(1 for fila in taxonomia if fila["uri_esco"].strip())
+    nodos = {fila["origen"] for fila in traslados} | {fila["destino"] for fila in traslados}
+    panel = " ".join(f"{titulo} {texto}" for _, grupo in gen.PANEL for titulo, texto in grupo)
+    assert f"{len(taxonomia)} habilidades con skill_id; {con_uri} con URI de ESCO" in panel
+    assert f"entre {len(nodos)} nodos ({len(traslados)} filas)" in panel
+    assert f"{len(cursos)} cursos con títulos reales del INADEH" in panel
+
+
 def test_el_png_es_el_que_dibuja_este_generador() -> None:
     """El PNG guardado lleva la huella de los datos con que se dibujó: si cambian nodos, aristas o textos y no se
     vuelve a correr `uv run python docs/generar_arquitectura.py`, esta prueba falla."""
