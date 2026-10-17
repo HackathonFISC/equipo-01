@@ -28,6 +28,7 @@ PAGINAS = {  # ruta del servidor -> archivo que la sirve
     "/joven": "joven.html",
     "/empresa": "empresa.html",
     "/empresa/lista-corta": "empresa_lista.html",
+    "/formacion": "formacion.html",
 }
 
 
