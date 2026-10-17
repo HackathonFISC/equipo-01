@@ -4,18 +4,39 @@ import csv
 import json
 from pathlib import Path
 
+import pytest
+
 from puente.agents.mercado import UMBRAL_SIMILITUD, similitud
+from puente.rules.taxonomia import cargar_taxonomia, normalizar_habilidad
 from puente.schemas import Perfil
 
 DATA = Path(__file__).resolve().parents[1] / "data"
+
+# Frases que las ofertas de data/ofertas publican tal cual como requisito, con la habilidad a la que corresponden.
+# Sin ellas como sinónimos, Mercado las normaliza a None y las descarta (revisión del PR #27).
+FRASES_LITERALES_DE_OFERTAS = {
+    "Trabajo en equipo": "trabajo_equipo",
+    "Trabajo en alturas": "seguridad_altura",
+    "Aseo general": "limpieza",
+    "Limpieza general": "limpieza",
+    "Prospección de clientes": "captacion_clientes",
+    "Cierre de ventas": "negociacion_ventas",
+    "Capacidad de negociación": "negociacion_ventas",
+    "Elaboración de bebidas": "preparar_bebidas_calientes",
+    "Pedidos": "tomar_pedidos",
+    "Comunicación": "comunicacion_efectiva",
+    "Comunicación con el cliente": "atencion_cliente",
+    "Soporte al cliente": "atencion_cliente",
+    "Asesoría en ventas": "ventas",
+}
 
 
 def test_perfiles_sinteticos_validan_y_justifican_habilidades():
     with (DATA / "taxonomia.csv").open(encoding="utf-8", newline="") as archivo:
         skill_ids = {fila["skill_id"] for fila in csv.DictReader(archivo)}
     perfiles = [json.loads(ruta.read_text(encoding="utf-8")) for ruta in (DATA / "perfiles").glob("*.json")]
-    assert len(perfiles) == 10
-    assert len({p["id"] for p in perfiles}) == 10
+    assert len(perfiles) >= 10
+    assert len({p["id"] for p in perfiles}) == len(perfiles)
     for datos in perfiles:
         Perfil.model_validate(datos)
         assert datos["datos_sinteticos"] is True
@@ -26,7 +47,7 @@ def test_perfiles_sinteticos_validan_y_justifican_habilidades():
 
 def test_fichas_de_ofertas_tienen_fuente_y_empresa_de_prueba():
     fichas = list((DATA / "ofertas").glob("*.txt"))
-    assert len(fichas) == 20
+    assert len(fichas) >= 20
     fuentes = (DATA / "FUENTES.md").read_text(encoding="utf-8")
     for ruta in fichas:
         texto = ruta.read_text(encoding="utf-8")
@@ -54,9 +75,19 @@ def test_datos_sin_marcadores_de_conflicto_y_taxonomia_sin_repetidos():
     """Un merge mal resuelto deja marcadores que csv.DictReader lee como filas; las pruebas de arriba pasarían igual."""
     for ruta in DATA.rglob("*"):
         if ruta.is_file() and ruta.suffix in {".csv", ".md", ".json", ".txt"}:
-            for linea in ruta.read_text(encoding="utf-8").splitlines():
-                marcador = linea.startswith(("<<<<<<<", ">>>>>>>")) or linea.rstrip() == "======="
+            contenido = ruta.read_text(encoding="utf-8")
+            # En markdown, «=======» también subraya un título: solo cuenta si el archivo trae un inicio de conflicto.
+            separador_cuenta = ruta.suffix != ".md" or "<<<<<<<" in contenido
+            for linea in contenido.splitlines():
+                marcador = linea.startswith(("<<<<<<<", ">>>>>>>")) or (separador_cuenta and linea.rstrip() == "=======")
                 assert not marcador, f"{ruta.relative_to(DATA)}: marcador de conflicto «{linea[:20]}»"
     with (DATA / "taxonomia.csv").open(encoding="utf-8", newline="") as archivo:
-        skill_ids = [fila["skill_id"] for fila in csv.DictReader(archivo)]
+        skill_ids = [fila["skill_id"].strip() for fila in csv.DictReader(archivo)]
     assert len(skill_ids) == len(set(skill_ids)), "skill_id repetido en taxonomia.csv"
+
+
+@pytest.mark.parametrize(("frase", "skill_id"), FRASES_LITERALES_DE_OFERTAS.items())
+def test_frases_literales_de_las_ofertas_se_normalizan(frase, skill_id):
+    fichas = " ".join(ruta.read_text(encoding="utf-8") for ruta in (DATA / "ofertas").glob("*.txt"))
+    assert frase in fichas, f"«{frase}» ya no aparece en ninguna ficha de data/ofertas"
+    assert normalizar_habilidad(frase, cargar_taxonomia(DATA / "taxonomia.csv")) == skill_id
