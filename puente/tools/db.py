@@ -123,7 +123,9 @@ def _valor(estado) -> str:
 
 def conectar(ruta: str | Path | None = None) -> sqlite3.Connection:
     """Abre la base (por defecto $PUENTE_DB o puente.db) y crea las tablas."""
-    destino = ruta if ruta is not None else os.getenv("PUENTE_DB", "puente.db")
+    # «PUENTE_DB=» vacío (como en .env.example) cuenta como no definido: sqlite3.connect("") abriría
+    # una base temporal que se borra al cerrar, y lo cargado se perdería sin aviso.
+    destino = ruta if ruta is not None else (os.getenv("PUENTE_DB") or "puente.db")
     conn = sqlite3.connect(str(destino))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
