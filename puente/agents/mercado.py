@@ -6,7 +6,8 @@ Reparto de trabajo (AGENTS.md, sección 2):
   nunca como instrucción; imágenes y PDF van como bloques nativos.
 - El código decide todo lo demás: habilidades contra la taxonomía (exactas o por raíces, #153-#155),
   el corregimiento que falta si la ubicación copiada nombra un solo nodo de `data/traslados.csv` (#152),
-  legalidad con `puente.rules.discriminacion` sobre el texto original, salario y horario verificados
+  legalidad con `puente.rules.discriminacion` sobre el texto original y el puesto (#190; las frases
+  del puesto que no están en el texto dejan la oferta en baja confianza), salario y horario verificados
   contra el texto (nunca inventados: lo que falta queda `no_publicado` y por confirmar),
   deduplicación por similitud con el mismo corregimiento (#75), sin fusionar empresas distintas ni
   una bloqueada con una que no lo está (#94), y una `Decision` por cada oferta procesada, por cada
@@ -272,6 +273,25 @@ def frases_no_verificadas(hallazgos: list[Hallazgo], transcripcion: str) -> list
     return [h for h in hallazgos if normalizar_texto(h.frase) not in plano]
 
 
+def _nucleo(frase: str) -> str:
+    return normalizar_texto(frase.replace("(", " ").replace(")", " "))
+
+
+def sin_respaldo(del_extractor: list[Hallazgo], del_original: list[Hallazgo]) -> list[Hallazgo]:
+    """Hallazgos de lo que escribió el extractor (puesto, requisitos) que la revisión del texto original no da.
+
+    No basta con que la frase esté en el original (#190): en «uniforme masculino» la palabra está, pero describe
+    el uniforme y no bloquea; si el extractor escribe el puesto «Mesero (masculino)», ese «masculino» es suyo.
+    Tiene respaldo si el original dio un hallazgo de la misma regla y una frase contiene a la otra, sin
+    paréntesis: «(mujer)» del puesto y «se busca mujer» del texto.
+    """
+    respaldo = [(h.regla, _nucleo(h.frase)) for h in del_original]
+    return [
+        h for h in del_extractor
+        if not any(regla == h.regla and (_nucleo(h.frase) in frase or frase in _nucleo(h.frase)) for regla, frase in respaldo)
+    ]
+
+
 def mapear_habilidades(nombres: list[str], taxonomia: dict[str, dict]) -> tuple[list[str], list[str]]:
     """Devuelve (skill_id encontrados sin repetir, nombres descartados por no estar en la taxonomía).
 
@@ -379,14 +399,34 @@ def _aplicar_reglas(texto: str) -> tuple[list[str], bool]:
     return [h.como_texto() for h in hallazgos], esta_bloqueada(hallazgos)
 
 
+def _reglas_sobre_texto(texto: str, puesto: str) -> tuple[list[str], bool, list[str]]:
+    """Texto pegado o PDF con capa de texto: (alertas, bloqueada, notas para la decisión).
+
+    Las reglas corren sobre el texto original y también sobre el puesto (#190), que lo escribe el
+    extractor. Un hallazgo del puesto que la revisión del texto también da ya se revisó ahí, con su
+    contexto; uno que el texto no da lo puso el LLM, aunque la palabra aparezca en otro contexto
+    («uniforme masculino»): no bloquea ni alerta por sí solo y deja la oferta en baja confianza, igual
+    que las frases de `requisitos_texto` que no están en la transcripción de una imagen.
+    """
+    del_texto = revisar_texto(texto)
+    alertas, bloqueada = [h.como_texto() for h in del_texto], esta_bloqueada(del_texto)
+    no_verificadas = sin_respaldo(revisar_texto(puesto), del_texto)
+    if not no_verificadas:
+        return alertas, bloqueada, []
+    motivo = "frases del puesto sin respaldo en el texto de la oferta"
+    frases = sorted({h.frase for h in no_verificadas})
+    return alertas + [ALERTA_BAJA_CONFIANZA.format(motivo=motivo)], bloqueada, [f"baja confianza: {motivo}: {frases}"]
+
+
 def _reglas_sobre_archivo(extraida: OfertaExtraida) -> tuple[str, list[str], bool, list[str]]:
     """Imagen o PDF escaneado: (texto para verificar, alertas, bloqueada, notas para la decisión).
 
     Las reglas corren sobre `transcripcion_literal` y cada frase de alerta se comprueba en código
-    contra ella. Las frases que el LLM puso en `requisitos_texto` y no están en la transcripción no
-    bloquean ni alertan por sí solas: dejan la oferta en baja confianza. Sin transcripción, las reglas
-    corren sobre lo poco que hay (puesto y requisitos), sin verificar salario ni horario, y la oferta
-    pasa al orientador como baja confianza.
+    contra ella. Las frases que el LLM puso en `requisitos_texto` o en el puesto (#190) y que la
+    revisión de la transcripción no da (no están, o están en otro contexto: «uniforme masculino») no
+    bloquean ni alertan por sí solas: dejan la oferta en baja confianza. Sin
+    transcripción, las reglas corren sobre lo poco que hay (puesto y requisitos), sin verificar salario
+    ni horario, y la oferta pasa al orientador como baja confianza.
     """
     transcripcion = (extraida.transcripcion_literal or "").strip()
     requisitos = extraida.requisitos_texto or ""
@@ -398,11 +438,12 @@ def _reglas_sobre_archivo(extraida: OfertaExtraida) -> tuple[str, list[str], boo
     # Un hallazgo de la transcripción no se quita aunque falle la verificación: ante la duda, se alerta.
     hallazgos = revisar_texto(transcripcion)
     notas = ["reglas aplicadas sobre la transcripción literal del archivo; frases verificadas contra ella"]
-    no_verificadas = frases_no_verificadas(hallazgos + revisar_texto(requisitos), transcripcion)
+    del_extractor = revisar_texto(requisitos) + revisar_texto(extraida.puesto or "")
+    no_verificadas = frases_no_verificadas(hallazgos, transcripcion) + sin_respaldo(del_extractor, hallazgos)
     alertas = [h.como_texto() for h in hallazgos]
     if no_verificadas:
         frases = sorted({h.frase for h in no_verificadas})
-        motivo = "frases del extractor que no están en la transcripción"
+        motivo = "frases del extractor sin respaldo en la transcripción"
         alertas.append(ALERTA_BAJA_CONFIANZA.format(motivo=motivo))
         notas.append(f"baja confianza: {motivo}: {frases}")
     return transcripcion, alertas, esta_bloqueada(hallazgos), notas
@@ -427,8 +468,8 @@ def _procesar_entrada(
     if entrada.es_archivo:
         texto, alertas, bloqueada, notas = _reglas_sobre_archivo(extraida)
     else:
-        texto, notas = entrada.texto, []
-        alertas, bloqueada = _aplicar_reglas(texto)
+        texto = entrada.texto
+        alertas, bloqueada, notas = _reglas_sobre_texto(texto, extraida.puesto or "")
     habilidades, descartadas = mapear_habilidades(extraida.habilidades, taxonomia)
     aproximadas = habilidades_aproximadas(extraida.habilidades, taxonomia)
     salario, nota_salario = verificar_salario(extraida.salario_mensual, texto)
