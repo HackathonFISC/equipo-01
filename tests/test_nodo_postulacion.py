@@ -404,7 +404,7 @@ def test_sin_mensaje_del_orientador_la_empresa_no_ve_a_quien_no_consintio(tmp_pa
     (mensaje,) = caso.empresa.mensajes
     texto = mensaje[2]
     assert "Yaritza" not in texto and "Ficticia" not in texto.replace("Carlos Ficticio", "")
-    assert texto.startswith("Buen día, Minisúper Ficticio El Ahorro: desde Puente les presentamos a Carlos Ficticio")
+    assert texto.startswith("Buen día, Minisúper Ficticio El Ahorro: desde SkillMatch les presentamos a Carlos Ficticio")
     assert caso.valores["aprobacion"]["sin_consentimiento"] == ["yaritza"]
     assert caso.valores["postulaciones"] == {f"carlos:{CAJERO}": EstadoPostulacion.ENVIADO}
     assert {a.name for a in mensaje[3]} == {

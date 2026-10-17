@@ -126,7 +126,7 @@ class MiddlewareDemoPublicaReadOnly(BaseHTTPMiddleware):
 
 
 # Páginas HTML que cargan sus propios .js y .css con `?v=`: si el navegador las guarda, el número nuevo no se pide nunca.
-PAGINAS_SIN_CACHE = frozenset({"/", "/inicio", "/orientador", "/joven", "/empresa", "/empresa/lista-corta"})
+PAGINAS_SIN_CACHE = frozenset({"/", "/inicio", "/orientador", "/joven", "/empresa", "/empresa/lista-corta", "/formacion"})
 
 
 class MiddlewareSinCache(BaseHTTPMiddleware):
@@ -148,6 +148,7 @@ class MiddlewareSinCache(BaseHTTPMiddleware):
 
 from app import joven_fase2  # Vista del joven, fase 2 (#166): la lógica vive en app/joven_fase2.py
 from app import mensajes as mensajes_empresa  # Mensajes del joven a la empresa (#289): la lógica vive en app/mensajes.py
+from app import formacion_centro  # Vista del centro de formación (#286): solo lectura y solo conteos
 
 RUTA_APP = Path(__file__).resolve().parent
 RUTA_STATIC = RUTA_APP / "static"
@@ -1072,7 +1073,7 @@ def recalcular_pipeline_tablero(
         desglose["evidencias"] = {s: evidencias_p.get(s, "") for s in cubiertas}
 
         mensaje_sugerido = (
-            f"Buen día, {o_info.get('empresa', 'equipo')}: desde Puente les presentamos a "
+            f"Buen día, {o_info.get('empresa', 'equipo')}: desde SkillMatch les presentamos a "
             f"{p_info.get('nombre', pid)} para la vacante de {o_info.get('puesto', oid)}. "
             "Quedamos atentos para coordinar entrevista."
         )
@@ -2756,6 +2757,7 @@ def obtener_panel_operacion(estado: dict[str, Any]) -> dict[str, Any]:
             {"rol": "admin", "nombre": "Admin (Orientador)", "ruta": "/orientador", "agente": "orientador"},
             {"rol": "aplicante", "nombre": "Aplicante (Joven)", "ruta": "/joven", "agente": "joven"},
             {"rol": "empresa", "nombre": "Empresa", "ruta": "/empresa/lista-corta", "agente": "empresa"},
+            {"rol": "formacion", "nombre": "Centro de formación", "ruta": "/formacion", "agente": "formacion"},
         ],
     }
 
@@ -2899,6 +2901,13 @@ async def _leer_json_validado(request: Request) -> tuple[dict[str, Any] | None, 
 # --- Endpoints ASGI ---
 async def endpoint_index(_request: Request) -> FileResponse:
     return FileResponse(RUTA_STATIC / "index.html")
+
+
+async def endpoint_whatsapp_contacto(_request: Request) -> JSONResponse:
+    """Número del bot de WhatsApp para la burbuja de la web (#304); sin número configurado, la burbuja no sale."""
+    numero = "".join(ch for ch in os.getenv("TWILIO_WHATSAPP_FROM", "") if ch.isdigit())
+    join = os.getenv("TWILIO_SANDBOX_JOIN", "").strip() or None
+    return JSONResponse({"activo": bool(numero), "numero": numero or None, "join": join})
 
 
 async def endpoint_landing(_request: Request) -> FileResponse:
@@ -3214,7 +3223,7 @@ async def endpoint_empresa_postulaciones(request: Request) -> JSONResponse:
     empresa_id = empresa.empresa_del_token(estado, empresa._token_de(request))
     if empresa_id is None:
         return JSONResponse(
-            {"detail": "Falta el código de la empresa o no es correcto. Usa el enlace que te dio Puente."},
+            {"detail": "Falta el código de la empresa o no es correcto. Usa el enlace que te dio SkillMatch."},
             status_code=401,
         )
     return JSONResponse({"postulaciones": empresa.postulaciones_ciegas(estado, empresa_id)})
@@ -3358,7 +3367,7 @@ def verificar_token_joven(estado: dict[str, Any], perfil_id: str, token: str | N
     esperado = (estado.get("_tokens_joven") or {}).get(perfil_id)
     if not token or esperado is None or not hmac.compare_digest(token.encode(), esperado.encode()):
         raise CredencialJovenInvalida(
-            "Falta tu código completo o no es correcto. Escribe el código que te dio Puente al terminar la entrevista."
+            "Falta tu código completo o no es correcto. Escribe el código que te dio SkillMatch al terminar la entrevista."
         )
 
 
@@ -4329,6 +4338,7 @@ app = Starlette(
         # La landing es la entrada (#293); el tablero del orientador vive en /orientador.
         Route("/", endpoint_landing, methods=["GET"]),
         Route("/inicio", endpoint_landing, methods=["GET"]),
+        Route("/api/whatsapp/contacto", endpoint_whatsapp_contacto, methods=["GET"]),
         Route("/orientador", endpoint_index, methods=["GET"]),
         Route("/api/estado", endpoint_estado, methods=["GET"]),
         Route("/api/orientador/accion", endpoint_accion_orientador, methods=["POST"]),
@@ -4369,6 +4379,8 @@ app = Starlette(
         Route("/api/joven/{perfil_id}/mensaje", mensajes_empresa.endpoint_enviar, methods=["POST"]),
         # Lista corta ciega de la empresa (#167)
         Route("/empresa/lista-corta", empresa.endpoint_pagina, methods=["GET"]),
+        Route("/formacion", formacion_centro.endpoint_pagina, methods=["GET"]),
+        Route("/api/formacion/resumen", formacion_centro.endpoint_resumen, methods=["GET"]),
         Route("/api/empresa/{empresa_id}/lista-corta", empresa.endpoint_lista, methods=["GET"]),
         Route("/api/empresa/{empresa_id}/responder", empresa.endpoint_responder, methods=["POST"]),
         Route("/api/empresa/{empresa_id}/mensajes", mensajes_empresa.endpoint_lista, methods=["GET"]),

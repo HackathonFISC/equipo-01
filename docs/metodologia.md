@@ -1,6 +1,6 @@
-# Metodología de Puente
+# Metodología de SkillMatch
 
-Reto 3 del Hackathon FISC 2026: empleabilidad juvenil. Puente ayuda a un orientador a conectar jóvenes de 18 a 29 años con vacantes que de verdad pueden tomar. Puede tomar una vacante quien llega en 60 minutos o menos, paga el pasaje y cumple el horario sin perder sus clases. Este documento cubre:
+Reto 3 del Hackathon FISC 2026: empleabilidad juvenil. SkillMatch ayuda a un orientador a conectar jóvenes de 18 a 29 años con vacantes que de verdad pueden tomar. Puede tomar una vacante quien llega en 60 minutos o menos, paga el pasaje y cumple el horario sin perder sus clases. Este documento cubre:
 
 1. [Arquitectura](#1-arquitectura): qué piezas hay y cómo se hablan.
 2. [Funcionamiento](#2-funcionamiento): el recorrido de un caso, nodo por nodo.
@@ -35,7 +35,7 @@ Por eso `puente/solver/` y `puente/rules/` no importan ningún modelo de lenguaj
 
 El flujo es un grafo de **LangGraph** (`puente/graph.py`, #10) con 14 nodos. Por defecto `construir_grafo()` usa los agentes reales (`nodos_fase_2()`). Los stubs de la fase 1 (`NODOS_FASE_1`) sirven para probar la mecánica del grafo, y el tablero los usa para Mercado y Perfil (ver [Límites](#5-límites)).
 
-![Arquitectura de Puente: 14 nodos, regresos y aprobación humana](arquitectura.png)
+![Arquitectura de SkillMatch: 14 nodos, regresos y aprobación humana](arquitectura.png)
 
 *Diagrama de arquitectura ([`arquitectura.png`](arquitectura.png)): lo dibuja `docs/generar_arquitectura.py` con los nodos y las aristas de `construir_grafo()`, y `tests/test_arquitectura.py` comprueba que coinciden. Se regenera con `uv run python docs/generar_arquitectura.py` cuando cambia el flujo.*
 
@@ -342,7 +342,7 @@ La vista de la empresa (`/empresa/lista-corta`) se abre con un código por empre
 
 | Archivo | Terminal y carga | Tablero | Variable | Contenido |
 |---|---|---|---|---|
-| Base de Puente | `puente.db` | `%TEMP%/puente_tablero.db` | `PUENTE_DB` | Perfiles, ofertas, postulaciones con su historial, `entrevistas`, `decisiones`, `descartes`, y las tablas de la carga `cargas` y `cargas_ofertas`; la del tablero guarda además su estado en `tablero_estado` (#122) |
+| Base de SkillMatch | `puente.db` | `%TEMP%/puente_tablero.db` | `PUENTE_DB` | Perfiles, ofertas, postulaciones con su historial, `entrevistas`, `decisiones`, `descartes`, y las tablas de la carga `cargas` y `cargas_ofertas`; la del tablero guarda además su estado en `tablero_estado` (#122) |
 | Checkpoints del grafo | `checkpoints.db` | `<base>_checkpoints.db`, junto a la base | `PUENTE_CHECKPOINTS` | Cada caso por `thread_id`, para retomarlo después del `interrupt()` |
 | Salida de mensajes | `outbox/` | `PUENTE_OUTBOX`; sin ella, lista corta en `outbox/` de la raíz y avisos del reacomodo en `outbox/` del directorio de trabajo | `PUENTE_OUTBOX` (terminal y tablero, #207) | CV ciego, carta, `.ics` y mensajes a la empresa y al joven cuando no salen por Telegram |
 
@@ -381,7 +381,7 @@ El registro completo está en [`decisiones.md`](decisiones.md). El horario y las
        - los términos de género;
        - en el texto del orientador, además, palabras como «chica» o «muchacha».
      - Después pasa `limpiar_pii()`, que quita cédula, teléfono y dirección.
-     - **El nombre es decisión de Jesus:** va tal como lo da la persona en su perfil, y Puente no lo agrega ni lo quita. En la demo todos los nombres son ficticios.
+     - **El nombre es decisión de Jesus:** va tal como lo da la persona en su perfil, y SkillMatch no lo agrega ni lo quita. En la demo todos los nombres son ficticios.
 5. **Datos de prueba rotulados.**
    - **Por qué:** ninguna cifra de prueba puede presentarse como medición real.
    - **Cómo se aplica:** las personas son sintéticas y las empresas llevan nombres de prueba. Los cupos y horarios de los cursos son datos de prueba. Los traslados están medidos, con fuente y fecha. Los umbrales se declaran como supuestos del equipo (`data/FUENTES.md`). Las métricas del tablero dicen «Ilustrativo, datos de la demo» (`puente/metricas.py`).
@@ -407,7 +407,7 @@ El registro completo está en [`decisiones.md`](decisiones.md). El horario y las
 
 ## 5. Límites
 
-- **Entrevista simulada: fuera de alcance.** Puente no ensaya entrevistas de trabajo con el joven. La entrevista de Perfil solo sirve para conocer sus habilidades.
+- **Entrevista simulada: fuera de alcance.** SkillMatch no ensaya entrevistas de trabajo con el joven. La entrevista de Perfil solo sirve para conocer sus habilidades.
 - **Tendencias del mercado: solo por terminal y sin series en el tiempo.** `uv run python -m puente.metricas --tendencias` (#198) resume las ofertas que dejó `puente.cargar` en `puente.db`: habilidades más pedidas, mediana del salario publicado por corregimiento (las ofertas sin cifra se cuentan aparte) y ofertas bloqueadas por la Ley 11 con su regla. Es código sin LLM y cuenta también las bloqueadas. El tablero no lo muestra, y con 20 ofertas de un solo día no hay evolución que medir.
 - **El determinismo vale a la escala de la demo.** El solver usa 1 hilo, semilla fija (42) y orden por id, así que con la misma entrada da el mismo resultado. Pero la búsqueda se corta a los 1.8 segundos (`max_time_in_seconds`). Con los datos de la demo llega al resultado antes de ese corte. Con muchos más jóvenes y vacantes, el corte podría dejar una asignación distinta según la máquina.
 - **El grafo del tablero usa stubs de Mercado y Perfil.** Lo construye con `stub_mercado` y `stub_perfil` (`app/server.py`, en la función que arma el grafo del tablero), así que lo que ya está en el tablero no se vuelve a extraer. Las ofertas y perfiles nuevos entran de tres formas:

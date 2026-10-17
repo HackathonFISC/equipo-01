@@ -191,7 +191,7 @@ def test_generar_carta_escribe_el_pdf_ciego(tmp_path):
     texto = _texto_pdf(ruta)
     assert "Al equipo de selección de Super Demo (Empresa de Prueba):" in texto
     assert "«atiendo pedidos;" in texto and "«cobro en caja»" in texto
-    assert "Yaritza Ficticia" in texto and "Carta generada por Puente" in texto
+    assert "Yaritza Ficticia" in texto and "Carta generada por SkillMatch" in texto
     for dato in ("Barrio Colón", "2006", "20 años"):
         assert dato not in texto, dato
 

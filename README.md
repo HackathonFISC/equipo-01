@@ -1,4 +1,6 @@
-# Puente
+# SkillMatch
+
+> Antes se llamaba **Puente**: el paquete de Python sigue siendo `puente/` y los comandos no cambian.
 
 <!-- Cambia el 0 por el número de su reto y deja la línea tal cual ("Reto: N"):
        1 = Agua · 2 = Educación · 3 = Empleabilidad
@@ -15,7 +17,7 @@ Sistema agéntico de inserción laboral juvenil: conecta jóvenes, vacantes y cu
 
 ## Problema
 
-En Panamá, la Encuesta de Mercado Laboral del INEC de **agosto de 2026** estimó una tasa de desocupación nacional de **8,5 %**. Para las personas de **20 a 24 años** fue **22,6 %**, y para las de **25 a 29 años**, **14,4 %**. El mismo boletín reportó **45,8 %** de empleo informal no agrícola. Son indicadores de contexto nacional, no resultados ni línea base de Puente: [comentario oficial](https://www.inec.gob.pa/archivos/P053342420260930151945Comentarios.pdf), [cuadro de desocupación por edad](https://www.inec.gob.pa/archivos/P0579518620260930152328Cuadro%205.pdf) y [boletín oficial, cuadro 26](https://www.inec.gob.pa/archivos/P0862619320260930153357Bolet%C3%ADn%20de%20la%20Encuesta%20de%20Mercado%20Laboral%20-%20Agosto%202026.pdf).
+En Panamá, la Encuesta de Mercado Laboral del INEC de **agosto de 2026** estimó una tasa de desocupación nacional de **8,5 %**. Para las personas de **20 a 24 años** fue **22,6 %**, y para las de **25 a 29 años**, **14,4 %**. El mismo boletín reportó **45,8 %** de empleo informal no agrícola. Son indicadores de contexto nacional, no resultados ni línea base de SkillMatch: [comentario oficial](https://www.inec.gob.pa/archivos/P053342420260930151945Comentarios.pdf), [cuadro de desocupación por edad](https://www.inec.gob.pa/archivos/P0579518620260930152328Cuadro%205.pdf) y [boletín oficial, cuadro 26](https://www.inec.gob.pa/archivos/P0862619320260930153357Bolet%C3%ADn%20de%20la%20Encuesta%20de%20Mercado%20Laboral%20-%20Agosto%202026.pdf).
 
 En **Panamá Oeste**, la provincia donde están Arraiján y La Chorrera (también Capira, Chame y San Carlos), el mismo [cuadro 5](https://www.inec.gob.pa/archivos/P0579518620260930152328Cuadro%205.pdf) da cifras peores para los jóvenes. Son tasas de desocupación de agosto de 2026:
 
@@ -26,15 +28,15 @@ En **Panamá Oeste**, la provincia donde están Arraiján y La Chorrera (tambié
 
 Es la población a la que apunta la demo.
 
-### Para quién es Puente
+### Para quién es SkillMatch
 
-| Quién | Qué le pasa hoy | Qué gana con Puente |
+| Quién | Qué le pasa hoy | Qué gana con SkillMatch |
 | --- | --- | --- |
 | **Joven de 18 a 29 años en Panamá Oeste** | Sabe hacer cosas que no están en ningún papel. Postula a anuncios que quedan a más de una hora, cuestan más pasaje del que puede pagar o chocan con sus clases. Algunos anuncios piden edad o sexo, y eso es ilegal. | Solo le llegan vacantes a las que llega en 60 minutos o menos, con pasaje dentro de su presupuesto y sin cruce con sus clases. Sus habilidades cuentan, cada una con una frase suya como evidencia. Su CV sale ciego y solo con su consentimiento. |
 | **Empresa** | Recibe candidatos que después no pueden sostener el traslado o el horario. | Una lista corta de hasta 3 personas por plaza que cumplen traslado, pasaje, horario y salario, y el aviso si su anuncio choca con la Ley 11 de 2005. |
 | **Orientador** | Revisa ofertas y perfiles a mano, sin saber por qué una opción conviene más que otra. | Decide al final, con el motivo de cada puntaje, las alertas del Auditor si un nombre o un género cambia el resultado y cursos del INADEH con cupo para las brechas. |
 
-El reto que aborda esta demo es concreto: una persona joven puede tener habilidades adquiridas en trabajo informal sin un certificado que las haga visibles, mientras una oferta aparentemente cercana puede exigir un viaje o pasaje incompatible con su horario y presupuesto. Puente toma evidencia literal de esas habilidades, evalúa restricciones de traslado, horario y salario, y presenta al orientador humano una lista corta con motivos verificables. La demo usa perfiles y vacantes sintéticos; todavía no demuestra colocaciones ni reducción real del desempleo.
+El reto que aborda esta demo es concreto: una persona joven puede tener habilidades adquiridas en trabajo informal sin un certificado que las haga visibles, mientras una oferta aparentemente cercana puede exigir un viaje o pasaje incompatible con su horario y presupuesto. SkillMatch toma evidencia literal de esas habilidades, evalúa restricciones de traslado, horario y salario, y presenta al orientador humano una lista corta con motivos verificables. La demo usa perfiles y vacantes sintéticos; todavía no demuestra colocaciones ni reducción real del desempleo.
 
 El [plan original de Jesús del 16 de octubre](docs/plan.md) se conserva como documento histórico. Sus cifras de septiembre de 2025 y tecnologías previstas describen la propuesta inicial; para el horario y los recortes vigentes manda [el issue #41](https://github.com/HackathonFISC/equipo-01/issues/41), y esta sección usa los datos oficiales más recientes.
 
@@ -51,7 +53,7 @@ El [plan original de Jesús del 16 de octubre](docs/plan.md) se conserva como do
 
 La comparación usa las **20 ofertas reales anonimizadas** de `data/ofertas/` (Computrabajo y Konzerta, 16 de octubre de 2026). Las cifras salen del filtro del Matching (`evaluar_factibilidad_par`) y del solver (`asignar`), sobre la base que deja `puente.cargar` en modo reproducir. No son resultados de campo.
 
-| | Sin Puente | Con Puente |
+| | Sin SkillMatch | Con SkillMatch |
 | --- | --- | --- |
 | **Qué revisa** | Los 20 anuncios, uno por uno. | 1 opción viable, con su motivo. |
 | **Requisitos ilegales** | 7 anuncios piden edad o sexo (Ley 11 de 2005) y nadie le avisa. | Las 7 ofertas quedan bloqueadas antes de llegarle; el orientador ve la regla y la frase. |
@@ -83,9 +85,9 @@ EOF
 
 ### Nivel alcanzado: autonomía acotada y verificable
 
-El **documento oficial de retos, sección 7 («Rúbrica base»)** asigna 25 % al diseño agéntico y pide mostrar roles, herramientas, autonomía, componente determinístico y «nivel alcanzado», pero **no publica una escala de niveles**. El taller de preparación *Introducción al Paradigma Agéntico · Prompting avanzado con OpenCode* (Ing. Carlos Rodríguez-Chong, labVIA, 22 de septiembre de 2026, diapositivas 8, 9, 12 y 13) distingue un chatbot que responde, un flujo que sigue pasos programados y un agente que elige la siguiente acción según el objetivo y el resultado. También describe el ciclo de acción y observación, y exige que la autonomía dependa de permisos y condiciones de parada. Usamos esos criterios para describir el comportamiento observable de Puente, sin atribuirle un grado numérico oficial.
+El **documento oficial de retos, sección 7 («Rúbrica base»)** asigna 25 % al diseño agéntico y pide mostrar roles, herramientas, autonomía, componente determinístico y «nivel alcanzado», pero **no publica una escala de niveles**. El taller de preparación *Introducción al Paradigma Agéntico · Prompting avanzado con OpenCode* (Ing. Carlos Rodríguez-Chong, labVIA, 22 de septiembre de 2026, diapositivas 8, 9, 12 y 13) distingue un chatbot que responde, un flujo que sigue pasos programados y un agente que elige la siguiente acción según el objetivo y el resultado. También describe el ciclo de acción y observación, y exige que la autonomía dependa de permisos y condiciones de parada. Usamos esos criterios para describir el comportamiento observable de SkillMatch, sin atribuirle un grado numérico oficial.
 
-Presentamos Puente como un **sistema agéntico de autonomía acotada**. Lo que el código actual hace, y dónde se ve:
+Presentamos SkillMatch como un **sistema agéntico de autonomía acotada**. Lo que el código actual hace, y dónde se ve:
 
 - **Elige la ruta.** El [router](puente/graph.py) decide el camino según la entrada: oferta, perfil, consulta o respuesta de la empresa.
 - **Se corrige.** El [Auditor](puente/agents/auditor.py) repite el caso con variantes de nombre, género y corregimiento. Si el resultado cambia, devuelve el caso **una vez**: a Perfil, si la diferencia viene de cómo se leyó el perfil, o a Matching. Si la diferencia persiste, se la entrega al orientador en vez de iterar.
@@ -108,9 +110,9 @@ Las rutas y los límites están definidos por código, y el envío depende de au
 
 ## Cobertura del reto (sección 5.4)
 
-Los siete agentes mínimos que sugiere el documento del reto y dónde están en Puente:
+Los siete agentes mínimos que sugiere el documento del reto y dónde están en SkillMatch:
 
-| Agente sugerido | En Puente | Issues | Estado |
+| Agente sugerido | En SkillMatch | Issues | Estado |
 |---|---|---|---|
 | 1. Inteligencia de mercado: normalizar ofertas a una taxonomía, detectar requisitos, extraer tendencias | Mercado: extracción con Claude, habilidades normalizadas a la taxonomía enlazada a ESCO, reglas de la Ley 11 de 2005 en código, duplicados por similitud; el Redactor propone una versión legal de una oferta bloqueada | #5, #43, #157, #198 | Completo; tendencias con `uv run python -m puente.metricas --tendencias` (#198) |
 | 2. Perfil: leer el CV y entrevistar para descubrir habilidades no declaradas | Perfil: CV o entrevista de 5 preguntas, cada habilidad con su frase literal de evidencia; vista `/joven`; la tirilla de matrícula da el horario de clases | #6, #44, #52, #164, #166 | Completo, con preguntas fijas |
@@ -121,6 +123,25 @@ Los siete agentes mínimos que sugiere el documento del reto y dónde están en 
 | 7. Auditor: medir sesgo por nombre, género o corregimiento y bloquear ofertas discriminatorias | Auditor v2 con contrafactuales y línea base; el bloqueo lo hacen las reglas de Mercado | #8, #50, #5 | Completo |
 
 **Fuera de alcance, y por qué.** La entrevista simulada daría como resultado la opinión de un LLM sobre una conversación, y no hay forma de verificarla en código en 24 horas. Priorizamos lo que sí se puede verificar: que nada salga sin aprobación y consentimiento.
+
+**Sin fusionar al congelamiento de las 11:30 (#41), y por eso fuera de alcance de la entrega:**
+- El chatbot de WhatsApp del joven (#160, PR #253). Hace la entrevista por el sandbox de Twilio, pide el CV en PDF antes de las preguntas y el SÍ o NO al consentimiento, y pasa por el mismo camino que `/joven`.
+- La edad del perfil de 18 a 98 años (#299, PR #300). La entrega sigue con el tope de 29.
+
+La demo en vivo de WhatsApp corre desde la rama de #253 en la laptop. Durante la demo, https://puente-equipo-01.vercel.app sirve ese tablero por un túnel (#307); después vuelve a la demo de solo lectura (PR #312).
+
+**Otros stretch que quedaron como issue (fuera de alcance de esta entrega):**
+
+| Stretch | Dónde quedó | Por qué no entró |
+| --- | --- | --- |
+| --- | --- | --- |
+| «Qué te falta y cómo llegar» con botón «Me interesa» (#219) | Issue | Formación ya calcula la ruta de cursos; falta el botón en `/joven` |
+| «Cómo conseguir más candidatos» por palanca para la empresa (#220) | Issue | El redactor ya cuenta viables con el solver; falta variar salario y pasaje |
+| Panel de tendencias en el tablero (#218) | Issue | Las tendencias se calculan en código (`puente.metricas --tendencias`); falta el panel |
+| Reserva tripartita con formación (#159) | Issue | Diseño en la metodología |
+| Persistencia en Supabase (#172) | Issue | La demo usa SQLite; diseño en la metodología |
+| Empresa de prueba y registro (#276) | Issue | Sin tiempo antes del tag |
+
 
 **Tendencias del mercado (#198).** `puente/metricas.py` calcula en código las habilidades más pedidas, el salario por zona y los bloqueos de la Ley 11 sobre las ofertas de la base: `uv run python -m puente.cargar` y después `uv run python -m puente.metricas --tendencias`. Con las 20 ofertas de `data/`, atención al cliente es la más pedida (6).
 
@@ -142,7 +163,7 @@ Los siete agentes mínimos que sugiere el documento del reto y dónde están en 
 
 LangGraph orquesta los agentes. Principio de diseño: **el LLM trabaja en los bordes y el código decide en el centro**. El LLM lee ofertas, CVs y entrevistas y redacta; el código normaliza, aplica las reglas legales, calcula traslados y horarios, asigna con CP-SAT, audita el sesgo y decide qué sale. El LLM nunca ordena candidatos, nunca calcula traslados y nunca decide si una oferta es legal. Metodología completa en [`docs/metodologia.md`](docs/metodologia.md).
 
-![Arquitectura de Puente: 14 nodos, regresos y aprobación humana](docs/arquitectura.png)
+![Arquitectura de SkillMatch: 14 nodos, regresos y aprobación humana](docs/arquitectura.png)
 
 *Diagrama de arquitectura: [`docs/arquitectura.png`](docs/arquitectura.png). Lo dibuja [`docs/generar_arquitectura.py`](docs/generar_arquitectura.py) con los mismos nodos y aristas que `construir_grafo()`, y `tests/test_arquitectura.py` falla si dejan de coincidir o si el PNG no se regeneró.*
 
@@ -314,7 +335,8 @@ uv run python -m puente.cargar
 uv run python -m app.server
 ```
 
-- **`/`**: tablero del orientador. Muestra la lista corta por vacante, las ofertas bloqueadas con su motivo, el reporte del Auditor, las métricas de impacto y las trazas.
+- **`/`**: landing con la entrada para jóvenes, empresas y orientador.
+- **`/orientador`**: tablero del orientador. Muestra la lista corta por vacante, las ofertas bloqueadas con su motivo, el reporte del Auditor, las métricas de impacto y las trazas.
 - **`/joven`**: el joven llena el formulario, hace la entrevista de una vez o por chat, sube su tirilla de matrícula, da su consentimiento y sigue sus postulaciones. Detalle en [Vista del joven](#vista-del-joven-joven).
 - **`/empresa/lista-corta`**: la empresa ve su lista corta ciega y puede aceptar, rechazar o dar la vacante por cubierta; rechazar o cubrir dispara el reacomodo.
 - **Mensajes del joven a la empresa (#289)**: cuando su CV ya llegó, el joven le escribe desde `/joven` y la empresa lo ve como «Nuevo mensaje de Candidato N»; el texto sale sin cédula, teléfono, dirección ni datos que identifican, y el aviso va por WhatsApp (Twilio, #253) al número `TWILIO_WHATSAPP_EMPRESA` o a `outbox/` si no hay credenciales.
@@ -347,7 +369,7 @@ uv run python -m evals.run
 
 ## Vista del joven (`/joven`)
 
-`uv run python -m app.server` sirve el tablero del orientador en `/` y la vista del joven en `/joven`. El joven llena el formulario fijo y hace la entrevista de 5 preguntas, en un solo envío (#52) o por chat, una pregunta a la vez (#166). Después puede subir la foto o el PDF de su tirilla de matrícula para anotar sus clases (#164), decidir si acepta cada envío y seguir sus postulaciones: el embudo por vacante, el aviso cuando la empresa no sigue (#54), el `.ics` de la entrevista propuesta y su «no», que manda sobre el orientador (#109).
+`uv run python -m app.server` sirve la landing en `/`, el tablero del orientador en `/orientador` y la vista del joven en `/joven`. El joven llena el formulario fijo y hace la entrevista de 5 preguntas, en un solo envío (#52) o por chat, una pregunta a la vez (#166). Después puede subir la foto o el PDF de su tirilla de matrícula para anotar sus clases (#164), decidir si acepta cada envío y seguir sus postulaciones: el embudo por vacante, el aviso cuando la empresa no sigue (#54), el `.ics` de la entrevista propuesta y su «no», que manda sobre el orientador (#109).
 
 | Ruta | Qué hace |
 |---|---|
@@ -402,7 +424,7 @@ Cada afirmación de diseño tiene una prueba que cualquiera puede repetir:
   En el tablero, `POST /api/orientador/accion` responde **422 sin efectos** en tres casos: si falta el consentimiento, si el joven dijo «no» en `/joven` o si el Auditor marcó sesgo en el lote (#189). Lo cubre `tests/test_tablero.py`.
 - **La Ley 11 de 2005, con la frase.** Cada hallazgo de [`puente/rules/discriminacion.py`](puente/rules/discriminacion.py) guarda la regla y la frase literal de la oferta. Solo bloquean el límite de edad (art. 2) y la exigencia de sexo (art. 1), y las demás causales del art. 1 alertan citando el artículo. «Buena presencia», foto y estado civil solo alertan, sin artículo, porque la ley no menciona la apariencia. Lo cubren los 25 casos de requisitos discriminatorios de los evals.
 - **CV y carta sin datos sensibles.** `cegar()` en [`puente/tools/pdf.py`](puente/tools/pdf.py) quita de la evidencia que llega a la empresa la edad, la fecha de nacimiento, el corregimiento, el estado civil, la pareja, los hijos, el embarazo y los términos de género. El CV nunca lleva el presupuesto, el salario mínimo pedido ni las ofertas descartadas. La carta de presentación ([`puente/tools/carta.py`](puente/tools/carta.py), #212) pasa por lo mismo: se arma por plantilla, sin LLM, solo con habilidades que tienen evidencia. La evidencia y el nombre de cada habilidad pasan por `cegar()`; el texto de la oferta (empresa y puesto) no, porque tapar ahí el corregimiento del joven se lo revelaría a la empresa (pruebas en `tests/test_carta.py`).
-  - El nombre, por decisión de @jesus12ga del 16 de octubre (#123), va o no según lo que mande la persona: Puente no lo agrega ni lo quita, y todo lo demás de esta lista sí se oculta.
+  - El nombre, por decisión de @jesus12ga del 16 de octubre (#123), va o no según lo que mande la persona: SkillMatch no lo agrega ni lo quita, y todo lo demás de esta lista sí se oculta.
   - La vista de la empresa sí lo quita: allí cada persona es «Candidato N».
   - Pruebas en `tests/test_cv_ciego.py`.
 - **Demo reproducible sin red.** El grafo, la carga de ofertas y los evals corren con `LLM_MODO=reproducir`. `tests/test_grabacion_yaritza.py` falla si la grabación de Yaritza deja de corresponder al código.
