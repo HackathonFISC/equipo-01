@@ -101,6 +101,11 @@ def _vacante(resultado: dict, oferta_id: str) -> dict:
     return next(v for v in resultado["vacantes"] if v["oferta_id"] == oferta_id)
 
 
+def _cred(estado: dict, perfil_id: str = "PERFIL-YARITZA") -> dict:
+    """Encabezado con el token del joven: el servidor lo crea al arrancar para los perfiles semilla."""
+    return {"X-Token-Joven": estado["_tokens_joven"][perfil_id]}
+
+
 def test_pagina_y_formulario_del_joven(entorno) -> None:
     cliente, *_ = entorno
     r = cliente.get("/joven")
@@ -127,7 +132,8 @@ def test_formulario_registra_la_entrada_y_el_perfil(entorno) -> None:
     assert r.status_code == 201, r.text
     resultado = r.json()
     pid = resultado["perfil"]["id"]
-    assert pid.startswith("PERFIL-YARITZA-")
+    assert pid.startswith("PERFIL-JOVEN-") and "YARITZA" not in pid  # el id no lleva el nombre
+    assert resultado["token"] == estado["_tokens_joven"][pid]
 
     # La entrada queda en entradas_perfil con la forma de #39/#42: formulario fijo + respuestas.
     entrada = next(e for e in estado["entradas_perfil"] if e["id"] == pid)
@@ -155,12 +161,12 @@ def test_formulario_registra_la_entrada_y_el_perfil(entorno) -> None:
     assert estado["estado_grafo"] == "interrupt_orientador"
 
     # Y su resultado se puede volver a pedir por id.
-    assert cliente.get(f"/api/joven/{pid}/resultado").json()["perfil"]["id"] == pid
+    assert cliente.get(f"/api/joven/{pid}/resultado", headers=_cred(estado, pid)).json()["perfil"]["id"] == pid
 
 
 def test_resultado_trae_lista_corta_descartes_y_formacion(entorno) -> None:
-    cliente, *_ = entorno
-    r = cliente.get("/api/joven/PERFIL-YARITZA/resultado")
+    cliente, estado, *_ = entorno
+    r = cliente.get("/api/joven/PERFIL-YARITZA/resultado", headers=_cred(estado))
     assert r.status_code == 200
     resultado = r.json()
 
@@ -193,6 +199,7 @@ def test_consentimiento_deja_decision_y_estado_consentido(entorno) -> None:
     r = cliente.post(
         "/api/joven/consentimiento",
         json={"perfil_id": "PERFIL-YARITZA", "oferta_id": "OF-CHORRERA-01", "otorgado": True},
+        headers=_cred(estado),
     )
     assert r.status_code == 200, r.text
     chorrera = _vacante(r.json(), "OF-CHORRERA-01")
@@ -215,6 +222,7 @@ def test_consentimiento_deja_decision_y_estado_consentido(entorno) -> None:
     cliente.post(
         "/api/joven/consentimiento",
         json={"perfil_id": "PERFIL-YARITZA", "oferta_id": "OF-CHORRERA-01", "otorgado": True},
+        headers=_cred(estado),
     )
     assert len(estado["consentimientos"]) == 1
 
@@ -222,12 +230,12 @@ def test_consentimiento_deja_decision_y_estado_consentido(entorno) -> None:
     srv.procesar_accion_orientador(
         estado, accion="aprobar", perfil_id="PERFIL-YARITZA", oferta_id="OF-CHORRERA-01"
     )
-    resultado = cliente.get("/api/joven/PERFIL-YARITZA/resultado").json()
+    resultado = cliente.get("/api/joven/PERFIL-YARITZA/resultado", headers=_cred(estado)).json()
     enviada = _vacante(resultado, "OF-CHORRERA-01")
     assert enviada["estado"] == EstadoPostulacion.ENVIADO.value
     assert enviada["enviada"] is True and enviada["puede_consentir"] is False
     assert enviada["ics"].endswith(".ics")
-    ics = cliente.get("/api/joven/PERFIL-YARITZA/ics/OF-CHORRERA-01")
+    ics = cliente.get("/api/joven/PERFIL-YARITZA/ics/OF-CHORRERA-01", headers=_cred(estado))
     assert ics.status_code == 200
     assert ics.headers["content-type"].startswith("text/calendar")
     assert "BEGIN:VCALENDAR" in ics.text
@@ -236,13 +244,14 @@ def test_consentimiento_deja_decision_y_estado_consentido(entorno) -> None:
     tarde = cliente.post(
         "/api/joven/consentimiento",
         json={"perfil_id": "PERFIL-YARITZA", "oferta_id": "OF-CHORRERA-01", "otorgado": False},
+        headers=_cred(estado),
     )
     assert tarde.status_code == 422
 
 
 def test_sin_consentimiento_no_queda_consentido(entorno) -> None:
     cliente, estado, _, tmp_path = entorno
-    antes = _vacante(cliente.get("/api/joven/PERFIL-YARITZA/resultado").json(), "OF-VISTAALEGRE-02")
+    antes = _vacante(cliente.get("/api/joven/PERFIL-YARITZA/resultado", headers=_cred(estado)).json(), "OF-VISTAALEGRE-02")
     assert antes["consentimiento"] == "pendiente"
     assert antes["estado"] != EstadoPostulacion.CONSENTIDO.value
 
@@ -250,6 +259,7 @@ def test_sin_consentimiento_no_queda_consentido(entorno) -> None:
     r_texto = cliente.post(
         "/api/joven/consentimiento",
         json={"perfil_id": "PERFIL-YARITZA", "oferta_id": "OF-VISTAALEGRE-02", "otorgado": "si"},
+        headers=_cred(estado),
     )
     assert r_texto.status_code == 422
     assert estado["consentimientos"] == []
@@ -257,6 +267,7 @@ def test_sin_consentimiento_no_queda_consentido(entorno) -> None:
     r = cliente.post(
         "/api/joven/consentimiento",
         json={"perfil_id": "PERFIL-YARITZA", "oferta_id": "OF-VISTAALEGRE-02", "otorgado": False},
+        headers=_cred(estado),
     )
     assert r.status_code == 200
     vista_alegre = _vacante(r.json(), "OF-VISTAALEGRE-02")
@@ -288,7 +299,7 @@ def test_no_del_joven_frena_el_envio_desde_el_tablero(entorno) -> None:
     """Revisión del PR #106: el joven dice «no» → el orientador aprueba → 422 y nada sale."""
     cliente, estado, _, tmp_path = entorno
     par = {"perfil_id": "PERFIL-YARITZA", "oferta_id": "OF-CHORRERA-01"}
-    assert cliente.post("/api/joven/consentimiento", json={**par, "otorgado": False}).status_code == 200
+    assert cliente.post("/api/joven/consentimiento", json={**par, "otorgado": False}, headers=_cred(estado)).status_code == 200
 
     # Un recálculo del grafo (otro joven, el Auditor, quitar a alguien) no reescribe el «no»
     # y el grafo recibe `consentimientos`, que lee `negaron_consentimiento` (#109).
@@ -313,11 +324,11 @@ def test_no_del_joven_frena_el_envio_desde_el_tablero(entorno) -> None:
     assert srv._buscar_postulacion(estado, **par)["estado"] == EstadoPostulacion.PRESELECCIONADO.value
     assert [(c["otorgado"], c["medio"]) for c in estado["consentimientos"]] == [(False, "joven_web")]
     assert srv._calcular_metricas_impacto(estado)["operativas_demo"]["consentimientos_confirmados"] == 0
-    resultado = cliente.get("/api/joven/PERFIL-YARITZA/resultado").json()
+    resultado = cliente.get("/api/joven/PERFIL-YARITZA/resultado", headers=_cred(estado)).json()
     assert _vacante(resultado, "OF-CHORRERA-01")["enviada"] is False
 
     # Si el joven cambia a «sí», el orientador ya puede aprobar y se envía.
-    assert cliente.post("/api/joven/consentimiento", json={**par, "otorgado": True}).status_code == 200
+    assert cliente.post("/api/joven/consentimiento", json={**par, "otorgado": True}, headers=_cred(estado)).status_code == 200
     r = cliente.post("/api/orientador/accion", json={**par, "accion": "aprobar"})
     assert r.status_code == 200, r.text
     assert srv._buscar_postulacion(estado, **par)["estado"] == EstadoPostulacion.ENVIADO.value
@@ -329,7 +340,7 @@ def test_el_grafo_no_envia_a_quien_dijo_no(entorno) -> None:
     """Aunque el grafo reciba `consentidos` con la pareja, el nodo de Postulación del tablero la salta."""
     cliente, estado, _, tmp_path = entorno
     par = {"perfil_id": "PERFIL-YARITZA", "oferta_id": "OF-CHORRERA-01"}
-    assert cliente.post("/api/joven/consentimiento", json={**par, "otorgado": False}).status_code == 200
+    assert cliente.post("/api/joven/consentimiento", json={**par, "otorgado": False}, headers=_cred(estado)).status_code == 200
     srv.recalcular_pipeline_tablero(estado, registrar_trazas=True)
 
     grafo, cfg = estado["_grafo"], estado["_config_grafo"]
@@ -353,17 +364,18 @@ def test_el_grafo_no_envia_a_quien_dijo_no(entorno) -> None:
 def test_ids_y_entradas_invalidas_dan_4xx(entorno) -> None:
     cliente, estado, llm, _ = entorno
     assert cliente.get("/api/joven/PERFIL;DROP/resultado").status_code == 422
-    assert cliente.get("/api/joven/NO-EXISTE/resultado").status_code == 404
+    assert cliente.get("/api/joven/NO-EXISTE/resultado").status_code == 401  # sin token no se sabe si existe
     assert cliente.get("/api/joven/PERFIL-YARITZA/ics/OF%27X").status_code == 422
-    assert cliente.get("/api/joven/PERFIL-YARITZA/ics/OF-CHORRERA-01").status_code == 404  # aún no enviada
+    # Aún no enviada.
+    assert cliente.get("/api/joven/PERFIL-YARITZA/ics/OF-CHORRERA-01", headers=_cred(estado)).status_code == 404
 
     def consentir(**datos) -> int:
         cuerpo = {"perfil_id": "PERFIL-YARITZA", "oferta_id": "OF-CHORRERA-01", "otorgado": True, **datos}
-        return cliente.post("/api/joven/consentimiento", json=cuerpo).status_code
+        return cliente.post("/api/joven/consentimiento", json=cuerpo, headers=_cred(estado)).status_code
 
     assert consentir(perfil_id="../../etc/passwd") == 422
     assert consentir(oferta_id="OF-TOCUMEN-03") == 422  # descartada: no está en su lista corta
-    assert consentir(perfil_id="NO-EXISTE") == 404
+    assert consentir(perfil_id="NO-EXISTE") == 401  # el token de Yaritza no vale para otro id
     assert consentir(extra="x") == 422
     assert (
         cliente.post("/api/joven/consentimiento", content="otorgado=true", headers={"Content-Type": "text/plain"}).status_code
@@ -400,7 +412,7 @@ def test_pii_se_limpia_antes_de_guardar_y_del_llm(entorno) -> None:
         *llm.prompts,
         json.dumps(_decisiones_sqlite(tmp_path / "joven.db"), ensure_ascii=False),
         cliente.get("/api/estado").text,
-        cliente.get(f"/api/joven/{pid}/resultado").text,
+        cliente.get(f"/api/joven/{pid}/resultado", headers=_cred(estado, pid)).text,
     ):
         assert CEDULA not in texto
         assert TELEFONO not in texto
@@ -413,9 +425,93 @@ def test_sin_llm_responde_503_y_no_registra(entorno, monkeypatch: pytest.MonkeyP
     r = cliente.post("/api/joven/perfil", json=formulario_yaritza())
     assert r.status_code == 503
     assert "terminal" in r.json()["detail"]
+    assert "sin clave de API" not in r.text  # el detalle del error queda en la consola, no en la respuesta
     assert len(estado["perfiles"]) == perfiles_antes
 
     # Con el LLM por defecto en modo reproducir (conftest) y sin grabación: tampoco hay red ni registro.
     monkeypatch.setattr(srv, "llm_perfil_joven", srv.llm_puente)
     assert cliente.post("/api/joven/perfil", json=formulario_yaritza()).status_code == 503
     assert len(estado["perfiles"]) == perfiles_antes
+
+
+def test_token_por_perfil_protege_resultado_consentimiento_e_ics(entorno) -> None:
+    """Revisión del PR #106: el id sale en /api/estado, así que no basta como credencial."""
+    cliente, estado, _, _ = entorno
+    otro = next(p["id"] for p in estado["perfiles"] if p["id"] != "PERFIL-YARITZA")
+    par = {"perfil_id": "PERFIL-YARITZA", "oferta_id": "OF-CHORRERA-01", "otorgado": True}
+    for cabeceras in ({}, {"X-Token-Joven": "no-es-el-token"}, _cred(estado, otro)):
+        assert cliente.get("/api/joven/PERFIL-YARITZA/resultado", headers=cabeceras).status_code == 401
+        assert cliente.post("/api/joven/consentimiento", json=par, headers=cabeceras).status_code == 401
+        assert cliente.get("/api/joven/PERFIL-YARITZA/ics/OF-CHORRERA-01", headers=cabeceras).status_code == 401
+    assert estado["consentimientos"] == []  # nadie consintió por Yaritza
+
+    # Con su token sí; el .ics acepta el token en la URL porque es un enlace.
+    assert cliente.get("/api/joven/PERFIL-YARITZA/resultado", headers=_cred(estado)).status_code == 200
+    assert cliente.post("/api/joven/consentimiento", json=par, headers=_cred(estado)).status_code == 200
+    token = estado["_tokens_joven"]["PERFIL-YARITZA"]
+    assert cliente.get(f"/api/joven/PERFIL-YARITZA/ics/OF-CHORRERA-01?token={token}").status_code == 404  # aún no enviada
+
+    # /api/estado no trae tokens ni las respuestas en texto libre de los jóvenes.
+    r = cliente.post("/api/joven/perfil", json=formulario_yaritza())
+    nuevo = r.json()
+    publico = cliente.get("/api/estado")
+    assert "entradas_perfil" not in publico.json()
+    assert token not in publico.text and nuevo["token"] not in publico.text
+    assert RESPUESTAS_YARITZA[0] not in publico.text
+
+
+def test_horario_del_formulario_llega_al_matching(entorno) -> None:
+    """Revisión del PR #106: un joven libre solo los sábados no queda en vacantes de lunes a viernes."""
+    cliente, estado, _, _ = entorno
+    sabado = formulario_yaritza(
+        horario_libre=[{"dias": ["sabado"], "hora_inicio": "08:00", "hora_fin": "12:00"}],
+        horario_clases=[],
+    )
+    r = cliente.post("/api/joven/perfil", json=sabado)
+    assert r.status_code == 201, r.text
+    resultado = r.json()
+    pid = resultado["perfil"]["id"]
+
+    perfil_tablero = next(p for p in estado["perfiles"] if p["id"] == pid)
+    assert perfil_tablero["horario_libre_bloques"] == [{"dias": ["sabado"], "hora_inicio": "08:00", "hora_fin": "12:00"}]
+    modelos, *_ = srv._construir_modelos_desde_estado(estado)
+    modelo = next(m for m in modelos if m.id == pid)
+    assert [h.dias for h in modelo.horario_libre] == [["sabado"]] and modelo.horario_clases == []
+
+    # Las vacantes de lunes a viernes salen con motivo; ninguna queda preseleccionada.
+    lista_corta = {v["oferta_id"] for v in resultado["vacantes"]}
+    assert not lista_corta & {"OF-CHORRERA-01", "OF-VISTAALEGRE-02"}
+    motivos = {d["oferta_id"]: d["motivo"] for d in resultado["descartes"]}
+    assert "OF-CHORRERA-01" in motivos and "horario" in motivos["OF-CHORRERA-01"].lower()
+
+    # Los perfiles sin bloques (semilla, tablero) siguen con el horario de respaldo de siempre.
+    yaritza = next(m for m in modelos if m.id == "PERFIL-YARITZA")
+    assert yaritza.horario_libre[0].dias == ["lunes", "martes", "miercoles", "jueves", "viernes"]
+
+
+def test_csrf_media_type_exacto_y_otro_sitio(entorno) -> None:
+    """Revisión del PR #106: un POST que no dispara el preflight del navegador no entra."""
+    cliente, estado, _, _ = entorno
+    cuerpo = json.dumps({"perfil_id": "PERFIL-YARITZA", "oferta_id": "OF-CHORRERA-01", "otorgado": True})
+    truco = cliente.post(
+        "/api/joven/consentimiento",
+        content=cuerpo,
+        headers={**_cred(estado), "Content-Type": "text/plain; x=application/json"},
+    )
+    assert truco.status_code == 415
+    for cabeceras in ({"Sec-Fetch-Site": "cross-site"}, {"Origin": "http://otro-sitio.example"}):
+        r = cliente.post(
+            "/api/joven/consentimiento",
+            content=cuerpo,
+            headers={**_cred(estado), "Content-Type": "application/json", **cabeceras},
+        )
+        assert r.status_code == 403
+    assert estado["consentimientos"] == []
+
+    # Desde la misma página sí, también con charset.
+    mismo = cliente.post(
+        "/api/joven/consentimiento",
+        content=cuerpo,
+        headers={**_cred(estado), "Content-Type": "application/json; charset=utf-8", "Sec-Fetch-Site": "same-origin"},
+    )
+    assert mismo.status_code == 200

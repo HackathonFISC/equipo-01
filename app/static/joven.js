@@ -63,6 +63,12 @@ const CAMPOS = {
 
 let formulario = null;
 let perfilActual = null;
+// Token del perfil (#52, revisión del PR #106): el código del joven es «id.token».
+let tokenActual = null;
+
+function codigoCompleto() {
+  return perfilActual && tokenActual ? `${perfilActual}.${tokenActual}` : "";
+}
 
 // ---------- Utilidades ----------
 
@@ -141,10 +147,11 @@ function mensajeDeError(status, datos) {
 }
 
 async function api(url, cuerpo) {
+  const credencial = tokenActual ? { "X-Token-Joven": tokenActual } : {};
   const opciones =
     cuerpo === undefined
-      ? {}
-      : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(cuerpo) };
+      ? { headers: credencial }
+      : { method: "POST", headers: { ...credencial, "Content-Type": "application/json" }, body: JSON.stringify(cuerpo) };
   let respuesta;
   try {
     respuesta = await fetch(url, opciones);
@@ -335,6 +342,7 @@ async function enviarFormulario(evento) {
   await conBoton($("btn-enviar"), "Leyendo tu entrevista…", async () => {
     try {
       const resultado = await api("/api/joven/perfil", datosDelFormulario());
+      tokenActual = resultado.token;
       mostrarResultado(resultado);
       mostrarAviso("Listo: ya tenemos tu perfil.");
     } catch (err) {
@@ -360,7 +368,7 @@ function pintarCabecera(resultado) {
   const copiar = el("button", { type: "button", class: "btn btn-sec", text: "Copiar" });
   copiar.addEventListener("click", async () => {
     try {
-      await navigator.clipboard.writeText(p.id);
+      await navigator.clipboard.writeText(codigoCompleto());
       mostrarAviso("Código copiado.");
     } catch {
       mostrarAviso("No se pudo copiar; anótalo a mano.", "error");
@@ -370,8 +378,8 @@ function pintarCabecera(resultado) {
   vaciar(
     $("res-cabecera"),
     el("h2", { text: p.nombre ? `Hola, ${p.nombre}` : "Tu resultado" }),
-    el("p", { class: "codigo" }, "Tu código:", el("code", { text: p.id }), copiar),
-    el("p", { class: "nota", text: "Guárdalo para volver a ver tu resultado desde cualquier teléfono." }),
+    el("p", { class: "codigo" }, "Tu código:", el("code", { text: codigoCompleto() }), copiar),
+    el("p", { class: "nota", text: "Guárdalo completo, con el punto: es tu llave para volver a ver tu resultado desde cualquier teléfono. No lo compartas." }),
     el(
       "dl",
       { class: "resumen" },
@@ -413,7 +421,7 @@ function bloqueConsentimiento(resultado, vacante) {
   if (vacante.enviada) {
     const partes = [el("p", { text: `Tu CV se envió a ${vacante.empresa}. No lleva tu cédula, tu teléfono ni tu dirección.` })];
     if (vacante.ics) {
-      const href = `/api/joven/${encodeURIComponent(pid)}/ics/${encodeURIComponent(vacante.oferta_id)}`;
+      const href = `/api/joven/${encodeURIComponent(pid)}/ics/${encodeURIComponent(vacante.oferta_id)}?token=${encodeURIComponent(tokenActual || "")}`;
       partes.push(
         el("p", {}, el("a", { href, download: vacante.ics, text: "Agregar la entrevista propuesta a mi calendario (.ics)" })),
         el("p", { class: "nota", text: "La fecha es una propuesta: la empresa la confirma." }),
@@ -565,9 +573,11 @@ function pintarDescartes(resultado) {
 
 function mostrarResultado(resultado, { desplazar = true } = {}) {
   perfilActual = resultado.perfil.id;
-  guardarCodigo(perfilActual);
+  guardarCodigo(codigoCompleto());
+  // El código va en el fragmento (#): el navegador no lo manda al servidor.
   const url = new URL(window.location.href);
-  url.searchParams.set("perfil", perfilActual);
+  url.searchParams.delete("perfil");
+  url.hash = `codigo=${codigoCompleto()}`;
   window.history.replaceState(null, "", url);
 
   pintarCabecera(resultado);
@@ -585,11 +595,12 @@ function mostrarResultado(resultado, { desplazar = true } = {}) {
 }
 
 async function cargarResultado(codigo, boton) {
-  const id = String(codigo || "").trim();
-  if (!/^[A-Za-z0-9_-]{1,80}$/.test(id)) {
-    mostrarAviso("Ese código no es válido: usa solo letras, números y guiones.", "error");
+  const [id = "", token = ""] = String(codigo || "").trim().split(".");
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(id) || !/^[A-Za-z0-9_-]{16,128}$/.test(token)) {
+    mostrarAviso("Ese código no está completo: cópialo tal como te lo dio Puente, con el punto en medio.", "error");
     return;
   }
+  tokenActual = token;
   const tarea = async () => {
     try {
       mostrarResultado(await api(`/api/joven/${encodeURIComponent(id)}/resultado`));
@@ -603,12 +614,14 @@ async function cargarResultado(codigo, boton) {
 
 function nuevaEntrevista() {
   perfilActual = null;
+  tokenActual = null;
   $("form-joven").reset();
   $("h-clases").hidden = !$("f-estudia").checked;
   for (const area of document.querySelectorAll("#preguntas textarea")) area.dispatchEvent(new Event("input"));
   limpiarError();
   const url = new URL(window.location.href);
   url.searchParams.delete("perfil");
+  url.hash = "";
   window.history.replaceState(null, "", url);
   $("resultado").hidden = true;
   $("form-joven").hidden = false;
@@ -633,7 +646,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     e.preventDefault();
     cargarResultado($("f-codigo").value, e.submitter);
   });
-  $("btn-actualizar").addEventListener("click", (e) => cargarResultado(perfilActual, e.currentTarget));
+  $("btn-actualizar").addEventListener("click", (e) => cargarResultado(codigoCompleto(), e.currentTarget));
   $("btn-nueva").addEventListener("click", nuevaEntrevista);
 
   try {
@@ -645,7 +658,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     $("btn-ejemplo").disabled = true;
   }
 
-  const desdeUrl = new URLSearchParams(window.location.search).get("perfil");
+  const desdeUrl = new URLSearchParams(window.location.hash.slice(1)).get("codigo");
   if (desdeUrl) await cargarResultado(desdeUrl);
   else $("f-codigo").value = leerCodigo();
 });

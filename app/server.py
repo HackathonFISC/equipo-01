@@ -55,9 +55,14 @@ from puente.schemas import (
 from puente.tools import db
 
 # Vista del joven (#52): imports en un grupo propio para no tocar los del tablero (#49/#99).
+import contextlib
 import csv
+import hmac
+import logging
+import secrets
 from collections.abc import Callable
 from typing import Annotated
+from urllib.parse import urlsplit
 
 from pydantic import StrictBool, TypeAdapter
 from starlette.concurrency import run_in_threadpool
@@ -291,6 +296,9 @@ def _construir_modelos_desde_estado(
             for h in p.get("habilidades", [])
         ]
         edad_valida = max(18, min(29, int(p.get("edad", 20))))
+        # Los bloques del formulario de /joven (#52) mandan; el texto queda de respaldo para los demás perfiles.
+        bloques_libre = [Horario.model_validate(h) for h in p.get("horario_libre_bloques") or []]
+        bloques_clases = p.get("horario_clases_bloques")
         modelos_perfiles.append(
             Perfil(
                 id=p["id"],
@@ -298,14 +306,17 @@ def _construir_modelos_desde_estado(
                 genero=p.get("genero"),
                 edad=edad_valida,
                 corregimiento=p["corregimiento"],
-                horario_libre=[
+                horario_libre=bloques_libre
+                or [
                     Horario(
                         dias=["lunes", "martes", "miercoles", "jueves", "viernes"],
                         hora_inicio="07:00",
                         hora_fin="17:30",
                     )
                 ],
-                horario_clases=[
+                horario_clases=[Horario.model_validate(h) for h in bloques_clases]
+                if bloques_clases is not None
+                else [
                     Horario(
                         dias=["lunes", "martes", "miercoles", "jueves", "viernes"],
                         hora_inicio="18:00",
@@ -1555,7 +1566,8 @@ def serializar_estado_publico(estado: dict[str, Any]) -> dict[str, Any]:
     payload = {
         k: v
         for k, v in estado.items()
-        if not k.startswith("_")
+        # `entradas_perfil` (#52) trae las respuestas en texto libre de cada joven: no sale.
+        if not k.startswith("_") and k != "entradas_perfil"
     }
     payload["conteo_embudo"] = conteo_embudo
     payload["catalogo_data"] = listar_catalogo_data()
@@ -1566,12 +1578,19 @@ def serializar_estado_publico(estado: dict[str, Any]) -> dict[str, Any]:
 
 async def _leer_json_validado(request: Request) -> tuple[dict[str, Any] | None, JSONResponse | None]:
     """Verifica Content-Type: application/json (415) y parsea el cuerpo JSON (422 si es inválido)."""
-    ctype = request.headers.get("content-type", "").lower()
-    if "application/json" not in ctype:
+    # Media type exacto: `text/plain; x=application/json` no dispara el preflight del navegador (CSRF, #52).
+    ctype = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if ctype != "application/json":
         return None, JSONResponse(
             {"detail": "Se requiere encabezado Content-Type: application/json"},
             status_code=415,
         )
+    sitio = request.headers.get("sec-fetch-site")
+    origen = request.headers.get("origin")
+    if (sitio is not None and sitio == "cross-site") or (
+        sitio is None and origen and urlsplit(origen).netloc != request.headers.get("host", "")
+    ):
+        return None, JSONResponse({"detail": "Solicitud desde otro sitio rechazada"}, status_code=403)
     try:
         datos = await request.json()
         if not isinstance(datos, dict):
@@ -1719,6 +1738,7 @@ async def endpoint_simular_sesgo(request: Request) -> JSONResponse:
 async def endpoint_reset(request: Request) -> JSONResponse:
     ESTADO_GLOBAL.clear()
     ESTADO_GLOBAL.update(obtener_datos_iniciales_demo())
+    anunciar_codigos_joven(ESTADO_GLOBAL)  # #52: códigos nuevos de /joven en la consola
     return await endpoint_estado(request)
 
 
@@ -1756,6 +1776,50 @@ def _id_seguro(valor: str) -> str:
     if not limpio or len(limpio) > 80 or not PATRON_ID_SEGURO.fullmatch(limpio):
         raise ValueError(f"ID inválido '{valor}': solo se permiten caracteres [A-Za-z0-9_-]")
     return limpio
+
+
+# Credencial de cada joven: el id sale en /api/estado, así que no basta. Un token por perfil,
+# guardado en `_tokens_joven` (las claves con "_" no se serializan) y que solo ve el joven.
+ENCABEZADO_TOKEN_JOVEN = "x-token-joven"
+_registro = logging.getLogger("uvicorn.error")
+
+
+class CredencialJovenInvalida(PermissionError):
+    pass
+
+
+def _crear_token_joven(estado: dict[str, Any], perfil_id: str) -> str:
+    token = secrets.token_urlsafe(24)
+    estado.setdefault("_tokens_joven", {})[perfil_id] = token
+    return token
+
+
+def anunciar_codigos_joven(estado: dict[str, Any]) -> dict[str, str]:
+    """Crea el token de los perfiles que no lo tienen (los semilla) y escribe su código en la consola.
+
+    Solo quien corre el servidor (el orientador) ve esos códigos; no salen por ninguna ruta HTTP.
+    """
+    tokens = estado.setdefault("_tokens_joven", {})
+    for p in estado.get("perfiles", []):
+        if p.get("id") and p["id"] not in tokens:
+            tokens[p["id"]] = secrets.token_urlsafe(24)
+            _registro.info("Vista del joven · %s (%s): /joven#codigo=%s.%s", p["id"], p.get("nombre", ""), p["id"], tokens[p["id"]])
+    return tokens
+
+
+def verificar_token_joven(estado: dict[str, Any], perfil_id: str, token: str | None) -> None:
+    esperado = (estado.get("_tokens_joven") or {}).get(perfil_id)
+    if not token or esperado is None or not hmac.compare_digest(token.encode(), esperado.encode()):
+        raise CredencialJovenInvalida(
+            "Falta tu código completo o no es correcto. Escribe el código que te dio Puente al terminar la entrevista."
+        )
+
+
+def _token_de(request: Request, *, permitir_query: bool = False) -> str | None:
+    token = request.headers.get(ENCABEZADO_TOKEN_JOVEN)
+    if not token and permitir_query:  # el enlace del .ics es un <a href>: no lleva encabezados
+        token = request.query_params.get("token")
+    return token
 
 
 class PerfilJovenRequest(BaseModel):
@@ -1823,10 +1887,9 @@ def _texto_horarios(horarios: list[Horario]) -> str:
 
 
 def _horario_para_tablero(perfil: Perfil) -> str:
-    """Texto de horario del perfil en el tablero.
+    """Texto de horario del perfil en el tablero, solo para leer.
 
-    El tablero (#49) arma hoy el horario del solver desde este texto: con "noche" pone clases
-    de 18:00 a 22:00. Los horarios exactos del formulario quedan en `entradas_perfil`.
+    El Matching usa los bloques `horario_libre_bloques` y `horario_clases_bloques` del perfil.
     """
     libre = _texto_horarios(perfil.horario_libre) or "sin horario indicado"
     if not perfil.horario_clases:
@@ -1848,7 +1911,8 @@ def preparar_entrada_joven(req: PerfilJovenRequest) -> dict[str, Any]:
             "Corregimiento sin datos de traslado: elige uno de la lista."
         )
     nombre = str(limpiar_entrada(req.nombre.strip())) or "Joven"
-    perfil_id = f"PERFIL-{_slug_seguro(nombre, prefijo='JOVEN')}-{uuid.uuid4().hex[:6].upper()}"
+    # Sin el nombre: el id va en la URL, en el localStorage y en /api/estado.
+    perfil_id = f"PERFIL-JOVEN-{uuid.uuid4().hex[:8].upper()}"
     formulario = {
         "nombre": nombre,
         "edad": req.edad,
@@ -1896,6 +1960,9 @@ def registrar_perfil_joven(
             "corregimiento": perfil.corregimiento,
             "modalidad_ingreso": "Vista del joven: formulario fijo y entrevista (#52)",
             "horario_libre": _horario_para_tablero(perfil),
+            # Lo que el Matching usa de verdad (#4): los bloques del formulario, no el texto de arriba.
+            "horario_libre_bloques": [h.model_dump() for h in perfil.horario_libre],
+            "horario_clases_bloques": [h.model_dump() for h in perfil.horario_clases],
             "salario_minimo": perfil.salario_minimo,
             "presupuesto_pasaje_diario": perfil.presupuesto_pasaje_diario,
             "habilidades": [
@@ -2164,18 +2231,22 @@ async def endpoint_joven_perfil(request: Request) -> JSONResponse:
         )
     except ValueError as exc:
         return JSONResponse({"detail": f"No se pudo armar tu perfil: {exc}"}, status_code=422)
-    except (RuntimeError, OSError) as exc:  # ErrorLLM es un RuntimeError
+    except (RuntimeError, OSError):  # ErrorLLM es un RuntimeError
+        # El detalle (proveedor, modelo, ruta de la grabación) queda en la consola, no en la respuesta.
+        _registro.exception("Vista del joven: el agente Perfil falló")
         return JSONResponse(
             {
                 "detail": (
                     "El agente Perfil no pudo leer tu entrevista ahora. Avísale a tu orientador/a: "
-                    f"la entrevista puede seguir por terminal. ({exc})"
+                    "la entrevista puede seguir por terminal."
                 )
             },
             status_code=503,
         )
     registrar_perfil_joven(ESTADO_GLOBAL, entrada, perfil, decision, taxonomia)
-    return JSONResponse(resultado_joven(ESTADO_GLOBAL, perfil.id), status_code=201)
+    token = _crear_token_joven(ESTADO_GLOBAL, perfil.id)
+    # El token sale solo aquí: con él el joven vuelve a ver su resultado y decide su consentimiento.
+    return JSONResponse({**resultado_joven(ESTADO_GLOBAL, perfil.id), "token": token}, status_code=201)
 
 
 async def endpoint_joven_consentimiento(request: Request) -> JSONResponse:
@@ -2184,6 +2255,7 @@ async def endpoint_joven_consentimiento(request: Request) -> JSONResponse:
         return err_resp  # type: ignore[return-value]
     try:
         req = ConsentimientoJovenRequest.model_validate(datos)
+        verificar_token_joven(ESTADO_GLOBAL, req.perfil_id, _token_de(request))
         registrar_consentimiento_joven(
             ESTADO_GLOBAL,
             perfil_id=req.perfil_id,
@@ -2194,6 +2266,8 @@ async def endpoint_joven_consentimiento(request: Request) -> JSONResponse:
         return JSONResponse({"detail": exc.errors(include_context=False)}, status_code=422)
     except ErrorValidacionTablero as exc:
         return JSONResponse({"detail": str(exc)}, status_code=422)
+    except CredencialJovenInvalida as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=401)
     except LookupError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=404)
     return JSONResponse(resultado_joven(ESTADO_GLOBAL, req.perfil_id))
@@ -2205,7 +2279,10 @@ async def endpoint_joven_resultado(request: Request) -> JSONResponse:
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=422)
     try:
+        verificar_token_joven(ESTADO_GLOBAL, perfil_id, _token_de(request))
         return JSONResponse(resultado_joven(ESTADO_GLOBAL, perfil_id))
+    except CredencialJovenInvalida as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=401)
     except LookupError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=404)
 
@@ -2217,6 +2294,10 @@ async def endpoint_joven_ics(request: Request) -> FileResponse | JSONResponse:
         oferta_id = _id_seguro(request.path_params["oferta_id"])
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=422)
+    try:
+        verificar_token_joven(ESTADO_GLOBAL, perfil_id, _token_de(request, permitir_query=True))
+    except CredencialJovenInvalida as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=401)
     post = _buscar_postulacion(ESTADO_GLOBAL, perfil_id, oferta_id)
     nombre = None
     if post is not None and post.get("estado") in ESTADOS_ENVIADOS:
@@ -2236,8 +2317,16 @@ async def endpoint_joven_ics(request: Request) -> FileResponse | JSONResponse:
 
 RUTA_STATIC.mkdir(parents=True, exist_ok=True)
 
+
+@contextlib.asynccontextmanager
+async def _ciclo_de_vida(_app: Starlette):
+    anunciar_codigos_joven(ESTADO_GLOBAL)
+    yield
+
+
 app = Starlette(
     debug=False,
+    lifespan=_ciclo_de_vida,
     routes=[
         Route("/", endpoint_index, methods=["GET"]),
         Route("/api/estado", endpoint_estado, methods=["GET"]),
