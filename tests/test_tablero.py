@@ -824,3 +824,63 @@ def test_cargar_desde_data_lee_el_archivo_y_rotula_lo_sintetico(tmp_path: Path, 
             assert r.status_code == 422 and "ya está en el tablero" in r.json()["detail"]
 
     asyncio.run(_ejecutar())
+
+
+def test_catalogo_de_data_trae_todos_los_archivos() -> None:
+    """El catálogo lista las 20 ofertas de data/ofertas (Computrabajo y Konzerta) y todos los perfiles (#188)."""
+    import app.server as srv
+
+    catalogo = srv.listar_catalogo_data()
+    ids = {item["id"] for item in catalogo["ofertas"] + catalogo["perfiles"]}
+    ofertas = {f"data/ofertas/{a.name}" for a in (srv.RUTA_DATA / "ofertas").glob("*.txt")}
+    perfiles = {f"data/perfiles/{a.name}" for a in (srv.RUTA_DATA / "perfiles").glob("*.json")}
+    assert len(ofertas) == 20 and ofertas <= ids
+    assert perfiles <= ids
+    assert any(i.startswith("data/ofertas/K") for i in ids)  # las de Konzerta ya no quedan fuera
+
+
+def test_editar_no_guarda_pii_de_la_nota_ni_del_mensaje(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """La nota y el mensaje del orientador pasan por limpiar_entrada antes de guardarse (#213, TRA-6)."""
+    import json as _json
+
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path)
+    crudos = ("8-123-4567", "6123-4567", "Calle 5ta")
+    editar = {
+        "accion": "editar",
+        "perfil_id": "PERFIL-YARITZA",
+        "oferta_id": "OF-CHORRERA-01",
+        "nota_edicion": "Cédula 8-123-4567, tel 6123-4567, vive en Calle 5ta casa 12, Arraiján. Buena actitud.",
+        "mensaje_empresa": "Pueden llamarla al 6123-4567 para coordinar la entrevista.",
+    }
+
+    async def _ejecutar() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            assert (await client.post("/api/reset")).status_code == 200
+            r = await client.post("/api/orientador/accion", json=editar)
+            assert r.status_code == 200, r.text
+            estado = (await client.get("/api/estado")).json()
+
+        publico = _json.dumps(estado, ensure_ascii=False)
+        for dato in crudos:
+            assert dato not in publico, dato
+        post = next(
+            p for p in estado["postulaciones"]
+            if p["perfil_id"] == "PERFIL-YARITZA" and p["oferta_id"] == "OF-CHORRERA-01"
+        )
+        assert "Buena actitud" in post["comentario_orientador"]  # la nota llega, sin los datos
+        assert "[CEDULA]" in post["comentario_orientador"] and "[TELEFONO]" in post["mensaje_empresa"]
+
+        conn = db.conectar(srv.ESTADO_GLOBAL["_db_path"])
+        try:
+            filas = conn.execute("SELECT entrada_resumen, salida_resumen, razon FROM decisiones").fetchall()
+        finally:
+            conn.close()
+        guardado = " ".join(" ".join(str(c) for c in tuple(f)) for f in filas)
+        assert "Buena actitud" in guardado
+        for dato in crudos:
+            assert dato not in guardado, dato
+
+    asyncio.run(_ejecutar())
