@@ -69,6 +69,8 @@ from urllib.parse import urlsplit
 from pydantic import StrictBool, TypeAdapter
 from starlette.concurrency import run_in_threadpool
 
+# Lista corta ciega de la empresa (#167): su lógica vive en app/empresa.py; aquí solo rutas y anuncio de códigos.
+from app import empresa
 from puente.agents.perfil import (
     MAX_PREGUNTAS,
     PREGUNTAS_ENTREVISTA,
@@ -81,9 +83,6 @@ from puente.graph import cargar_taxonomia_grafo
 from puente.guardrails import EDAD_MAX, EDAD_MIN, evaluar_entrada, limpiar_entrada
 from puente.rules.taxonomia import normalizar_habilidad
 from puente.schemas import DIAS_VALIDOS, EntradaPerfil
-
-# Lista corta ciega de la empresa (#167): la lógica vive en app/empresa.py; aquí solo las rutas y el anuncio de códigos.
-from app import empresa
 
 RUTA_APP = Path(__file__).resolve().parent
 RUTA_STATIC = RUTA_APP / "static"
