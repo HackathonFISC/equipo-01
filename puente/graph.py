@@ -7,26 +7,37 @@ El LLM de Mercado y Perfil es inyectable (`nodos_fase_2`); por defecto es Claude
 `puente.llm` (#45). Los tests y la demo sin conexión usan respuestas grabadas, nunca la red.
 
     START → guardrails ─rechazo→ END
-                └→ router ─oferta→ mercado ─bloqueada→ alerta_oferta → END
-                     │                └→ matching
-                     ├─perfil→ perfil → matching
-                     └─consulta→ consulta → END
+       │        └→ router ─oferta→ mercado ─bloqueada→ alerta_oferta → END
+       │             │                └→ matching
+       │             ├─perfil→ perfil → matching
+       │             ├─consulta→ consulta → END
+       └─evento_empresa→ router ─evento_empresa→ evento_empresa → matching, o aprobacion si no aplica
     matching ─sin matches→ sin_matches → END
         └→ auditor ─sesgo (una vez)→ matching, o perfil si el sesgo viene de la lectura del perfil
               └→ formacion → aprobacion (interrupt)
     aprobacion: aprobar/editar → postulacion · quitar → matching · rechazar → END
     postulacion → aprobacion si quedan vacantes por decidir, si no END
 
-Contrato con el tablero (#11):
+Contrato con el tablero (#11, #49):
     grafo = construir_grafo(checkpointer=checkpointer_sqlite())
     config = config_caso(perfil_id)
     grafo.invoke(limpiar_entrada(estado), config)     # corre hasta el interrupt; sin PII en el checkpoint
     aprobacion_pendiente(grafo, config)              # o grafo.get_state(config)
     grafo.invoke(Command(resume={...}), config)       # ver RESPUESTA_APROBACION
+    evento_empresa(grafo, config, oferta_id, perfil_id, tipo="rechaza")  # la empresa respondió (#54)
+    evento_empresa(grafo, config, oferta_id, tipo="cubierta")            # luego, aprobacion_pendiente()
+
+Reacomodo (#54): cuando la empresa rechaza a un candidato postulado, su postulación pasa a
+`no_seleccionado`, la pareja entra a `excluidos` con `origen="empresa"`, la vacante vuelve a
+quedar pendiente y el Matching recalcula; el orientador aprueba la lista corta nueva en el mismo
+interrupt de siempre. Una vacante cubierta sale del Matching (`vacantes_cubiertas`). Los avisos al
+joven y al orientador quedan en `avisos_pendientes`; enviarlos es la Fase 2, con #12/#84. Demo sin red:
+
+    uv run python -m puente.graph --auto "aprobar,aprobar,empresa_rechaza:yaritza@of-cajero-vista-alegre,aprobar"
 
 LangSmith se activa solo con LANGSMITH_TRACING=true y LANGSMITH_API_KEY en `.env`; cada nodo
 aparece como un run con su nombre (guardrails, router, mercado, perfil, matching, auditor,
-formacion, aprobacion, postulacion) bajo el run `puente:<thread_id>`.
+formacion, aprobacion, postulacion, evento_empresa) bajo el run `puente:<thread_id>`.
 """
 
 from __future__ import annotations
@@ -63,6 +74,7 @@ from puente.rules.taxonomia import RUTA_TAXONOMIA, cargar_taxonomia
 from puente.schemas import (
     REQUIERE_CONFIRMACION,
     Decision,
+    EstadoPostulacion,
     EstadoPuente,
     Match,
     Oferta,
@@ -74,8 +86,12 @@ from puente.solver.asignacion import ConfigSolver
 
 Nodo = Callable[[dict], Any]
 
-TIPOS_ENTRADA = ("oferta", "perfil", "consulta")
+TIPOS_ENTRADA = ("oferta", "perfil", "consulta", "evento_empresa")
 ACCIONES = ("aprobar", "editar", "quitar", "rechazar")
+EVENTOS_EMPRESA = ("rechaza", "cubierta")
+# Estados en que la pareja ya va (o fue) hacia la empresa: solo sobre ellas puede responder.
+# Con Postulación en stub la pareja se queda en `consentido`; con #84 pasa a `enviado`.
+ESTADOS_ANTE_EMPRESA = (EstadoPostulacion.CONSENTIDO, EstadoPostulacion.ENVIADO, EstadoPostulacion.ENTREVISTA)
 RESPUESTA_APROBACION = {
     "accion": "aprobar | editar | quitar | rechazar",
     "orientador": "nombre de quien decide; obligatorio para aprobar y editar",
@@ -107,6 +123,11 @@ class EstadoGrafo(EstadoPuente, total=False):
     respuesta: str
     # El Auditor v2 (#50) cuenta sus propios reintentos y lo avisa con esta marca
     _auditor_incremento: bool
+    # Reacomodo (#54): el evento de la empresa por atender (se vacía al atenderlo), las vacantes
+    # que la empresa ya cubrió y que el Matching no vuelve a proponer, y los avisos que falta enviar
+    evento_empresa: dict[str, Any] | None
+    vacantes_cubiertas: list[str]
+    avisos_pendientes: list[dict[str, Any]]
 
 
 # ---------------------------------------------------------------- utilidades
@@ -144,12 +165,43 @@ def _lista_corta_de(estado: dict, oferta_id: str) -> list:
     return [m for m in estado.get("lista_corta") or [] if _campo(m, "oferta_id") == oferta_id]
 
 
+def _oferta(estado: dict, oferta_id: Any) -> Any:
+    return next((o for o in estado.get("ofertas") or [] if _campo(o, "id") == oferta_id), None)
+
+
+def _nombre(estado: dict, perfil_id: str) -> str:
+    perfil = next((p for p in estado.get("perfiles") or [] if _campo(p, "id") == perfil_id), None)
+    return _campo(perfil, "nombre") or perfil_id
+
+
+def clave_postulacion(perfil_id: str, oferta_id: str) -> str:
+    """Clave de `postulaciones` en el estado: "perfil_id:oferta_id", la misma que usa Postulación (#12, #84)."""
+    return f"{perfil_id}:{oferta_id}"
+
+
+_ORDEN_POSTULACION = list(EstadoPostulacion)
+
+
+def _avanzar(postulaciones: dict, clave: str, nuevo: EstadoPostulacion) -> None:
+    """Una postulación solo avanza en el embudo: volver a aprobar a quien ya se envió no la regresa."""
+    actual = postulaciones.get(clave)
+    if actual is None or _ORDEN_POSTULACION.index(EstadoPostulacion(actual)) < _ORDEN_POSTULACION.index(nuevo):
+        postulaciones[clave] = nuevo
+
+
+def _postulados_en(postulaciones: dict, oferta_id: str) -> list[str]:
+    """perfil_id cuya postulación a esa vacante ya va o fue hacia la empresa."""
+    sufijo = clave_postulacion("", oferta_id)
+    return [c[: -len(sufijo)] for c, e in postulaciones.items() if c.endswith(sufijo) and e in ESTADOS_ANTE_EMPRESA]
+
+
 def vacantes_pendientes(estado: dict) -> list[str]:
     """Vacantes con lista corta que el orientador todavía no decidió, en el orden de `ofertas`.
 
     Ese orden no depende del solver: tras quitar un candidato, el orientador vuelve a ver la misma vacante.
+    Una vacante que la empresa ya cubrió (#54) nunca queda pendiente.
     """
-    resueltas = set(estado.get("vacantes_resueltas") or [])
+    resueltas = set(estado.get("vacantes_resueltas") or []) | set(estado.get("vacantes_cubiertas") or [])
     con_lista: list[str] = []
     for m in estado.get("lista_corta") or []:
         oid = _campo(m, "oferta_id")
@@ -194,7 +246,14 @@ def nodo_entrada_guardrails(estado: dict) -> dict:
 
 
 def ruta_inicio(estado: dict) -> str:
-    """Una invocación sin nada que revisar termina sin efectos ni decisiones."""
+    """Una invocación sin nada que revisar termina sin efectos ni decisiones.
+
+    Un evento de la empresa (#54) va directo al router: no es texto libre de afuera sino una acción
+    estructurada del tablero, igual que la respuesta al interrupt, y guardrails solo volvería a revisar
+    la entrevista que ya revisó. Su nota llega limpia de PII (`evento_empresa()`).
+    """
+    if tipo_de_entrada(estado) == "evento_empresa":
+        return "router"
     claves = ("entrada", "tipo_entrada", "ofertas_crudas", "entradas_perfil")
     return "guardrails" if any(estado.get(c) for c in claves) else END
 
@@ -204,9 +263,12 @@ def ruta_guardrails(estado: dict) -> str:
 
 
 def tipo_de_entrada(estado: dict) -> str:
-    """`tipo_entrada` manda (#42); sin él se infiere de qué trae el estado."""
+    """`tipo_entrada` manda (#42); sin él se infiere de qué trae el estado.
+
+    `evento_empresa` solo cuenta si trae el evento: el estado lo guarda, pero uno ya atendido no se repite.
+    """
     tipo = estado.get("tipo_entrada")
-    if tipo in TIPOS_ENTRADA:
+    if tipo in TIPOS_ENTRADA and (tipo != "evento_empresa" or estado.get("evento_empresa")):
         return tipo
     if estado.get("ofertas_crudas"):
         return "oferta"
@@ -225,7 +287,8 @@ def nodo_router(estado: dict) -> dict:
 
 
 def ruta_router(estado: dict) -> str:
-    return {"oferta": "mercado", "perfil": "perfil"}.get(estado.get("tipo_entrada", ""), "consulta")
+    rutas = {"oferta": "mercado", "perfil": "perfil", "evento_empresa": "evento_empresa"}
+    return rutas.get(estado.get("tipo_entrada", ""), "consulta")
 
 
 def nodo_consulta(estado: dict) -> dict:
@@ -392,6 +455,27 @@ def con_reintento_auditor(nodo: Nodo) -> Nodo:
         return cambios
 
     return matching
+
+
+def sin_vacantes_cubiertas(nodo: Nodo) -> Nodo:
+    """El nodo (Matching o Auditor) no ve las vacantes que la empresa ya cubrió (#54).
+
+    Vale para cualquier nodo inyectado. Además filtra su salida, por si el Matching las vuelve a leer
+    de puente.db (#46). El estado conserva la oferta: el tablero la sigue mostrando como cubierta.
+    """
+
+    def sin_cubiertas(estado: dict) -> dict:
+        cubiertas = set(estado.get("vacantes_cubiertas") or [])
+        if not cubiertas:
+            return nodo(estado)
+        vista = {**estado, "ofertas": [o for o in estado.get("ofertas") or [] if _campo(o, "id") not in cubiertas]}
+        cambios = {k: v for k, v in nodo(vista).items() if k != "ofertas"}
+        for clave in ("matches", "lista_corta"):
+            if clave in cambios:
+                cambios[clave] = [m for m in cambios[clave] or [] if _campo(m, "oferta_id") not in cubiertas]
+        return cambios
+
+    return sin_cubiertas
 
 
 def ruta_post_matching(estado: dict) -> str:
@@ -581,13 +665,14 @@ def nodo_matching_grafo(estado: dict) -> dict:
     matches = [m for m in cambios["matches"] if (m.perfil_id, m.oferta_id) not in fuera]
 
     decisiones = list(cambios["decisiones"])
-    texto = ", ".join(f"{p} → {o}" for p, o in sorted(excluidos))
+    origen = {(e.get("perfil_id"), e.get("oferta_id")): e.get("origen") or "orientador" for e in estado.get("excluidos") or []}
+    texto = ", ".join(f"{p} → {o} ({origen[(p, o)]})" for p, o in sorted(excluidos))
     if decisiones and isinstance(decisiones[-1], Decision):
         ultima = decisiones[-1]
         decisiones[-1] = ultima.model_copy(
             update={
                 "salida_resumen": f"{len(lista_corta)} candidato(s) en lista corta sin las parejas excluidas",
-                "razon": f"{ultima.razon} Parejas excluidas por el orientador, filtradas en el grafo hasta #48: {texto}.",
+                "razon": f"{ultima.razon} Parejas excluidas por el orientador o la empresa, filtradas en el grafo hasta #48: {texto}.",
             }
         )
     return {**cambios, "matches": matches, "lista_corta": lista_corta, "decisiones": decisiones}
@@ -636,18 +721,23 @@ def solicitud_aprobacion(estado: dict, oferta_id: str) -> dict[str, Any]:
     oferta = next((o for o in estado.get("ofertas") or [] if o.id == oferta_id), None)
     perfiles = {p.id: p for p in estado.get("perfiles") or []}
     rutas = [r for r in estado.get("rutas_formacion") or [] if r.get("oferta_id") == oferta_id]
-    candidatos = [
-        {
-            "perfil_id": m.perfil_id,
-            "nombre": _campo(perfiles.get(m.perfil_id), "nombre", m.perfil_id),
-            "puntaje": m.puntaje,
-            "brechas": list(m.brechas),
-            "explicacion": m.explicacion,
-            "requiere_confirmacion": list(m.desglose.get(REQUIERE_CONFIRMACION) or []),
-            "rutas_formacion": [r for r in rutas if r.get("perfil_id") == m.perfil_id],
-        }
-        for m in _lista_corta_de(estado, oferta_id)
-    ]
+    postulaciones = estado.get("postulaciones") or {}
+    candidatos = []
+    for m in _lista_corta_de(estado, oferta_id):
+        postulacion = postulaciones.get(clave_postulacion(m.perfil_id, oferta_id))
+        candidatos.append(
+            {
+                "perfil_id": m.perfil_id,
+                "nombre": _campo(perfiles.get(m.perfil_id), "nombre", m.perfil_id),
+                "puntaje": m.puntaje,
+                "brechas": list(m.brechas),
+                "explicacion": m.explicacion,
+                "requiere_confirmacion": list(m.desglose.get(REQUIERE_CONFIRMACION) or []),
+                "rutas_formacion": [r for r in rutas if r.get("perfil_id") == m.perfil_id],
+                # Tras un reacomodo (#54) la lista nueva trae a quienes ya se postularon a esta vacante
+                "estado_postulacion": str(postulacion) if postulacion else None,
+            }
+        )
     return {
         "tipo": "aprobacion",
         "oferta_id": oferta_id,
@@ -756,15 +846,187 @@ def nodo_aprobacion(estado: dict) -> Command:
     razon = f"aprobados {', '.join(aprobados)}"
     if sin_consentimiento:
         razon += f"; sin consentimiento, no se postulan: {', '.join(sin_consentimiento)}"
+    # Aprobado y con consentimiento confirmado: la pareja va hacia la empresa, que podrá responder (#54).
+    postulaciones = dict(estado.get("postulaciones") or {})
+    for pid in aprobados:
+        _avanzar(postulaciones, clave_postulacion(pid, oferta_id), EstadoPostulacion.CONSENTIDO)
     return Command(
         goto="postulacion",
         update={
             **base,
             "aprobacion": aprobacion,
             "vacantes_resueltas": resueltas,
+            "postulaciones": postulaciones,
             "decisiones": decision(accion, razon),
         },
     )
+
+
+# ---------------------------------------------------------------- reacomodo: la empresa responde (#54)
+
+
+def aviso_reacomodo(
+    estado: dict, evento: dict, no_seleccionados: list[str], contratado: str | None = None
+) -> list[dict[str, Any]]:
+    """Avisos del reacomodo para cada joven que no siguió y para el orientador. Solo arma el texto; no envía nada.
+
+    TODO(#12/#84): cuando el nodo de Postulación de #84 entre al grafo, el aviso al joven usa su
+    mensaje (`texto_para_joven`) y sale por Telegram u outbox/ desde ese nodo, que vacía `avisos_pendientes`.
+    """
+    tipo, oferta_id = evento["tipo"], evento["oferta_id"]
+    oferta = _oferta(estado, oferta_id)
+    empresa = _campo(oferta, "empresa") or "La empresa"
+    puesto = _campo(oferta, "puesto") or oferta_id
+    momento = str(evento.get("timestamp") or _ahora())
+
+    def aviso(para: str, perfil_id: str | None, texto: str) -> dict[str, Any]:
+        return {"para": para, "perfil_id": perfil_id, "oferta_id": oferta_id, "tipo": tipo, "texto": texto, "timestamp": momento}
+
+    avisos = []
+    for pid in no_seleccionados:
+        if tipo == "rechaza":
+            texto = f"Hola, {_nombre(estado, pid)}: {empresa} no siguió con tu postulación a {puesto}. Tu orientador(a) ya revisa otras vacantes para ti."
+        else:
+            texto = f"Hola, {_nombre(estado, pid)}: la vacante de {puesto} en {empresa} ya se cubrió. Tu orientador(a) te avisará de otras opciones."
+        avisos.append(aviso("joven", pid, texto))
+    nombres = ", ".join(_nombre(estado, pid) for pid in no_seleccionados)
+    if tipo == "rechaza":
+        texto = f"{empresa} rechazó a {nombres} para {puesto} ({oferta_id}). El Matching recalcula esa lista corta sin la pareja."
+    else:
+        con = f" con {_nombre(estado, contratado)}" if contratado else ""
+        sin = f"; no siguen: {nombres}" if nombres else ""
+        texto = f"{empresa} cubrió la vacante de {puesto} ({oferta_id}){con}. Sale del Matching{sin}."
+    avisos.append(aviso("orientador", None, texto))
+    return avisos
+
+
+def nodo_evento_empresa(estado: dict) -> Command:
+    """La empresa respondió sobre una vacante: rechaza a un candidato postulado o la da por cubierta.
+
+    Rechaza: la postulación pasa a `no_seleccionado`, la pareja entra a `excluidos` con
+    `origen="empresa"`, la vacante sale de `vacantes_resueltas` y el Matching recalcula sin ella;
+    el grafo vuelve a detenerse en la aprobación con la lista corta nueva.
+    Cubierta: la vacante entra a `vacantes_cubiertas` y el Matching no la vuelve a ver; las
+    postulaciones que iban hacia ella pasan a `no_seleccionado` (o a `contratado`, si el evento dice
+    con quién se cubrió) y el Matching recalcula, porque esos jóvenes quedan libres para otras vacantes.
+    Cada evento deja una Decision. Uno que no aplica (vacante desconocida, pareja sin postular o
+    evento repetido) no cambia nada más: deja un error y vuelve a la aprobación pendiente, si la hay.
+    """
+    evento = dict(estado.get("evento_empresa") or {})
+    tipo, oferta_id = evento.get("tipo"), evento.get("oferta_id")
+    perfil_id = evento.get("perfil_id") or None
+    nota = str(evento.get("nota") or "").strip()
+    oferta = _oferta(estado, oferta_id)
+    empresa = _campo(oferta, "empresa") or "la empresa"
+    puesto = _campo(oferta, "puesto") or oferta_id
+    postulaciones = dict(estado.get("postulaciones") or {})
+    clave = clave_postulacion(perfil_id, oferta_id) if perfil_id else ""
+    entrada = f"{empresa} sobre {oferta_id}: {tipo}" + (f" {perfil_id}" if perfil_id else "")
+    quien = str(evento.get("orientador") or "").strip() or "el tablero"
+    razon = f"respuesta de {empresa} registrada por {quien}" + (f": {nota}" if nota else "")
+
+    def sin_efecto(motivo: str) -> Command:
+        return Command(
+            goto="aprobacion",
+            update={
+                "evento_empresa": None,
+                "respuesta": f"Evento de la empresa sin efecto: {motivo}.",
+                "errores": [*(estado.get("errores") or []), f"evento_empresa: {motivo}"],
+                **_decision(estado, "evento_empresa", entrada, "sin cambios", motivo),
+            },
+        )
+
+    if tipo not in EVENTOS_EMPRESA:
+        return sin_efecto(f"tipo {tipo!r} no válido; usar {', '.join(EVENTOS_EMPRESA)}")
+    if oferta is None:
+        return sin_efecto(f"la vacante {oferta_id!r} no está en este caso")
+    if oferta_id in (estado.get("vacantes_cubiertas") or []):
+        return sin_efecto(f"la vacante {oferta_id} ya estaba cubierta")
+    if tipo == "rechaza" and not perfil_id:
+        return sin_efecto("falta `perfil_id`: la empresa rechaza a un candidato")
+    if perfil_id and postulaciones.get(clave) not in ESTADOS_ANTE_EMPRESA:
+        actual = postulaciones.get(clave)
+        return sin_efecto(f"{perfil_id} {f'ya está en {actual}' if actual else 'no fue postulado'} para {oferta_id}")
+
+    if tipo == "rechaza":
+        no_seleccionados, contratado = [perfil_id], None
+        excluidos = list(estado.get("excluidos") or [])
+        if not _excluido(estado, perfil_id, oferta_id):
+            motivo = f"rechazado por {empresa}" + (f": {nota}" if nota else "")
+            momento = str(evento.get("timestamp") or _ahora())
+            excluidos.append(
+                {"perfil_id": perfil_id, "oferta_id": oferta_id, "origen": "empresa", "motivo": motivo, "timestamp": momento}
+            )
+        cambios: dict[str, Any] = {
+            "excluidos": excluidos,
+            "vacantes_resueltas": [v for v in estado.get("vacantes_resueltas") or [] if v != oferta_id],
+        }
+        salida = f"{perfil_id} → no_seleccionado y excluido de {oferta_id}; la vacante vuelve a pendiente y se recalcula"
+        respuesta = f"{empresa} rechazó a {_nombre(estado, perfil_id)} para {puesto}: se recalcula la lista corta sin esa pareja."
+    else:
+        no_seleccionados = [pid for pid in _postulados_en(postulaciones, oferta_id) if pid != perfil_id]
+        contratado = perfil_id
+        if contratado:
+            postulaciones[clave] = EstadoPostulacion.CONTRATADO
+        cambios = {"vacantes_cubiertas": [*(estado.get("vacantes_cubiertas") or []), oferta_id]}
+        salida = f"{oferta_id} cubierta: sale del Matching" + (f"; {contratado} → contratado" if contratado else "")
+        salida += f"; no_seleccionado: {', '.join(no_seleccionados)}" if no_seleccionados else ""
+        respuesta = f"{empresa} cubrió la vacante de {puesto}: sale del Matching y se recalcula."
+    for pid in no_seleccionados:
+        postulaciones[clave_postulacion(pid, oferta_id)] = EstadoPostulacion.NO_SELECCIONADO
+
+    return Command(
+        goto="matching",
+        update={
+            **cambios,
+            "evento_empresa": None,
+            "postulaciones": postulaciones,
+            "avisos_pendientes": [
+                *(estado.get("avisos_pendientes") or []),
+                *aviso_reacomodo(estado, evento, no_seleccionados, contratado),
+            ],
+            "respuesta": respuesta,
+            "reintentos_auditor": 0,
+            "devolver_a_matching": False,
+            **_decision(estado, "evento_empresa", entrada, salida, razon),
+        },
+    )
+
+
+def evento_empresa(
+    grafo: Any,
+    config: dict,
+    oferta_id: str,
+    perfil_id: str | None = None,
+    tipo: str = "rechaza",
+    nota: str = "",
+    orientador: str = "",
+) -> dict[str, Any]:
+    """Registra la respuesta de la empresa en el caso y recalcula (#54). La llama el botón del tablero.
+
+    `tipo`: "rechaza" (exige `perfil_id`, el candidato postulado que la empresa no quiere) o
+    "cubierta" (`perfil_id` opcional: con quién se cubrió, que pasa a `contratado`). `orientador`
+    es quien registra la respuesta en el tablero.
+
+    Por qué así: es un `grafo.invoke()` con una entrada nueva (`tipo_entrada="evento_empresa"`) sobre
+    el mismo `thread_id`. LangGraph mezcla esa entrada con el estado del checkpoint y corre desde
+    START; si el caso estaba detenido en un interrupt, esa espera se reemplaza por la que deje esta
+    corrida. Así el evento pasa por el router, deja su Decision en un nodo propio y reutiliza
+    Matching → Auditor → Formación → aprobación sin rutas nuevas. `update_state` más un `Command`
+    obligaría a elegir `as_node` y a repetir esas rutas a mano.
+
+    Devuelve el estado tras la corrida: `respuesta` dice qué pasó (también si el evento no aplicó) y
+    `aprobacion_pendiente(grafo, config)` trae la lista corta nueva, si la hay.
+    """
+    evento = {
+        "tipo": tipo,
+        "oferta_id": oferta_id,
+        "perfil_id": perfil_id,
+        "nota": limpiar_entrada(nota),  # sin cédula, teléfono ni dirección en el checkpoint
+        "orientador": orientador,
+        "timestamp": _ahora(),
+    }
+    return grafo.invoke({"tipo_entrada": "evento_empresa", "evento_empresa": evento}, config)
 
 
 # ---------------------------------------------------------------- construcción
@@ -796,16 +1058,17 @@ def construir_grafo(nodos: dict[str, Nodo] | None = None, checkpointer: Any = No
     grafo.add_node("mercado", agentes["mercado"])
     grafo.add_node("alerta_oferta", nodo_alerta_oferta)
     grafo.add_node("perfil", agentes["perfil"])
-    grafo.add_node("matching", con_reintento_auditor(agentes["matching"]))
+    grafo.add_node("matching", con_reintento_auditor(sin_vacantes_cubiertas(agentes["matching"])))
     grafo.add_node("sin_matches", nodo_sin_matches)
-    grafo.add_node("auditor", agentes["auditor"])
+    grafo.add_node("auditor", sin_vacantes_cubiertas(agentes["auditor"]))
     grafo.add_node("formacion", agentes["formacion"])
     grafo.add_node("aprobacion", nodo_aprobacion, destinations=("postulacion", "matching", "aprobacion", END))
     grafo.add_node("postulacion", agentes["postulacion"])
+    grafo.add_node("evento_empresa", nodo_evento_empresa, destinations=("matching", "aprobacion"))
 
-    grafo.add_conditional_edges(START, ruta_inicio, ["guardrails", END])
+    grafo.add_conditional_edges(START, ruta_inicio, ["guardrails", "router", END])
     grafo.add_conditional_edges("guardrails", ruta_guardrails, ["router", END])
-    grafo.add_conditional_edges("router", ruta_router, ["mercado", "perfil", "consulta"])
+    grafo.add_conditional_edges("router", ruta_router, ["mercado", "perfil", "consulta", "evento_empresa"])
     grafo.add_edge("consulta", END)
     grafo.add_conditional_edges("mercado", ruta_post_mercado, ["alerta_oferta", "matching"])
     grafo.add_edge("alerta_oferta", END)
@@ -925,6 +1188,41 @@ def _respuesta_automatica(paso: str, solicitud: dict[str, Any]) -> dict[str, Any
     }
 
 
+PREFIJO_EVENTO = "empresa_"
+
+
+def _evento_automatico(paso: str) -> dict[str, Any] | None:
+    """Paso de `--auto` que trae la respuesta de la empresa (#54), o None si es una decisión del orientador.
+
+    `empresa_rechaza:perfil_id@oferta_id`, `empresa_cubierta:oferta_id` o `empresa_cubierta:perfil_id@oferta_id`
+    (con quién se cubrió). Se aplica cuando le toca, haya o no una aprobación pendiente.
+    """
+    if not paso.startswith(PREFIJO_EVENTO):
+        return None
+    tipo, _, destino = paso.removeprefix(PREFIJO_EVENTO).partition(":")
+    perfil_id, _, oferta_id = destino.rpartition("@")
+    return {"tipo": tipo, "oferta_id": oferta_id, "perfil_id": perfil_id or None}
+
+
+def _aplicar_evento(grafo: Any, config: dict, evento: dict[str, Any], escribir: Callable[[str], None]) -> dict:
+    antes = len(grafo.get_state(config).values.get("avisos_pendientes") or [])
+    sobre = f"{evento['perfil_id']} en " if evento["perfil_id"] else ""
+    escribir(f"\n↺  Evento de la empresa · {evento['tipo']} · {sobre}{evento['oferta_id']}")
+    final = evento_empresa(
+        grafo,
+        config,
+        evento["oferta_id"],
+        evento["perfil_id"],
+        tipo=evento["tipo"],
+        nota="demo automática",
+        orientador="Orientadora Ficticia",
+    )
+    escribir(f"   {final.get('respuesta')}")
+    for aviso in (final.get("avisos_pendientes") or [])[antes:]:
+        escribir(f"   Aviso pendiente para {aviso['para']}: {aviso['texto']}")
+    return final
+
+
 def _mostrar(solicitud: dict[str, Any], escribir: Callable[[str], None]) -> None:
     oferta = solicitud["oferta"]
     escribir(f"\n⏸  Aprobación pendiente · {solicitud['oferta_id']} · {oferta['puesto']} en {oferta['empresa']}")
@@ -932,7 +1230,8 @@ def _mostrar(solicitud: dict[str, Any], escribir: Callable[[str], None]) -> None
         escribir(f"   Por confirmar con la empresa: {', '.join(oferta['requiere_confirmacion'])}")
     for c in solicitud["candidatos"]:
         brechas = f" · brechas: {', '.join(c['brechas'])}" if c["brechas"] else ""
-        escribir(f"   - {c['nombre']} ({c['perfil_id']}) puntaje {c['puntaje']}{brechas}")
+        ya = f" · postulación: {c['estado_postulacion']}" if c.get("estado_postulacion") else ""
+        escribir(f"   - {c['nombre']} ({c['perfil_id']}) puntaje {c['puntaje']}{brechas}{ya}")
         for ruta in c.get("rutas_formacion") or []:
             cursos = ", ".join(curso["curso"] for curso in ruta.get("cursos_seleccionados") or [])
             if cursos:
@@ -950,7 +1249,14 @@ def main(argv: list[str] | None = None, leer: Callable[[str], str] = input, escr
     parser.add_argument("--caso", default=str(CASO_YARITZA), help="JSON del caso")
     parser.add_argument("--checkpoints", default=None, help="archivo SQLite de checkpoints (PUENTE_CHECKPOINTS)")
     parser.add_argument("--thread", default=None, help="thread_id; por defecto <id del caso>-<hora>")
-    parser.add_argument("--auto", default=None, help="decisiones sin preguntar, p. ej. 'quitar:maria,aprobar,rechazar'")
+    parser.add_argument(
+        "--auto",
+        default=None,
+        help=(
+            "decisiones sin preguntar, p. ej. 'quitar:maria,aprobar,rechazar'; la respuesta de la empresa (#54) es "
+            "otro paso: 'empresa_rechaza:yaritza@of-cajero-vista-alegre' o 'empresa_cubierta:of-ayudante-cocina-chorrera'"
+        ),
+    )
     parser.add_argument(
         "--llm",
         default="grabado",
@@ -983,8 +1289,16 @@ def main(argv: list[str] | None = None, leer: Callable[[str], str] = input, escr
     escribir(f"Caso {args.demo} · thread_id={thread_id} · LLM {args.llm}")
 
     final = grafo.invoke(estado, config)
-    while (solicitud := aprobacion_pendiente(grafo, config)) is not None:
-        _mostrar(solicitud, escribir)
+    while True:
+        solicitud = aprobacion_pendiente(grafo, config)
+        if solicitud is not None:
+            _mostrar(solicitud, escribir)
+        if pasos and (evento := _evento_automatico(pasos[0])) is not None:
+            pasos.pop(0)
+            final = _aplicar_evento(grafo, config, evento, escribir)
+            continue
+        if solicitud is None:
+            break
         if pasos is not None:
             if not pasos:
                 escribir("Sin más decisiones automáticas; el caso queda detenido en la aprobación.")
