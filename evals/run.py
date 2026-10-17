@@ -60,6 +60,11 @@ HORARIO_VALIDAR = ("puente.agents.horario", "validar_bloques", 164)  # (bloques)
 HORARIO_CONVERTIR = ("puente.agents.horario", "a_horario_clases", 164)  # (bloques válidos) -> list[Horario]
 REDACTOR_PROPONER = ("puente.agents.redactor", "proponer_version", 157)  # (oferta, perfiles, *, redactar, traslados, minutos) -> Propuesta
 REDACTOR_PLANTILLA = ("puente.agents.redactor", "redactor_plantilla", 157)  # (texto, cambios) -> TextoRedactado, sin LLM
+MICROMISION_RETOS = ("puente.agents.micromision", "cargar_retos", 158)  # () -> {reto_id: Reto}
+MICROMISION_RESOLVER = ("puente.agents.micromision", "resolver_reto", 158)  # (reto, texto, *, llm, nombre) -> ResultadoReto
+MICROMISION_AUDITAR = ("puente.agents.micromision", "auditar_contrafactual", 158)  # (reto, texto, perfil, *, llm, variantes)
+MICROMISION_SCORECARD = ("puente.agents.micromision", "armar_scorecard", 158)  # (perfil, resultados) -> Scorecard
+MICROMISION_PII = ("puente.agents.micromision", "datos_personales_en", 158)  # (scorecard, perfil) -> list[str]
 RAIZ_REPO = Path(__file__).resolve().parent.parent
 
 # Reglas de discriminación -> artículo de la Ley 11 de 2005 (solo las que bloquean) o alerta (las que no).
@@ -473,6 +478,11 @@ def _diferencias_redactor(esperado: dict, observado: dict) -> list[str]:
     return malos
 
 
+def _diferencias_micromision(esperado: dict, observado: dict) -> list[str]:
+    """#158: cada clave esperada (resultado, puntaje, respuesta, correcto, datos_personales, mismo_puntaje) igual."""
+    return [clave for clave, valor in esperado.items() if observado.get(clave) != valor]
+
+
 _DIFERENCIAS: dict[str, Callable[[dict, dict], list[str]]] = {
     "extraccion_ofertas": _diferencias_extraccion,
     "requisitos_discriminatorios": _diferencias_discriminacion,
@@ -483,6 +493,7 @@ _DIFERENCIAS: dict[str, Callable[[dict, dict], list[str]]] = {
     "horario_tirilla": _diferencias_horario,
     "horario_validacion": _diferencias_horario,
     "redactor_puente": _diferencias_redactor,
+    "micromision": _diferencias_micromision,
 }
 
 
@@ -839,6 +850,25 @@ def _ejecutar_redactor(caso: dict) -> dict:
     }
 
 
+def _ejecutar_micromision(caso: dict) -> dict:
+    """#158: el reto del banco, la respuesta por texto y la corrección en código. `llm=None`: solo el respaldo
+    determinístico, sin LLM (la vía con LLM se prueba con un falso en tests/test_micromision.py)."""
+    entrada = caso["entrada"]
+    reto = _resolver(MICROMISION_RETOS)()[entrada["reto_id"]]
+    perfil = entrada.get("perfil") or {}
+    if entrada.get("variantes"):
+        variantes = [tuple(v) for v in entrada["variantes"]]
+        auditoria = _resolver(MICROMISION_AUDITAR)(reto, entrada["texto"], perfil, llm=None, variantes=variantes)
+        return {c: auditoria.get(c) for c in ("mismo_puntaje", "resultado", "puntaje")}
+    resultado = _resolver(MICROMISION_RESOLVER)(reto, entrada["texto"], llm=None, nombre=perfil.get("nombre"))
+    observado = {c: resultado.calificacion.get(c) for c in ("resultado", "puntaje", "respuesta", "correcto")}
+    if perfil:
+        tarjeta = _resolver(MICROMISION_SCORECARD)(perfil, [resultado])
+        buscar = _resolver(MICROMISION_PII)
+        observado["datos_personales"] = buscar(tarjeta.como_dict(), perfil) + buscar(tarjeta.como_texto(), perfil)
+    return observado
+
+
 def ejecutores_por_defecto(
     taxonomia: dict | None = None,
     *,
@@ -859,6 +889,7 @@ def ejecutores_por_defecto(
         "horario_tirilla": _ejecutar_horario_tirilla,
         "horario_validacion": _ejecutar_horario_validacion,
         "redactor_puente": _ejecutar_redactor,
+        "micromision": _ejecutar_micromision,
     }
 
 
