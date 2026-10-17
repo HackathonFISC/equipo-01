@@ -92,6 +92,16 @@ CREATE TABLE IF NOT EXISTS descartes (
     timestamp TEXT NOT NULL,
     UNIQUE (perfil_id, oferta_id, motivo)
 );
+-- Mensajes del joven a la empresa (#289). Solo texto ya limpio: sin cédula, teléfono ni dirección, y ciego.
+-- Nunca guarda el número de teléfono del joven, ni en claro ni con hash.
+CREATE TABLE IF NOT EXISTS mensajes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    perfil_id TEXT NOT NULL,
+    oferta_id TEXT NOT NULL,
+    ref TEXT NOT NULL,
+    texto TEXT NOT NULL,
+    creado TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS entrevistas (
     perfil_id TEXT NOT NULL,
     oferta_id TEXT NOT NULL,
@@ -354,6 +364,33 @@ def trazas(
         )
         params.append(max(int(limite), 0))
     return [dict(f) for f in conn.execute(consulta, params)]
+
+
+def guardar_mensaje(conn: sqlite3.Connection, perfil_id: str, oferta_id: str, ref: str, texto: str) -> int:
+    """Guarda un mensaje del joven a la empresa de esa oferta (#289) y devuelve su id.
+
+    ``texto`` ya viene limpio (sin cédula, teléfono ni dirección) y ciego. ``ref`` es la referencia
+    opaca que la empresa ya ve en su lista corta. No hay ningún campo para el teléfono del joven.
+    """
+    cursor = conn.execute(
+        "INSERT INTO mensajes (perfil_id, oferta_id, ref, texto, creado) VALUES (?, ?, ?, ?, ?)",
+        (perfil_id, oferta_id, ref, texto, _ahora()),
+    )
+    conn.commit()
+    return int(cursor.lastrowid)
+
+
+def mensajes_de_ofertas(conn: sqlite3.Connection, oferta_ids: Iterable[str]) -> list[dict]:
+    """Mensajes de esas ofertas, del más viejo al más nuevo: id, perfil_id, oferta_id, texto y creado."""
+    ids = list(oferta_ids)
+    if not ids:
+        return []
+    marcas = ", ".join("?" for _ in ids)
+    filas = conn.execute(
+        f"SELECT id, perfil_id, oferta_id, texto, creado FROM mensajes WHERE oferta_id IN ({marcas}) ORDER BY id",
+        ids,
+    ).fetchall()
+    return [dict(f) for f in filas]
 
 
 def guardar_entrevista(

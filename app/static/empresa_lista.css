@@ -526,3 +526,14 @@ textarea:focus-visible {
     transition: background-color 0.15s ease, border-color 0.15s ease;
   }
 }
+
+/* Mensajes de los candidatos (#289) */
+.mensajes {
+  margin-bottom: 1rem;
+}
+
+.mensaje-texto {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

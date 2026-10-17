@@ -315,6 +315,7 @@ uv run python -m app.server
 - **`/`**: tablero del orientador. Muestra la lista corta por vacante, las ofertas bloqueadas con su motivo, el reporte del Auditor, las métricas de impacto y las trazas.
 - **`/joven`**: el joven llena el formulario, hace la entrevista de una vez o por chat, sube su tirilla de matrícula, da su consentimiento y sigue sus postulaciones. Detalle en [Vista del joven](#vista-del-joven-joven).
 - **`/empresa/lista-corta`**: la empresa ve su lista corta ciega y puede aceptar, rechazar o dar la vacante por cubierta; rechazar o cubrir dispara el reacomodo.
+- **Mensajes del joven a la empresa (#289)**: cuando su CV ya llegó, el joven le escribe desde `/joven` y la empresa lo ve como «Nuevo mensaje de Candidato N»; el texto sale sin cédula, teléfono, dirección ni datos que identifican, y el aviso va por WhatsApp (Twilio, #253) al número `TWILIO_WHATSAPP_EMPRESA` o a `outbox/` si no hay credenciales.
 
 Los códigos de acceso de `/joven` y `/empresa/lista-corta` se imprimen en la consola al arrancar, en cada reinicio y cuando una empresa nueva publica su primera vacante.
 
