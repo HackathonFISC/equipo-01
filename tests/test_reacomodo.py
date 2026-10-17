@@ -327,3 +327,20 @@ def test_demo_por_consola_con_vacante_cubierta_mientras_espera(tmp_path, capsys)
     assert "Evento de la empresa · cubierta · " + COCINA in salida
     assert "Flujo terminado." in salida
     assert final["vacantes_cubiertas"] == [COCINA]
+
+
+def test_el_no_del_joven_manda_sobre_la_confirmacion_del_orientador(ruta_cp, caso):
+    """Si el joven dijo que no (consentimientos con otorgado=False), aprobar no lo marca `consentido`."""
+    thread, estado = caso
+    estado["consentimientos"] = [
+        {"perfil_id": "yaritza", "oferta_id": CAJERO, "otorgado": True, "medio": "joven"},
+        {"perfil_id": "yaritza", "oferta_id": CAJERO, "otorgado": False, "medio": "joven"},
+    ]
+    grafo = _grafo(ruta_cp)
+    config = config_caso(thread)
+    grafo.invoke(estado, config)
+    assert aprobacion_pendiente(grafo, config)["oferta_id"] == CAJERO
+    _aprobar(grafo, config)
+    postulaciones = _valores(grafo, config).get("postulaciones") or {}
+    assert clave_postulacion("yaritza", CAJERO) not in postulaciones
+    assert postulaciones.get(clave_postulacion("carlos", CAJERO)) == EstadoPostulacion.CONSENTIDO

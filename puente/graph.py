@@ -182,6 +182,19 @@ def clave_postulacion(perfil_id: str, oferta_id: str) -> str:
 _ORDEN_POSTULACION = list(EstadoPostulacion)
 
 
+def negaron_consentimiento(estado: dict, oferta_id: str) -> set[str]:
+    """Perfiles cuyo último registro de `consentimientos` para esta oferta es `otorgado=False`.
+
+    El «no» del joven (por ejemplo desde /joven, #52) manda sobre la confirmación del orientador:
+    esa pareja no avanza a `consentido` y Postulación (#12) no la envía.
+    """
+    ultimo: dict[str, bool] = {}
+    for registro in estado.get("consentimientos") or []:
+        if _campo(registro, "oferta_id") == oferta_id:
+            ultimo[_campo(registro, "perfil_id")] = bool(_campo(registro, "otorgado"))
+    return {pid for pid, otorgado in ultimo.items() if not otorgado}
+
+
 def _avanzar(postulaciones: dict, clave: str, nuevo: EstadoPostulacion) -> None:
     """Una postulación solo avanza en el embudo: volver a aprobar a quien ya se envió no la regresa."""
     actual = postulaciones.get(clave)
@@ -848,8 +861,10 @@ def nodo_aprobacion(estado: dict) -> Command:
         razon += f"; sin consentimiento, no se postulan: {', '.join(sin_consentimiento)}"
     # Aprobado y con consentimiento confirmado: la pareja va hacia la empresa, que podrá responder (#54).
     postulaciones = dict(estado.get("postulaciones") or {})
+    negados = negaron_consentimiento(estado, oferta_id)
     for pid in aprobados:
-        _avanzar(postulaciones, clave_postulacion(pid, oferta_id), EstadoPostulacion.CONSENTIDO)
+        if pid not in negados:
+            _avanzar(postulaciones, clave_postulacion(pid, oferta_id), EstadoPostulacion.CONSENTIDO)
     return Command(
         goto="postulacion",
         update={
