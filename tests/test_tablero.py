@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
+import subprocess
 from pathlib import Path
 import time
 
@@ -1605,3 +1607,26 @@ def test_refresco_no_borra_lo_escrito_o_marcado_sin_enviar() -> None:
     assert "campo.value !== campo.defaultValue" in guarda  # la nota y el mensaje a la empresa
     # Lo que escribe el orientador tiene que seguir con ids estables para compararse al redibujar.
     assert "`nota-${m.perfil_id}-${m.oferta_id}`" in js and "`consent-${m.perfil_id}-${m.oferta_id}`" in js
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="hace falta node para ejecutar la función del navegador")
+def test_chips_de_la_tarjeta_nombran_cv_carta_cita_y_mensaje() -> None:
+    """Los cuatro archivos de una postulación enviada salen con etiqueta y no con el nombre del archivo."""
+    import json as _json
+    import re
+
+    js = (Path(__file__).resolve().parents[1] / "app" / "static" / "app.js").read_text(encoding="utf-8")
+    funcion = re.search(r"^function tipoArchivo\(nombre\) \{.*?^\}", js, re.S | re.M)
+    assert funcion, "falta tipoArchivo en app.js"
+    nombres = [
+        "cv_PERFIL-YARITZA_OF-CHORRERA-01.pdf",
+        "carta_PERFIL-YARITZA_OF-CHORRERA-01.pdf",
+        "entrevista_PERFIL-YARITZA_OF-CHORRERA-01.ics",
+        "mensaje_20261017-071731_1.txt",
+        "otro_archivo.bin",
+    ]
+    llamada = f"console.log(JSON.stringify({_json.dumps(nombres)}.map((n) => tipoArchivo(n).etiqueta)));"
+    guion = "\n".join([funcion.group(0), llamada])
+    salida = subprocess.run(["node", "-e", guion], capture_output=True, text=True, encoding="utf-8", timeout=30)
+    assert salida.returncode == 0, salida.stderr
+    assert _json.loads(salida.stdout) == ["CV · PDF", "Carta · PDF", "Cita .ics", "Mensaje", "otro_archivo.bin"]
