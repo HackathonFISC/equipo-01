@@ -84,6 +84,8 @@ from puente.guardrails import EDAD_MAX, EDAD_MIN, evaluar_entrada, limpiar_entra
 from puente.rules.taxonomia import normalizar_habilidad
 from puente.schemas import DIAS_VALIDOS, EntradaPerfil
 
+from app import joven_fase2  # Vista del joven, fase 2 (#166): la lógica vive en app/joven_fase2.py
+
 RUTA_APP = Path(__file__).resolve().parent
 RUTA_STATIC = RUTA_APP / "static"
 RUTA_RAIZ = RUTA_APP.parent
@@ -2635,6 +2637,13 @@ app = Starlette(
         Route("/api/joven/consentimiento", endpoint_joven_consentimiento, methods=["POST"]),
         Route("/api/joven/{perfil_id}/resultado", endpoint_joven_resultado, methods=["GET"]),
         Route("/api/joven/{perfil_id}/ics/{oferta_id}", endpoint_joven_ics, methods=["GET"]),
+        # Vista del joven, fase 2 (#166)
+        Route("/api/joven/entrevista", joven_fase2.endpoint_iniciar_entrevista, methods=["POST"]),
+        Route("/api/joven/{perfil_id}/entrevista", joven_fase2.endpoint_entrevista, methods=["GET", "POST"]),
+        Route("/api/joven/{perfil_id}/entrevista/terminar", joven_fase2.endpoint_terminar_entrevista, methods=["POST"]),
+        Route("/api/joven/{perfil_id}/tirilla", joven_fase2.endpoint_tirilla, methods=["POST"]),
+        Route("/api/joven/{perfil_id}/tirilla/confirmar", joven_fase2.endpoint_confirmar_tirilla, methods=["POST"]),
+        Route("/api/joven/{perfil_id}/postulaciones", joven_fase2.endpoint_postulaciones, methods=["GET"]),
         # Lista corta ciega de la empresa (#167)
         Route("/empresa/lista-corta", empresa.endpoint_pagina, methods=["GET"]),
         Route("/api/empresa/{empresa_id}/lista-corta", empresa.endpoint_lista, methods=["GET"]),

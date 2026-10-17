@@ -95,6 +95,9 @@
       </div>
     </form>
 
+    <!-- Fase 2 (#166): entrevista por chat, una pregunta a la vez. La arma joven_fase2.js. -->
+    <section id="f2-chat" class="tarjeta" aria-labelledby="f2-chat-titulo" hidden></section>
+
     <section id="buscar" class="tarjeta buscar" aria-labelledby="buscar-titulo">
       <h2 id="buscar-titulo" class="buscar-titulo">¿Ya hiciste la entrevista?</h2>
       <form id="form-buscar" class="buscar-form">
@@ -123,6 +126,11 @@
         <div id="res-descartes" class="lista"></div>
       </section>
       <!-- TODO(#12/#84): aquí va el mensaje para el joven que arma Postulación (campo "mensaje" de la API). Esta página no redacta uno propio. -->
+      <!-- Fase 2 (#166): «Mis postulaciones» y la tirilla de horario. Las arma joven_fase2.js. -->
+      <section id="f2-postulaciones" class="bloque" aria-labelledby="f2-postulaciones-titulo" hidden></section>
+      <section id="f2-tirilla" class="bloque" aria-labelledby="f2-tirilla-titulo" hidden></section>
+      <!-- TODO(#158): el reto de la micro-misión y su scorecard van aquí (pintarMision en joven_fase2.js). -->
+      <section id="f2-mision" class="bloque" hidden></section>
       <div class="acciones">
         <button type="button" id="btn-actualizar" class="btn btn-sec">Actualizar</button>
         <button type="button" id="btn-nueva" class="btn btn-sec">Hacer otra entrevista</button>
@@ -132,5 +140,6 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <script src="/static/joven.js?v=1" defer></script>
+  <script src="/static/joven_fase2.js?v=1" defer></script>
 </body>
 </html>
