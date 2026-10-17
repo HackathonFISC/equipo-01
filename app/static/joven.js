@@ -6,24 +6,27 @@
 const CLAVE_CODIGO = "puente.joven.codigo";
 
 // Caso guía de la demo: datos sintéticos, no de una persona real.
-// Las respuestas son las de tests/fixtures/caso_yaritza.json, en el mismo orden (#192): el prompt de Perfil
-// solo depende de ellas, y su lectura está grabada en data/grabaciones, así LLM_MODO=reproducir arma el
-// perfil sin red ni claves. El salario sigue a la quinta respuesta; el corregimiento queda en La Chorrera
-// porque es el que tiene traslados en la lista. Si cambias una respuesta, hay que volver a grabar.
+// Las respuestas son las del guion del video, data/demo/yaritza_chat.json, en el mismo orden y letra por letra
+// (#194): el prompt de Perfil solo depende de ellas y de la taxonomía, y su lectura está grabada en
+// data/grabaciones (la misma del chat, ver data/demo/grabaciones_video.json), así LLM_MODO=reproducir arma el
+// perfil sin red ni claves. Edad, corregimiento, horarios, salario y pasaje son los del formulario del guion.
+// Sin horario libre, como el guion y el caso de la terminal, el Matching no recorta por días: con lunes a
+// viernes, Yaritza saldría de la lista de la oferta de fin de semana. Los horarios van en listas, como los manda
+// datosDelFormulario(). Si cambias una respuesta, hay que volver a grabar (scripts/grabar_video.sh).
 const EJEMPLO_YARITZA = {
   nombre: "Yaritza",
   edad: 20,
   corregimiento: "La Chorrera",
-  horario_libre: { dias: ["lunes", "martes", "miercoles", "jueves", "viernes"], hora_inicio: "07:00", hora_fin: "17:00" },
-  horario_clases: { dias: ["lunes", "martes", "miercoles", "jueves", "viernes"], hora_inicio: "18:00", hora_fin: "22:00" },
+  horario_libre: [],
+  horario_clases: [{ dias: ["lunes", "martes", "miercoles", "jueves", "viernes"], hora_inicio: "18:00", hora_fin: "22:00" }],
   salario_minimo: 400,
   presupuesto_pasaje_diario: 3,
   respuestas: [
-    "Tengo 20 años y vivo en La Chorrera.",
-    "Estudio de noche, de lunes a viernes de 6 a 10 de la noche. En el día ayudo en la fonda.",
-    "Atiendo la fonda de mi mamá todas las mañanas. Atiendo a los clientes y les tomo el pedido, cobro y doy el vuelto.",
-    "No he hecho voluntariado.",
-    "Sé usar el celular y ayudo a cocinar el almuerzo. Necesito ganar al menos 400 al mes.",
+    "Sí, en la fonda de mi mamá. Le ayudo todas las mañanas antes de irme a clases: atiendo a los clientes, les tomo el pedido, cobro y doy el vuelto. A la hora del almuerzo se llena y hay que estar pilas.",
+    "No, no he tenido otros trabajos. Todo lo que sé lo aprendí en la fonda.",
+    "No he hecho voluntariado. Entre la fonda y las clases de noche no me queda tiempo.",
+    "Sé usar bien el celular, para WhatsApp y para cobrar por Yappy. También ayudo a cocinar: pico la verdura y preparo el arroz y las lentejas del almuerzo.",
+    "La señora de al lado me pide que le ayude con el celular, por ejemplo a pagar la luz por Yappy, porque ella no se entiende con eso. Le enseño paso a paso hasta que lo hace sola.",
   ],
 };
 
@@ -251,10 +254,11 @@ function usarEjemplo() {
   $("f-nombre").value = e.nombre;
   $("f-edad").value = e.edad;
   $("f-corregimiento").value = e.corregimiento;
-  fijarHorario($("h-libre"), e.horario_libre);
+  // Sin bloque libre, los días quedan sin marcar y datosDelFormulario() manda horario_libre: [].
+  fijarHorario($("h-libre"), e.horario_libre[0] || { ...HORARIO_POR_DEFECTO.libre, dias: [] });
   $("f-estudia").checked = true;
   $("h-clases").hidden = false;
-  fijarHorario($("h-clases"), e.horario_clases);
+  fijarHorario($("h-clases"), e.horario_clases[0]);
   $("f-salario").value = e.salario_minimo;
   $("f-pasaje").value = e.presupuesto_pasaje_diario;
   formulario.preguntas.forEach((_, i) => {
