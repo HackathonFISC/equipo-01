@@ -1,0 +1,44 @@
+{
+  "id": "P20",
+  "nombre": "María José (ficticia)",
+  "edad": 24,
+  "corregimiento": "Calidonia",
+  "horario_libre": [
+    {
+      "dias": [
+        "lunes",
+        "martes",
+        "miercoles",
+        "jueves",
+        "viernes",
+        "sabado",
+        "domingo"
+      ],
+      "hora_inicio": "07:00",
+      "hora_fin": "23:00"
+    }
+  ],
+  "salario_minimo": 700,
+  "presupuesto_pasaje_diario": 1.0,
+  "experiencia_texto": "Atendía a los clientes en el mostrador y les explicaba la dosis de la receta. Llevaba el control del inventario de medicamentos en el sistema. Revisaba los lotes y sacaba de la vitrina los medicamentos por vencer. Facturaba las ventas en caja al cierre de cada turno.",
+  "habilidades": [
+    {
+      "skill_id": "atencion_cliente",
+      "evidencia": "Atendía a los clientes en el mostrador"
+    },
+    {
+      "skill_id": "inventario",
+      "evidencia": "Llevaba el control del inventario de medicamentos"
+    },
+    {
+      "skill_id": "rotacion_existencias",
+      "evidencia": "sacaba de la vitrina los medicamentos por vencer"
+    },
+    {
+      "skill_id": "facturacion",
+      "evidencia": "Facturaba las ventas en caja"
+    }
+  ],
+  "datos_sinteticos": true,
+  "horario_clases": []
+}

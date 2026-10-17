@@ -35,7 +35,11 @@ Por eso `puente/solver/` y `puente/rules/` no importan ningún modelo de lenguaj
 
 El flujo es un grafo de **LangGraph** (`puente/graph.py`, #10) con 14 nodos. Por defecto `construir_grafo()` usa los agentes reales (`nodos_fase_2()`). Los stubs de la fase 1 (`NODOS_FASE_1`) sirven para probar la mecánica del grafo, y el tablero los usa para Mercado y Perfil (ver [Límites](#5-límites)).
 
-El diagrama sale del grafo real, sin red:
+![Arquitectura de Puente: 14 nodos, regresos y aprobación humana](arquitectura.png)
+
+*Diagrama de arquitectura ([`arquitectura.png`](arquitectura.png)): lo dibuja `docs/generar_arquitectura.py` con los nodos y las aristas de `construir_grafo()`, y `tests/test_arquitectura.py` comprueba que coinciden. Se regenera con `uv run python docs/generar_arquitectura.py` cuando cambia el flujo.*
+
+El mismo grafo, como texto, sale del grafo real sin red:
 
 ```bash
 uv run python -c "from puente.graph import construir_grafo; print(construir_grafo().get_graph().draw_mermaid())"
