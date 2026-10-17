@@ -55,6 +55,23 @@ Credenciales de demo sin claves reales: ver `.env.example`.
 
 Las palabras clave de inyección ("ignora tus instrucciones", "eres ahora", "system prompt") solo **marcan** el texto, que sigue como dato; no bloquean nada, porque una lista de palabras se esquiva con facilidad. La defensa real es estructural: el LLM responde con salida estructurada que se valida con Pydantic, y las decisiones que importan (orden de candidatos, traslados, legalidad de una oferta) se toman en código. Antes de `graph.invoke`, `limpiar_entrada()` de `puente/guardrails.py` quita cédula, teléfono y dirección exacta. Así el dato crudo no llega al checkpoint, a `decisiones`, al LLM ni a LangSmith, que además corre con `LANGSMITH_HIDE_INPUTS` y `LANGSMITH_HIDE_OUTPUTS`. Las notas de voz se rechazan por ahora con un mensaje claro.
 
+## Vista del joven (`/joven`)
+
+`uv run python -m app.server` sirve el tablero del orientador en `/` y la vista del joven en `/joven`. El joven llena el formulario fijo y hace la entrevista de 5 preguntas, en un solo envío (#52) o por chat, una pregunta a la vez (#166). Después puede subir la foto o el PDF de su tirilla de matrícula para anotar sus clases (#164), decidir si acepta cada envío y seguir sus postulaciones: el embudo por vacante, el aviso cuando la empresa no sigue (#54), el `.ics` de la entrevista propuesta y su «no», que manda sobre el orientador (#109).
+
+| Ruta | Qué hace |
+|---|---|
+| `POST /api/joven/entrevista` | Abre la entrevista por chat con el formulario fijo y entrega el código |
+| `GET` / `POST /api/joven/{id}/entrevista` | Pregunta que sigue / manda una respuesta (limpia de PII y con guardrails) |
+| `POST /api/joven/{id}/entrevista/terminar` | El agente Perfil arma el perfil y lo deja listo en el tablero |
+| `POST /api/joven/{id}/tirilla` | Lee la tirilla (base64 en JSON, hasta 5 MB) y devuelve los bloques con sus problemas |
+| `POST /api/joven/{id}/tirilla/confirmar` | Guarda los bloques confirmados y recalcula el Matching; la imagen no se guarda |
+| `GET /api/joven/{id}/postulaciones` | Embudo por vacante, avisos del reacomodo, `.ics` y el «no» del joven |
+
+Con `LLM_MODO=reproducir` (sin red) solo se leen las entradas que tienen grabación: en el chat, el botón «Usar la respuesta de Yaritza», y la tirilla `tests/fixtures/tirilla_sintetica.png`. Con otras respuestas el agente Perfil responde con un error claro y no inventa el perfil.
+
+**Limitación de la demo: no hay login.** El joven se identifica con un código `PERFIL-….<token>` que recibe al abrir la entrevista. El token viaja en el encabezado `X-Token-Joven` y, en la página, en el fragmento `#codigo=` de la URL, que el navegador no manda al servidor (el enlace `.ics` de la fase 1 aún lo lleva en la URL). Quien tenga el código ve y decide por ese perfil. Los códigos de los perfiles semilla salen en la consola del servidor. Una entrevista por chat sin terminar vive en memoria: si el servidor se reinicia, se empieza de nuevo.
+
 ## Evals
 
 Al menos 15 casos de prueba, métrica y resultados.

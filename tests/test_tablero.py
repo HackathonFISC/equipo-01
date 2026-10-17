@@ -15,6 +15,7 @@ from app.server import (
     analizar_nueva_oferta_texto,
     app,
     calcular_matches_tablero,
+    cargar_desde_catalogo_data,
     desbloquear_oferta_con_motivo,
     obtener_datos_iniciales_demo,
     procesar_accion_orientador,
@@ -656,6 +657,134 @@ def test_issue_122_persistencia_entre_reinicios_y_reset_con_puente_db(
     finally:
         conn.close()
 
+def test_trazas_honestas_el_tablero_no_firma_por_agentes_que_no_corrieron(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#193: lo que hace el código del tablero queda a nombre de «tablero», nunca de «mercado» o «perfil».
+
+    Mercado y Perfil (y los demás agentes con LLM) solo leen a través de `puente.llm`: el espía anota a quién
+    llamó el tablero. Una Decision a nombre de uno de ellos sin esa llamada sería una traza falsa.
+    """
+    import app.server as srv
+    import puente.llm as llm
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path)
+    corrieron: set[str] = set()
+
+    def _llm_espia(*_args: object, agente: str = "", **_kwargs: object) -> None:
+        corrieron.add(agente)
+        raise RuntimeError(f"el tablero llamó al LLM a nombre de {agente}")
+
+    monkeypatch.setattr(llm, "generar_estructurado", _llm_espia)
+
+    estado = obtener_datos_iniciales_demo()
+    procesar_accion_orientador(
+        estado,
+        accion="aprobar",
+        perfil_id="PERFIL-YARITZA",
+        oferta_id="OF-CHORRERA-01",
+        consentimiento_joven=True,
+    )
+    analizar_nueva_oferta_texto(
+        estado,
+        puesto="Auxiliar de Tienda",
+        empresa="Almacenes del Oeste (Empresa de Prueba)",
+        corregimiento="La Chorrera",
+        salario_mensual=650.0,
+        requisitos_texto="Atención en tienda y control de inventario.",
+        habilidades=["atencion_cliente", "inventario"],
+    )
+    analizar_nueva_oferta_texto(
+        estado,
+        puesto="Vendedor",
+        empresa="Comercial Central (Empresa de Prueba)",
+        corregimiento="Bella Vista",
+        salario_mensual=660.0,
+        requisitos_texto="Joven de 18 a 25 años con buena presencia.",
+        habilidades=["atencion_cliente"],
+    )
+    registrar_nuevo_perfil(
+        estado,
+        nombre="Mariela",
+        edad=20,
+        corregimiento="Vista Alegre",
+        salario_minimo=600.0,
+        presupuesto_pasaje_diario=3.0,
+        relato_experiencia="Atiende pedidos y cobra en el puesto de comida familiar.",
+        habilidades_ids=["atencion_cliente", "manejo_caja"],
+    )
+    cargar_desde_catalogo_data(estado, tipo="perfil", item_id="ejemplo_sintetico_perfil_b")
+    cargar_desde_catalogo_data(estado, tipo="oferta", item_id="ejemplo_sintetico_K04_tocumen")
+    desbloquear_oferta_con_motivo(estado, oferta_id="OF-BLOQ-EDAD-04", motivo="La empresa corrigió el requisito")
+
+    assert corrieron == set()  # en el tablero no corre ningún agente con LLM
+
+    # Las altas de ofertas y perfiles las hizo el tablero, y la traza lo dice.
+    altas = [d for d in estado["decisiones"] if d["entrada_resumen"].startswith(("Nueva oferta", "Nuevo perfil"))]
+    assert len(altas) == 5
+    assert {d["agente"] for d in altas} == {"tablero"}
+    assert all("sin el agente" in d["razon"] for d in altas)
+    bloqueadas = [d for d in altas if d["salida_resumen"].startswith("bloqueada=True")]
+    assert bloqueadas and all("Ley 11 de 2005" in d["razon"] for d in bloqueadas)
+
+    # Ni en memoria, ni en SQLite, ni en el checkpointer del grafo del tablero firma un agente con LLM que no corrió.
+    agentes_con_llm = {"mercado", "perfil", "horario", "micromision", "redactor"}
+    en_grafo = [
+        srv._serializar_decision(d)
+        for d in estado["_grafo"].get_state(estado["_config_grafo"]).values.get("decisiones") or []
+    ]
+    for fuente in (estado["decisiones"], srv._leer_decisiones_db(estado), en_grafo):
+        assert {d["agente"] for d in fuente} & agentes_con_llm <= corrieron
+    # El nodo «perfil» del grafo lo atiende el stub del tablero: su Decision lo dice.
+    stubs = [d for d in en_grafo if d["agente"] == "tablero"]
+    assert stubs and all("el agente perfil no corrió" in d["razon"] for d in stubs)
+
+    # Lo que ven el orientador y la línea de tiempo (#193).
+    raiz = Path(__file__).resolve().parents[1] / "app" / "static"
+    html = (raiz / "index.html").read_text(encoding="utf-8")
+    assert "Registrar perfil y recalcular" in html and "Extraer habilidades" not in html
+    assert '<option value="tablero">Tablero</option>' in html
+    assert 'tablero: { nombre: "Tablero"' in (raiz / "app.js").read_text(encoding="utf-8")
+    assert ".ag-tablero" in (raiz / "styles.css").read_text(encoding="utf-8")
+
+
+def test_api_no_aprueba_si_el_auditor_detecto_sesgo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """El freno del Auditor no está solo en el botón: la API responde 422 con el motivo y sin efectos (#189)."""
+    import app.server as srv
+
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", outbox)
+    aprobar = {
+        "accion": "aprobar",
+        "perfil_id": "PERFIL-YARITZA",
+        "oferta_id": "OF-CHORRERA-01",
+        "consentimiento_joven": True,
+    }
+
+    async def _ejecutar() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            assert (await client.post("/api/reset")).status_code == 200
+            r_sesgo = await client.post("/api/auditor/simular-sesgo", json={"activar": True})
+            assert r_sesgo.json()["auditoria"]["sesgo_detectado"] is True
+            antes = (await client.get("/api/estado")).json()
+
+            r = await client.post("/api/orientador/accion", json=aprobar)
+            assert r.status_code == 422
+            assert "sesgo" in r.json()["detail"].lower()
+
+            despues = (await client.get("/api/estado")).json()
+            assert list(outbox.iterdir()) == []  # ni CV, ni mensaje, ni .ics
+            for clave in ("postulaciones", "consentimientos", "decisiones"):
+                assert despues[clave] == antes[clave], clave
+
+            # Sin sesgo, el mismo pedido vuelve a aprobarse.
+            await client.post("/api/auditor/simular-sesgo", json={"activar": False})
+            assert (await client.post("/api/orientador/accion", json=aprobar)).status_code == 200
+
+    asyncio.run(_ejecutar())
+
 
 def test_issue_168_roles_umbrales_tocumen_y_panel_operacion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -940,5 +1069,101 @@ def test_issue_170_ingesta_multicanal_archivos_guardrails_y_pii(
     asyncio.run(_ejecutar())
 
 
+def test_cargar_desde_data_lee_el_archivo_y_rotula_lo_sintetico(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """«Cargar desde data/» lee el archivo elegido; lo escrito en el código se rotula como ejemplo sintético (#188)."""
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path)
+
+    async def _ejecutar() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            assert (await client.post("/api/reset")).status_code == 200
+            catalogo = srv.listar_catalogo_data()
+            for item in catalogo["ofertas"] + catalogo["perfiles"]:
+                if item["id"].startswith("data/"):
+                    assert item["etiqueta"].startswith(item["id"])
+                else:
+                    assert item["etiqueta"].startswith("ejemplo sintético")
+
+            # Oferta: el anuncio de data/ofertas pasa por Mercado (reproducir, grabaciones de #139) y la Ley 11
+            # se aplica sobre su texto: CT02 pide edad y queda bloqueada.
+            r = await client.post("/api/cargar-data", json={"tipo": "oferta", "item_id": "data/ofertas/CT02.txt"})
+            assert r.status_code == 200, r.text
+            oferta = next(o for o in r.json()["ofertas"] if o["fuente"] == "data/ofertas/CT02.txt")
+            assert "Recaudaci" in oferta["puesto"] and oferta["bloqueada"] is True
+            assert "sintético" not in oferta["fuente"]
+
+            # Perfil: el JSON de data/perfiles, con sus horarios y evidencias del archivo.
+            r = await client.post("/api/cargar-data", json={"tipo": "perfil", "item_id": "data/perfiles/yaritza.json"})
+            assert r.status_code == 200, r.text
+            perfil = next(p for p in r.json()["perfiles"] if p["id"] == "PERFIL-DATA-P01")
+            assert perfil["modalidad_ingreso"] == "data/perfiles/yaritza.json (sintético)"
+            assert {h["evidencia"] for h in perfil["habilidades"]} >= {"cobro en caja", "atiendo pedidos"}
+            assert perfil["horario_clases_bloques"][0]["hora_inicio"] == "18:30"
+
+            # El mismo archivo dos veces no duplica: 422.
+            r = await client.post("/api/cargar-data", json={"tipo": "perfil", "item_id": "data/perfiles/yaritza.json"})
+            assert r.status_code == 422 and "ya está en el tablero" in r.json()["detail"]
+
+    asyncio.run(_ejecutar())
 
 
+def test_catalogo_de_data_trae_todos_los_archivos() -> None:
+    """El catálogo lista las 20 ofertas de data/ofertas (Computrabajo y Konzerta) y todos los perfiles (#188)."""
+    import app.server as srv
+
+    catalogo = srv.listar_catalogo_data()
+    ids = {item["id"] for item in catalogo["ofertas"] + catalogo["perfiles"]}
+    ofertas = {f"data/ofertas/{a.name}" for a in (srv.RUTA_DATA / "ofertas").glob("*.txt")}
+    perfiles = {f"data/perfiles/{a.name}" for a in (srv.RUTA_DATA / "perfiles").glob("*.json")}
+    assert len(ofertas) == 20 and ofertas <= ids
+    assert perfiles <= ids
+    assert any(i.startswith("data/ofertas/K") for i in ids)  # las de Konzerta ya no quedan fuera
+
+
+def test_editar_no_guarda_pii_de_la_nota_ni_del_mensaje(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """La nota y el mensaje del orientador pasan por limpiar_entrada antes de guardarse (#213, TRA-6)."""
+    import json as _json
+
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path)
+    crudos = ("8-123-4567", "6123-4567", "Calle 5ta")
+    editar = {
+        "accion": "editar",
+        "perfil_id": "PERFIL-YARITZA",
+        "oferta_id": "OF-CHORRERA-01",
+        "nota_edicion": "Cédula 8-123-4567, tel 6123-4567, vive en Calle 5ta casa 12, Arraiján. Buena actitud.",
+        "mensaje_empresa": "Pueden llamarla al 6123-4567 para coordinar la entrevista.",
+    }
+
+    async def _ejecutar() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            assert (await client.post("/api/reset")).status_code == 200
+            r = await client.post("/api/orientador/accion", json=editar)
+            assert r.status_code == 200, r.text
+            estado = (await client.get("/api/estado")).json()
+
+        publico = _json.dumps(estado, ensure_ascii=False)
+        for dato in crudos:
+            assert dato not in publico, dato
+        post = next(
+            p for p in estado["postulaciones"]
+            if p["perfil_id"] == "PERFIL-YARITZA" and p["oferta_id"] == "OF-CHORRERA-01"
+        )
+        assert "Buena actitud" in post["comentario_orientador"]  # la nota llega, sin los datos
+        assert "[CEDULA]" in post["comentario_orientador"] and "[TELEFONO]" in post["mensaje_empresa"]
+
+        conn = db.conectar(srv.ESTADO_GLOBAL["_db_path"])
+        try:
+            filas = conn.execute("SELECT entrada_resumen, salida_resumen, razon FROM decisiones").fetchall()
+        finally:
+            conn.close()
+        guardado = " ".join(" ".join(str(c) for c in tuple(f)) for f in filas)
+        assert "Buena actitud" in guardado
+        for dato in crudos:
+            assert dato not in guardado, dato
+
+    asyncio.run(_ejecutar())
