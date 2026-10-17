@@ -1,0 +1,20 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "version": 2,
+  "builds": [
+    {
+      "src": "app/server.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "app/server.py"
+    }
+  ],
+  "env": {
+    "PUENTE_DEMO_PUBLICA": "1",
+    "LLM_MODO": "reproducir"
+  }
+}
