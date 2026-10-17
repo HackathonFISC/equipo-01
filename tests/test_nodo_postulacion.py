@@ -6,6 +6,7 @@ Todos los datos son SINTÉTICOS (caso_yaritza.json y perfiles ficticios).
 """
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from itertools import pairwise
 
 import ics
 import pytest
@@ -34,7 +35,8 @@ CAJERO = "of-cajero-vista-alegre"
 COCINA = "of-ayudante-cocina-chorrera"
 TOCUMEN = "of-tocumen-sintetica"
 CHAT_EMPRESA = "chat-empresa-ficticio"
-CHAT_JOVEN = "chat-joven-ficticio"
+CHAT_CARLOS = "chat-carlos-ficticio"
+CHAT_YARITZA = "chat-yaritza-ficticio"
 MOTIVO_TOCUMEN = "traslado de 95 min a Tocumen"
 
 
@@ -44,7 +46,8 @@ def entorno(monkeypatch):
     monkeypatch.setenv("LANGSMITH_TRACING", "false")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token-ficticio")
     monkeypatch.setenv("TELEGRAM_CHAT_ID_EMPRESA", CHAT_EMPRESA)
-    monkeypatch.setenv("TELEGRAM_CHAT_ID_JOVEN", CHAT_JOVEN)
+    monkeypatch.setenv("TELEGRAM_CHATS_JOVENES",
+                       f"carlos={CHAT_CARLOS},yaritza={CHAT_YARITZA},ana=chat-ana,bea=chat-bea,cira=chat-cira")
     monkeypatch.delenv("PUENTE_ENTREVISTA_INICIO", raising=False)
 
     def prohibido(*a, **k):
@@ -178,13 +181,16 @@ def test_el_nodo_elige_la_franja_y_el_mensaje_a_la_empresa_es_ciego(tmp_path):
     for dato in ("Barrio Colón", "20 años", "edad", "género", "Femenino"):
         assert dato not in texto
 
-    # Yaritza estudia de 18:00 a 22:00 y no declaró horario libre: lunes 08:00 es el primer hueco
-    # posterior a AHORA (07:00), con traslado 0 del Matching de la Fase 1.
+    # Yaritza estudia de 18:00 a 22:00 y no declaró horario libre; Carlos no tiene clases. Con
+    # traslado 0 del Matching de la Fase 1, lunes 08:00 es el primer hueco posterior a AHORA
+    # (07:00) y es de Carlos, que va primero en la aprobación. Yaritza recibe la siguiente hora
+    # libre de la misma empresa: 08:45, no la misma 08:00.
     eventos = {}
     for ruta in caso.outbox.glob("entrevista_*.ics"):
         (evento,) = ics.Calendar(ruta.read_text(encoding="utf-8")).events
         eventos[ruta.stem] = evento.begin.datetime
-    assert eventos["entrevista_yaritza_" + CAJERO] == datetime(2026, 10, 19, 8, 0, tzinfo=PANAMA)
+    assert eventos["entrevista_carlos_" + CAJERO] == datetime(2026, 10, 19, 8, 0, tzinfo=PANAMA)
+    assert eventos["entrevista_yaritza_" + CAJERO] == datetime(2026, 10, 19, 8, 45, tzinfo=PANAMA)
 
 
 def test_sin_consentido_postulacion_no_envia_nada(tmp_path):
@@ -297,9 +303,13 @@ def test_mensaje_al_joven_trae_postulacion_descarte_e_ics(tmp_path):
     caso = Caso(tmp_path, con_tocumen=True)
     caso.aprobar()
 
-    por_chat = {m[1] for m in caso.joven.mensajes}
-    assert por_chat == {CHAT_JOVEN}  # nunca al chat de la empresa
+    por_chat = {m[1]: m[2] for m in caso.joven.mensajes}
+    assert set(por_chat) == {CHAT_CARLOS, CHAT_YARITZA}  # uno por joven, nunca el de la empresa
     assert len(caso.joven.mensajes) == 2  # Carlos y Yaritza
+    # Cada joven recibe solo lo suyo: ni el nombre ni los descartes del otro.
+    assert por_chat[CHAT_YARITZA].startswith("Hola, Yaritza") and "Carlos" not in por_chat[CHAT_YARITZA]
+    assert por_chat[CHAT_CARLOS].startswith("Hola, Carlos") and "Yaritza" not in por_chat[CHAT_CARLOS]
+    assert MOTIVO_TOCUMEN not in por_chat[CHAT_CARLOS]
     textos = {m[2].split(".")[0].removeprefix("Hola, "): m for m in caso.joven.mensajes}
     _, _, texto, adjuntos = textos["Yaritza Ficticia"]
     assert "Cajero(a) de minisúper" in texto and "Minisúper Ficticio El Ahorro" in texto
@@ -318,13 +328,14 @@ def test_mensaje_al_joven_trae_postulacion_descarte_e_ics(tmp_path):
 
 
 def test_sin_chat_del_joven_el_mensaje_queda_en_outbox(tmp_path, monkeypatch):
-    monkeypatch.delenv("TELEGRAM_CHAT_ID_JOVEN")
+    monkeypatch.delenv("TELEGRAM_CHATS_JOVENES")
     caso = Caso(tmp_path, con_tocumen=True)
     caso.aprobar()
 
     assert caso.joven.mensajes == []
     archivos = sorted(caso.outbox.glob("joven_*.txt"))
     assert len(archivos) == 2
+    assert [a.name.split("_")[1] for a in archivos] == ["carlos", "yaritza"]  # un archivo por joven
     yaritza = next(a for a in archivos if "Yaritza Ficticia" in a.read_text(encoding="utf-8"))
     contenido = yaritza.read_text(encoding="utf-8")
     assert MOTIVO_TOCUMEN in contenido and "entrevista_yaritza_" in contenido
@@ -528,3 +539,234 @@ def test_si_ninguna_hora_cabe_fuera_de_las_clases_no_se_envia_y_queda_la_decisio
                    for t in db.trazas(conn, agente="postulacion"))
     finally:
         conn.close()
+
+
+SEMANA = ["lunes", "martes", "miercoles", "jueves", "viernes"]
+
+
+def _tres_de_una_oferta():
+    """Tres candidatos SINTÉTICOS de la misma oferta, que no publica franjas (horario laboral).
+
+    Ana no tiene clases ni traslado; Bea tiene 30 min de traslado; Cira estudia de 07:00 a 08:30
+    y tiene 15 min de traslado, así que no puede antes de las 08:45.
+    """
+    oferta = Oferta(id="o-tres", puesto="Cajera", empresa="Super Ficticio", corregimiento="Arraiján",
+                    salario_mensual=500.0, habilidades=["atencion_cliente"])
+    datos = [
+        ("ana", "Ana Ficticia", [], 0),
+        ("bea", "Bea Ficticia", [], 30),
+        ("cira", "Cira Ficticia", [Horario(dias=SEMANA, hora_inicio="07:00", hora_fin="08:30")], 15),
+    ]
+    perfiles, matches = [], []
+    for pid, nombre, clases, traslado in datos:
+        perfiles.append(Perfil(
+            id=pid, nombre=nombre, edad=21, corregimiento="La Chorrera", salario_minimo=300.0,
+            presupuesto_pasaje_diario=2.0, horario_clases=clases,
+            habilidades=[HabilidadPerfil(skill_id="atencion_cliente", evidencia="atiendo clientes")]))
+        matches.append(Match(perfil_id=pid, oferta_id=oferta.id, puntaje=90, desglose={
+            "cobertura": 1.0, "minutos_traslado": traslado, "pasaje_diario": 1.0, "penalizacion": 0}))
+    return oferta, perfiles, matches
+
+
+def _inicios_ics(outbox):
+    """{perfil_id: inicio} de los .ics de entrevista que quedaron en ``outbox``."""
+    inicios = {}
+    for ruta in outbox.glob("entrevista_*.ics"):
+        (evento,) = ics.Calendar(ruta.read_text(encoding="utf-8")).events
+        inicios[ruta.stem.removeprefix("entrevista_").split("_")[0]] = evento.begin.datetime.astimezone(PANAMA)
+    return inicios
+
+
+def test_cada_candidato_de_una_oferta_recibe_una_hora_distinta_sin_cruzar_sus_clases(tmp_path):
+    oferta, perfiles, matches = _tres_de_una_oferta()
+    empresa, joven = Doble(), Doble()
+    nodo = crear_nodo_postulacion(ruta_db=tmp_path / "puente.db", outbox=tmp_path / "outbox",
+                                  enviar=empresa, enviar_joven=joven, ahora=lambda: AHORA)
+    cambios = nodo({
+        "aprobacion": {"orientador": "Orientadora Ficticia", "timestamp": "2026-10-19T06:30:00-05:00",
+                       "oferta_id": oferta.id,
+                       "aprobados": [{"perfil_id": m.perfil_id, "oferta_id": oferta.id} for m in matches]},
+        "ofertas": [oferta], "perfiles": perfiles, "matches": matches, "lista_corta": matches,
+        "decisiones": [], "errores": [],
+    })
+
+    assert cambios["errores"] == []
+    inicios = _inicios_ics(tmp_path / "outbox")
+    # Ana toma las 08:00 y Bea la siguiente libre para la empresa, 08:45. Cira no puede antes
+    # de las 08:45 (clases hasta las 08:30 + 15 de traslado) y esa hora ya es de Bea: 09:30.
+    assert inicios == {
+        "ana": datetime(2026, 10, 19, 8, 0, tzinfo=PANAMA),
+        "bea": datetime(2026, 10, 19, 8, 45, tzinfo=PANAMA),
+        "cira": datetime(2026, 10, 19, 9, 30, tzinfo=PANAMA),
+    }
+    entrevistas = sorted((i, i + timedelta(minutes=45)) for i in inicios.values())
+    assert all(fin <= siguiente for (_, fin), (siguiente, _) in pairwise(entrevistas))
+    # Con su margen de traslado, la de Cira no toca sus clases.
+    assert inicios["cira"] - timedelta(minutes=15) >= datetime(2026, 10, 19, 8, 30, tzinfo=PANAMA)
+
+    (mensaje,) = empresa.mensajes
+    for hora in ("08:00", "08:45", "09:30"):
+        assert f"Entrevista propuesta: 2026-10-19 {hora}" in mensaje[2]
+    assert set(cambios["postulaciones"].values()) == {EstadoPostulacion.ENVIADO}
+    assert len(joven.mensajes) == 3
+
+
+def test_una_persona_sin_ninguna_hora_posible_no_frena_al_resto_de_la_oferta(tmp_path):
+    """Yaritza tiene clases a toda hora: queda sin .ics, con su Decision, y Carlos sale igual."""
+    todo = Horario(dias=[*SEMANA, "sabado", "domingo"], hora_inicio="00:00", hora_fin="23:59")
+    _, estado = cargar_caso()
+    entradas = [
+        {**e, "horario_clases": [todo.model_dump()]} if e["id"] == "yaritza" else e
+        for e in estado["entradas_perfil"]
+    ]
+    caso = Caso(tmp_path, estado_extra={"entradas_perfil": entradas})
+    assert [c["perfil_id"] for c in caso.solicitud["candidatos"]] == ["carlos", "yaritza"]
+    caso.aprobar()
+
+    (mensaje,) = caso.empresa.mensajes
+    _, _, texto, adjuntos = mensaje
+    assert "Carlos Ficticio" in texto and "Yaritza" not in texto
+    assert {a.name for a in adjuntos} == {f"cv_carlos_{CAJERO}.pdf", f"entrevista_carlos_{CAJERO}.ics"}
+    assert not list(caso.outbox.glob("*yaritza*"))  # ni .ics ni CV para ella
+    valores = caso.valores
+    # Yaritza consintió (nodo_aprobacion la deja en consentido, #54) pero no sale: no tiene hora.
+    assert valores["postulaciones"] == {
+        f"carlos:{CAJERO}": EstadoPostulacion.ENVIADO,
+        f"yaritza:{CAJERO}": EstadoPostulacion.CONSENTIDO,
+    }
+    assert any("yaritza" in e and "sin franja compatible" in e for e in valores["errores"])
+    assert not any("carlos" in e for e in valores["errores"])
+    (aviso_joven,) = caso.joven.mensajes
+    assert "Carlos Ficticio" in aviso_joven[2]
+
+    conn = caso.conexion()
+    try:
+        assert db.embudo(conn)["enviado"] == 1
+        (decision,) = [t for t in db.trazas(conn, agente="postulacion")
+                       if t["entrada_resumen"] == f"yaritza -> {CAJERO}"]
+        assert decision["salida_resumen"] == "no se envió nada"
+        assert "sin franja compatible" in decision["razon"]
+    finally:
+        conn.close()
+
+
+def test_perfiles_y_ofertas_que_no_vienen_en_el_estado_salen_de_la_base(tmp_path):
+    """El Matching puede traer parejas de puente.db (#46, #48): el nodo completa lo que falte."""
+    caso = Caso(tmp_path)
+    valores, solicitud = caso.valores, caso.solicitud
+    conn = caso.conexion()
+    try:
+        for p in valores["perfiles"]:
+            db.guardar_perfil(conn, p)
+        for o in valores["ofertas"]:
+            db.guardar_oferta(conn, o)
+    finally:
+        conn.close()
+    nodo = crear_nodo_postulacion(
+        ruta_db=caso.ruta_db, outbox=caso.outbox, enviar=caso.empresa, enviar_joven=caso.joven,
+        ahora=lambda: AHORA,
+    )
+    aprobados = [{"perfil_id": c["perfil_id"], "oferta_id": solicitud["oferta_id"]} for c in solicitud["candidatos"]]
+    salida = nodo({
+        **valores, "perfiles": [], "ofertas": [],
+        "aprobacion": {"orientador": "Orientadora Ficticia", "timestamp": AHORA.isoformat(),
+                       "aprobados": aprobados, "oferta_id": solicitud["oferta_id"], "mensaje": ""},
+    })
+    assert len(caso.empresa.mensajes) == 1 and not salida["errores"]
+    assert set(salida["postulaciones"].values()) == {EstadoPostulacion("enviado")}
+
+
+def test_una_pareja_sin_perfil_en_ningun_lado_sale_sola_y_las_demas_siguen(tmp_path):
+    caso = Caso(tmp_path)
+    valores, solicitud = caso.valores, caso.solicitud
+    nodo = crear_nodo_postulacion(
+        ruta_db=caso.ruta_db, outbox=caso.outbox, enviar=caso.empresa, enviar_joven=caso.joven,
+        ahora=lambda: AHORA,
+    )
+    aprobados = [{"perfil_id": c["perfil_id"], "oferta_id": solicitud["oferta_id"]} for c in solicitud["candidatos"]]
+    sin_carlos = [p for p in valores["perfiles"] if p.id != "carlos"]
+    salida = nodo({
+        **valores, "perfiles": sin_carlos,
+        "aprobacion": {"orientador": "Orientadora Ficticia", "timestamp": AHORA.isoformat(),
+                       "aprobados": aprobados, "oferta_id": solicitud["oferta_id"], "mensaje": ""},
+    })
+    assert len(caso.empresa.mensajes) == 1 and "Carlos" not in caso.empresa.mensajes[0][2]
+    assert any("falta el perfil carlos" in e for e in salida["errores"])
+
+
+def test_ni_el_pdf_ni_el_mensaje_a_la_empresa_filtran_ubicacion_descartes_ni_otras_ofertas(tmp_path):
+    """#123: hacia la empresa no salen el corregimiento del joven, «Descartes», el presupuesto ni otras ofertas."""
+    from tests.test_cv_ciego import _texto_pdf
+
+    caso = Caso(tmp_path, con_tocumen=True)
+    caso.aprobar()
+    perfiles = {p.id: p for p in caso.valores["perfiles"]}
+    otras = [o for o in caso.valores["ofertas"] if o.id != caso.valores["aprobacion"]["oferta_id"]]
+    _, _, texto, adjuntos = caso.empresa.mensajes[0]
+    pdfs = [a for a in adjuntos if a.suffix == ".pdf"]
+    assert pdfs
+    for salida in [texto, *(_texto_pdf(a) for a in pdfs)]:
+        for prohibido in ("Descartes", "descart", "presupuesto", "pasaje", MOTIVO_TOCUMEN):
+            assert prohibido not in salida
+        for p in perfiles.values():
+            assert p.corregimiento not in salida
+        for o in otras:
+            assert o.empresa not in salida and o.puesto not in salida
+
+
+def _aprobar_directo(nodo, oferta, perfiles, matches, ofertas=None):
+    """Llama al nodo con una aprobación del orientador para esos matches (SINTÉTICO)."""
+    return nodo({
+        "aprobacion": {"orientador": "Orientadora Ficticia", "timestamp": "2026-10-19T06:30:00-05:00",
+                       "oferta_id": oferta.id,
+                       "aprobados": [{"perfil_id": m.perfil_id, "oferta_id": m.oferta_id} for m in matches]},
+        "ofertas": ofertas or [oferta], "perfiles": perfiles, "matches": matches, "lista_corta": matches,
+        "decisiones": [], "errores": [],
+    })
+
+
+def _nodo_para(tmp_path):
+    return crear_nodo_postulacion(ruta_db=tmp_path / "puente.db", outbox=tmp_path / "outbox",
+                                  enviar=Doble(), enviar_joven=Doble(), ahora=lambda: AHORA)
+
+
+def _inicio_ics(outbox, perfil_id, oferta_id):
+    (evento,) = ics.Calendar((outbox / f"entrevista_{perfil_id}_{oferta_id}.ics").read_text(encoding="utf-8")).events
+    return evento.begin.datetime.astimezone(PANAMA)
+
+
+def test_la_misma_oferta_en_dos_aprobaciones_no_repite_la_hora(tmp_path):
+    oferta, perfiles, matches = _tres_de_una_oferta()
+    nodo = _nodo_para(tmp_path)
+    _aprobar_directo(nodo, oferta, perfiles, [matches[0]])  # Ana primero
+    _aprobar_directo(nodo, oferta, perfiles, [matches[1]])  # Bea en otra aprobación
+    ana = _inicio_ics(tmp_path / "outbox", "ana", oferta.id)
+    bea = _inicio_ics(tmp_path / "outbox", "bea", oferta.id)
+    assert ana == datetime(2026, 10, 19, 8, 0, tzinfo=PANAMA)
+    assert bea >= ana + timedelta(minutes=45)  # la empresa no entrevista a dos a la vez
+
+
+def test_dos_ofertas_de_la_misma_empresa_no_cruzan_sus_entrevistas(tmp_path):
+    oferta, perfiles, matches = _tres_de_una_oferta()
+    otra = oferta.model_copy(update={"id": "o-tres-b", "puesto": "Repositor"})  # misma empresa
+    m_otra = matches[1].model_copy(update={"oferta_id": otra.id})
+    nodo = _nodo_para(tmp_path)
+    _aprobar_directo(nodo, oferta, perfiles, [matches[0]])
+    _aprobar_directo(nodo, otra, perfiles, [m_otra], ofertas=[oferta, otra])
+    ana = _inicio_ics(tmp_path / "outbox", "ana", oferta.id)
+    bea = _inicio_ics(tmp_path / "outbox", "bea", otra.id)
+    assert bea >= ana + timedelta(minutes=45) or bea + timedelta(minutes=45) <= ana
+
+
+def test_el_mismo_joven_en_dos_ofertas_no_queda_en_dos_entrevistas_que_se_cruzan(tmp_path):
+    oferta, perfiles, matches = _tres_de_una_oferta()
+    otra = oferta.model_copy(update={"id": "o-otra-empresa", "empresa": "Otra Empresa Ficticia"})
+    bea, bea_otra = matches[1], matches[1].model_copy(update={"oferta_id": otra.id})  # 30 min de traslado
+    nodo = _nodo_para(tmp_path)
+    _aprobar_directo(nodo, oferta, perfiles, [bea])
+    _aprobar_directo(nodo, otra, perfiles, [bea_otra], ofertas=[oferta, otra])
+    primera = _inicio_ics(tmp_path / "outbox", "bea", oferta.id)
+    segunda = _inicio_ics(tmp_path / "outbox", "bea", otra.id)
+    margen, duracion = timedelta(minutes=30), timedelta(minutes=45)
+    # Con su traslado de ida y vuelta, las dos ventanas no se tocan.
+    assert segunda - margen >= primera + duracion + margen or segunda + duracion + margen <= primera - margen

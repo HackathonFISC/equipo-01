@@ -104,6 +104,32 @@ def _consentimiento_otorgado(
     return next((c for c in propios if _leer(c, "otorgado") is True), None)
 
 
+def consentimiento_otorgado(consentimientos: list[dict] | None, par: tuple[str, str]) -> bool:
+    """True si la pareja tiene un consentimiento otorgado y ningún «no» explícito."""
+    return _consentimiento_otorgado(consentimientos, par) is not None
+
+
+def consentimientos_para(
+    pares, previos: list | None, timestamp: str, medio: str = MEDIO_POR_DEFECTO
+) -> list[dict]:
+    """Los consentimientos que trae el estado más uno del orientador por pareja aprobada sin registro propio.
+
+    El orientador confirma en la aprobación que el joven consintió (``consentidos`` de
+    ``nodo_aprobacion``, o el check del tablero). Un ``otorgado=False`` que ya traiga el estado
+    (el «no» del joven, #52 y #54) se conserva y manda: ``postular`` no envía esa pareja.
+    """
+    consentimientos = [c if isinstance(c, dict) else dict(c) for c in previos or []]
+    conocidos = {_par(c) for c in consentimientos}
+    for par in pares:
+        par = _par(par) if not isinstance(par, tuple) else par
+        if par not in conocidos:
+            consentimientos.append(
+                {"perfil_id": par[0], "oferta_id": par[1], "otorgado": True, "medio": medio, "timestamp": timestamp}
+            )
+            conocidos.add(par)
+    return consentimientos
+
+
 def _leer(objeto, nombre: str):
     return objeto.get(nombre) if isinstance(objeto, dict) else getattr(objeto, nombre, None)
 
@@ -269,12 +295,14 @@ def _texto_lista_corta(
     saludo = mensaje_orientador.strip()
     if saludo:
         # El texto libre del orientador también sale hacia la empresa: puede traer la edad,
-        # el género o el corregimiento de alguien ("mujer de 20 años de Barrio Colón").
+        # el género, el estado civil o el corregimiento de alguien ("mujer de 20 años de Barrio
+        # Colón", "madre soltera", "una chica").
         for _, perfil, _ in filas:
-            saludo = cegar(saludo, perfil)
+            saludo = cegar(saludo, perfil, del_orientador=True)
         lineas += [saludo, ""]
     lineas += [
-        f"Lista corta para {oferta.puesto} en {oferta.empresa} ({oferta.corregimiento})",
+        # Sin corregimiento: si coincide con el del joven, revelaría dónde vive (#123).
+        f"Lista corta para {oferta.puesto} en {oferta.empresa}",
         "Candidatos aprobados por el orientador. Datos de demostración (sintéticos).",
         f"Las fechas de entrevista de los .ics adjuntos son propuestas. {AVISO_FECHA}.",
         "",
@@ -445,6 +473,12 @@ def postular(
         decidir(etiqueta, ics.name,
                 f"Invitación .ics con fecha provisional ({inicio.isoformat(timespec='minutes')}, "
                 "hora de Panamá), por confirmar con la empresa")
+        # Queda en la base para que la próxima aprobación no la cruce (misma empresa o mismo joven).
+        db.guardar_entrevista(
+            conn, perfil.id, oferta.id, oferta.empresa, inicio,
+            inicio + timedelta(minutes=DURACION_ENTREVISTA_MIN),
+            dict(match.desglose).get("minutos_traslado") or 0,
+        )
 
         resultado.archivos += [cv, ics]
         resultado.calendarios[(perfil.id, oferta.id)] = ics
@@ -557,18 +591,7 @@ def _ejecutar_nodo(
         anotar(entrada, "no se envió nada", "El estado no trae una aprobación con candidatos")
         return cambios(previos)
 
-    # Consentimientos: los que ya trae el estado (por ejemplo del joven) más uno del
-    # orientador por cada aprobado sin entrada propia. Un otorgado=False explícito manda.
-    marca = str(aprobacion.get("timestamp") or "")
-    consentimientos = list(previos)
-    conocidos = {_par(c) for c in previos}
-    for par in pares:
-        if par not in conocidos:
-            consentimientos.append(
-                {"perfil_id": par[0], "oferta_id": par[1], "otorgado": True,
-                 "medio": MEDIO_POR_DEFECTO, "timestamp": marca}
-            )
-            conocidos.add(par)
+    consentimientos = consentimientos_para(pares, previos, str(aprobacion.get("timestamp") or ""))
 
     lista_corta = {_par(m): m for m in estado.get("lista_corta") or []}
     matches: list[Match] = []
@@ -589,28 +612,81 @@ def _ejecutar_nodo(
 
     perfiles = {p.id: p for p in (_como(Perfil, x) for x in estado.get("perfiles") or [])}
     ofertas = {o.id: o for o in (_como(Oferta, x) for x in estado.get("ofertas") or [])}
+    # El Matching también trae perfiles y ofertas de puente.db (#46, #48): lo que no venga en
+    # el estado se completa desde la base para que esas parejas no se pierdan.
+    if any(m.perfil_id not in perfiles for m in matches):
+        perfiles = {**{p.id: p for p in db.listar_perfiles(conn)}, **perfiles}
+    if any(m.oferta_id not in ofertas for m in matches):
+        ofertas = {**{o.id: o for o in db.listar_ofertas(conn, no_bloqueadas=False)}, **ofertas}
     inicios: dict[tuple[str, str], datetime] = {}
-
-    def elegir(match: Match) -> datetime:
+    # Entrevistas ya propuestas a cada empresa (en cualquiera de sus ofertas) y a cada joven, en
+    # esta llamada y en aprobaciones anteriores guardadas en la tabla entrevistas: cada candidato
+    # recibe una hora distinta y un joven no queda en dos entrevistas que se cruzan.
+    agenda_empresa: dict[str, list[tuple[datetime, datetime]]] = {}
+    agenda_joven: dict[str, list[tuple[datetime, datetime]]] = {}
+    desde = reloj()
+    con_fecha: list[Match] = []
+    for match in matches:
         par = _par(match)
+        perfil, oferta = perfiles.get(par[0]), ofertas.get(par[1])
+        fila = conn.execute(
+            "SELECT estado FROM postulaciones WHERE perfil_id = ? AND oferta_id = ?", par
+        ).fetchone()
+        if perfil is None or oferta is None:
+            # Ni en el estado ni en la base: esta pareja no sale, pero no frena a las demás.
+            falta = f"el perfil {par[0]}" if perfil is None else f"la oferta {par[1]}"
+            errores.append(f"postulacion: falta {falta} en el estado y en puente.db; no se envió")
+            anotar(f"{par[0]} -> {par[1]}", "no se envió nada", f"Falta {falta} en el estado y en puente.db")
+            continue
+        if fila is not None and fila["estado"] in _YA_POSTULADA:
+            # postular() la salta con su Decision "ya postulada": no necesita fecha.
+            con_fecha.append(match)
+            continue
         traslado = dict(match.desglose).get("minutos_traslado", 0)
-        inicio, aviso = elegir_franja_con_respaldo(ofertas[par[1]], perfiles[par[0]], traslado, desde=reloj())
+        inicio, aviso = elegir_franja_con_respaldo(
+            oferta, perfil, traslado, desde=desde, duracion_min=DURACION_ENTREVISTA_MIN,
+            ocupadas=[*db.entrevistas_ocupadas(conn, empresa=oferta.empresa, salvo=par),
+                      *agenda_empresa.get(oferta.empresa, [])],
+            ocupadas_joven=[*db.entrevistas_ocupadas(conn, perfil_id=par[0], salvo=par),
+                            *agenda_joven.get(par[0], [])],
+        )
+        if inicio is None:
+            # Sin ninguna hora que no cruce sus clases ni el traslado, esta persona no sale (no se
+            # inventa una fecha), pero el resto de la lista corta sí.
+            errores.append(
+                f"postulacion: {par[0]} / {par[1]} sin franja compatible: fecha por confirmar "
+                f"({aviso}); no se envió"
+            )
+            anotar(f"{par[0]} -> {par[1]}", "no se envió nada",
+                   f"sin franja compatible: fecha por confirmar ({aviso}). Sin .ics ni CV para esta "
+                   "persona; los demás candidatos de la oferta siguen")
+            continue
         if aviso:
             # Sin franja que cumpla todo no se inventa una hora: la fecha queda por confirmar y
             # nunca se propone una que cruce las clases del joven.
             anotar(
                 f"{par[0]} -> {par[1]}",
                 "sin franja compatible: fecha por confirmar",
-                f"{aviso}" + (f". Fecha propuesta: {inicio.strftime('%Y-%m-%d %H:%M')}" if inicio else ""),
+                f"{aviso}. Fecha propuesta: {inicio.strftime('%Y-%m-%d %H:%M')}",
             )
-        if inicio is None:
-            raise ValueError(f"sin franja compatible: fecha por confirmar ({aviso})")
         inicios[par] = inicio
-        return inicio
+        fin = inicio + timedelta(minutes=DURACION_ENTREVISTA_MIN)
+        margen = timedelta(minutes=max(float(traslado or 0), 0.0))
+        agenda_empresa.setdefault(oferta.empresa, []).append((inicio, fin))
+        agenda_joven.setdefault(par[0], []).append((inicio - margen, fin + margen))
+        con_fecha.append(match)
+    if not con_fecha:
+        return cambios(consentimientos)
+
+    def elegir(match: Match) -> datetime:
+        par = _par(match)
+        if par not in inicios:
+            raise ValueError(f"sin franja calculada para {par[0]} / {par[1]}")
+        return inicios[par]
 
     try:
         resultado = postular(
-            matches, perfiles, ofertas,
+            con_fecha, perfiles, ofertas,
             aprobacion=aprobacion, conn=conn, outbox=outbox,
             consentimientos=consentimientos,
             mensaje_orientador=str(aprobacion.get("mensaje") or ""),
@@ -642,7 +718,7 @@ def _ejecutar_nodo(
             for oferta, _ in enviados
             if (perfil_id, oferta.id) in resultado.calendarios
         ]
-        envio = enviar_al_joven(texto, adjuntos, outbox=outbox, enviar=enviar_joven)
+        envio = enviar_al_joven(texto, adjuntos, perfil_id=perfil_id, outbox=outbox, enviar=enviar_joven)
         anotar(f"mensaje al joven {perfil_id}", f"canal {envio.canal}, ok={envio.ok}", envio.detalle)
         if not envio.ok:
             errores.append(f"postulacion: no se pudo avisar a {perfil_id} ({envio.detalle})")
@@ -661,9 +737,11 @@ def crear_nodo_postulacion(
 
     Corre después del ``interrupt()`` del orientador. Lee ``estado["aprobacion"]`` (la forma
     de ``nodo_aprobacion``), arma los consentimientos, elige la franja de entrevista con
-    ``elegir_franja``, llama a ``postular`` (CV ciego, .ics, mensaje a la empresa), avisa al
-    joven (a dónde se le postuló, qué se descartó y por qué, el .ics) y vuelca decisiones y
-    descartes a SQLite con ``db.volcar_estado``.
+    ``elegir_franja`` (una hora distinta por candidato de la misma oferta; quien no tiene
+    ninguna hora posible queda fuera con su Decision y los demás siguen), llama a ``postular``
+    (CV ciego, .ics, mensaje a la empresa), avisa al joven (a dónde se le postuló, qué se
+    descartó y por qué, el .ics) y vuelca decisiones y descartes a SQLite con
+    ``db.volcar_estado``.
 
     ``ruta_db`` es la base (por defecto PUENTE_DB o puente.db) y ``outbox`` la carpeta de
     respaldo (por defecto ``outbox/``). ``enviar`` y ``enviar_joven`` son transportes de

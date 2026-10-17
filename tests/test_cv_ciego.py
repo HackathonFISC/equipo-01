@@ -221,3 +221,133 @@ def test_el_mensaje_libre_del_orientador_tampoco_filtra_edad_genero_ni_corregimi
     assert mensaje.startswith("Les presento a Yaritza, ")
     for dato in ("Barrio Colón", "20 años", "mujer"):
         assert dato not in mensaje
+
+
+MENSAJE_REVISION = (
+    "Les presento a Yaritza, madre soltera de veinte años (nacida en 2006), una chica muy "
+    "responsable; está embarazada y busca trabajo de día."
+)
+
+
+def test_cegar_quita_estado_civil_embarazo_edad_en_palabras_y_nacimiento_del_orientador():
+    """El caso de la revisión del PR #84: nada de esto puede llegar a la empresa."""
+    from puente.tools.pdf import cegar
+
+    ciego = cegar(MENSAJE_REVISION, _perfil(), del_orientador=True)
+    for dato in ("madre", "soltera", "veinte", "nacida", "2006", "chica", "embarazada"):
+        assert dato not in ciego.lower()
+    assert ciego.startswith("Les presento a Yaritza, ")
+    assert "muy responsable" in ciego and "busca trabajo de día" in ciego
+
+
+@pytest.mark.parametrize(
+    ("texto", "queda"),
+    [
+        ("Es soltero y vive cerca", "Es [dato omitido] y vive cerca"),
+        ("Casada, con disponibilidad", "[dato omitido], con disponibilidad"),
+        ("Está divorciado", "Está [dato omitido]"),
+        ("Es viuda", "Es [dato omitido]"),
+        ("Es padre soltero", "Es [dato omitido]"),
+        ("Es mamá soltera", "Es [dato omitido]"),
+        ("Está unida con su pareja", "Está [dato omitido] con su pareja"),
+        ("Estado civil: unido", "Estado civil: [dato omitido]"),
+        ("Vive en unión libre", "Vive en [dato omitido]"),
+        ("Tiene cinco meses de embarazo", "Tiene cinco meses de [dato omitido]"),
+        ("Tengo dieciocho años", "Tengo [dato omitido]"),
+        ("Tiene veintidós años", "Tiene [dato omitido]"),
+        ("Cumplió veintiún años", "Cumplió [dato omitido]"),
+        ("Edad: veintinueve", "[dato omitido]"),
+        ("Nació el 3 de mayo de 2004", "[dato omitido]"),
+        ("Nacido en el año 2005", "[dato omitido]"),
+        ("Año de nacimiento: 2006", "[dato omitido]"),
+        ("Fecha de nacimiento: 12/05/2006", "[dato omitido]"),
+        ("Fecha de nacimiento: 3 de mayo de 2006", "[dato omitido]"),
+        ("fecha de nacimiento mayo de 2006, disponible", "[dato omitido], disponible"),
+    ],
+)
+def test_cegar_quita_datos_que_no_son_del_trabajo(texto, queda):
+    from puente.tools.pdf import cegar
+
+    assert cegar(texto, _perfil()) == queda
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "2 años de experiencia",
+        "trabajé 3 años en la fonda",
+        "dos años de experiencia",
+        "manejo la caja chica de la fonda",
+        "atiendo la fonda de mi mamá",
+        "trabajo en un equipo unido",
+        "vendí productos de Estados Unidos",
+        "fue una situación embarazosa",
+        "limpio la casa de mi abuela",
+        "mi hija nació en el hospital",
+        "atiendo a muchachos del colegio",
+    ],
+)
+def test_cegar_no_toca_la_evidencia_que_no_es_un_dato_personal(texto):
+    from puente.tools.pdf import cegar
+
+    assert cegar(texto, _perfil()) == texto
+
+
+def test_chica_y_muchacha_solo_se_quitan_del_mensaje_del_orientador():
+    from puente.tools.pdf import cegar
+
+    perfil = _perfil()
+    assert cegar("Es una chica puntual", perfil, del_orientador=True) == "Es una [dato omitido] puntual"
+    assert cegar("Una muchacha seria", perfil, del_orientador=True) == "Una [dato omitido] seria"
+    assert cegar("La señorita Yaritza", perfil, del_orientador=True) == "La [dato omitido] Yaritza"
+    # En la evidencia literal, "caja chica" es el fondo de la caja, no el sexo de nadie.
+    assert cegar("manejo la caja chica", perfil) == "manejo la caja chica"
+
+
+def test_la_empresa_no_recibe_estado_civil_embarazo_ni_edad_en_palabras(tmp_path, monkeypatch):
+    from puente.agents.postulacion import postular
+    from puente.tools import db
+
+    perfil, oferta = _perfil(), _oferta()
+    perfil.habilidades[0] = HabilidadPerfil(
+        skill_id="atencion_cliente",
+        evidencia="Soy madre soltera de veinte años y manejo la caja chica de la fonda")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token-ficticio")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID_EMPRESA", "chat-empresa-ficticio")
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: pytest.fail("sin red en pruebas"))
+    recibidos = []
+
+    def enviar(token, chat_id, texto, adjuntos):
+        recibidos.append(texto)
+        return {"ok": True}
+
+    match = Match(
+        perfil_id=perfil.id, oferta_id=oferta.id, puntaje=0.9,
+        desglose={"cobertura": 1.0, "minutos_traslado": 35, "pasaje_diario": 1.5, "penalizacion": 0.0},
+    )
+    conn = db.conectar(tmp_path / "puente.db")
+    try:
+        postular(
+            [match], {perfil.id: perfil}, {oferta.id: oferta},
+            aprobacion={
+                "orientador": "Orientadora Ficticia", "timestamp": "2026-10-20T09:30:00-05:00",
+                "aprobados": [{"perfil_id": perfil.id, "oferta_id": oferta.id}],
+            },
+            consentimientos=[{
+                "perfil_id": perfil.id, "oferta_id": oferta.id, "otorgado": True,
+                "medio": "orientador", "timestamp": "2026-10-20T09:30:00-05:00",
+            }],
+            mensaje_orientador=MENSAJE_REVISION,
+            conn=conn, outbox=tmp_path / "outbox", enviar=enviar,
+            inicio_entrevista=lambda m: INICIO,
+        )
+    finally:
+        conn.close()
+    (mensaje,) = recibidos
+    en_cv = "\n".join(contenido_cv(perfil, oferta))
+    en_pdf = _texto_pdf(tmp_path / "outbox" / f"cv_{perfil.id}_{oferta.id}.pdf")
+    for texto in (mensaje, en_cv, en_pdf):
+        for dato in ("madre soltera", "veinte años", "veinte a", "nacida", "embarazada"):
+            assert dato not in texto.lower()
+        assert "manejo la caja chica de la fonda" in texto  # la evidencia del trabajo sí llega
+    assert "una chica" not in mensaje and "Yaritza Ficticia" in mensaje

@@ -226,3 +226,48 @@ def test_con_respaldo_sin_ninguna_hora_devuelve_none():
                                 "00:00", "23:59")])
     inicio, aviso = elegir_franja_con_respaldo(_oferta(), perfil, 0, desde=LUNES_7)
     assert inicio is None and aviso
+
+
+@pytest.mark.parametrize("zona", [ZONA_PANAMA, None])
+def test_no_se_cruza_con_las_entrevistas_que_la_empresa_ya_tiene(zona):
+    # 08:00-08:45 ya es de otro candidato: la siguiente es 08:45 (tocarse en el extremo no
+    # cuenta). Una entrevista ocupada sin zona se toma como hora de Panamá.
+    ocupada = (datetime(2026, 10, 19, 8, 0, tzinfo=zona), datetime(2026, 10, 19, 8, 45, tzinfo=zona))
+    inicio = elegir_franja(_oferta(), _perfil(), 0, desde=LUNES_7, ocupadas=[ocupada])
+    assert inicio == datetime(2026, 10, 19, 8, 45, tzinfo=ZONA_PANAMA)
+
+
+def test_las_entrevistas_ocupadas_no_cargan_el_traslado_del_joven():
+    # Los 60 min de traslado son del joven: la empresa solo aparta la entrevista, así que la
+    # siguiente sigue siendo 08:45 y no 09:45.
+    ocupada = (LUNES_8, LUNES_8 + timedelta(minutes=45))
+    assert elegir_franja(_oferta(), _perfil(), 60, desde=LUNES_7, ocupadas=[ocupada]) == datetime(
+        2026, 10, 19, 8, 45, tzinfo=ZONA_PANAMA
+    )
+
+
+def test_con_la_unica_franja_de_la_oferta_ocupada_pasa_a_la_siguiente_semana():
+    oferta = _oferta([_h(["lunes"], "08:00", "08:45")])
+    ocupada = (LUNES_8, LUNES_8 + timedelta(minutes=45))
+    assert elegir_franja(oferta, _perfil(), 0, desde=LUNES_7, ocupadas=[ocupada]) == datetime(
+        2026, 10, 26, 8, 0, tzinfo=ZONA_PANAMA
+    )
+
+
+def test_con_respaldo_tampoco_se_cruza_con_las_entrevistas_ocupadas():
+    from puente.tools.agenda import elegir_franja_con_respaldo
+
+    # Igual que test_con_respaldo_usa_el_horario_libre_fuera_del_horario_laboral: el lunes solo
+    # caben las 19:00 y las 19:15, las dos se cruzan con la ocupada, y pasa al martes a las 19:00.
+    perfil = _perfil(libre=[_h(SEMANA, "18:00", "21:00")], clases=[_h(SEMANA, "08:00", "12:00")])
+    ocupada = (datetime(2026, 10, 19, 19, 0, tzinfo=ZONA_PANAMA), datetime(2026, 10, 19, 19, 45, tzinfo=ZONA_PANAMA))
+    inicio, aviso = elegir_franja_con_respaldo(_oferta(), perfil, 60, desde=LUNES_7, ocupadas=[ocupada])
+    assert inicio == datetime(2026, 10, 20, 19, 0, tzinfo=ZONA_PANAMA)
+    assert "horario libre" in aviso
+
+
+def test_el_joven_alcanza_a_llegar_desde_ahora():
+    oferta = _oferta([_h(SEMANA, "08:00", "12:00")])
+    # Son las 07:30 y el traslado es de 60 min: a las 08:00 no llega; la primera es 08:30.
+    desde = datetime(2026, 10, 19, 7, 30, tzinfo=ZONA_PANAMA)
+    assert elegir_franja(oferta, _perfil(), 60, desde=desde) == datetime(2026, 10, 19, 8, 30, tzinfo=ZONA_PANAMA)

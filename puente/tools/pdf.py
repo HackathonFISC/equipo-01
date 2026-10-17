@@ -122,6 +122,40 @@ _TERMINOS_GENERO = re.compile(
     r"\b(?:femenin[oa]s?|masculin[oa]s?|mujer(?:es)?|hombres?|var[oó]n(?:es)?|g[eé]nero)\b",
     re.IGNORECASE,
 )
+# Estado civil. "madre soltera" sale entera; "madre" o "mamá" sola no ("la fonda de mi mamá").
+_ESTADO_CIVIL = re.compile(
+    r"\b(?:madre|padre|mam[aá]|pap[aá])\s+solter[oa]s?\b"
+    r"|\b(?:solter|casad|divorciad|viud)[oa]s?\b"
+    r"|\buni[oó]n\s+(?:libre|de\s+hecho)\b",
+    re.IGNORECASE,
+)
+# "unido/a" solo cuando dice el estado civil ("está unida", "estado civil: unido"): en "equipo
+# unido" o "Estados Unidos" no es un dato de la persona. Se conserva el verbo.
+_UNIDO = re.compile(r"\b(soy|es|est[aá]|estoy|vive|vivo|civil\s*:?)\s+unid[oa]\b", re.IGNORECASE)
+_EMBARAZO = re.compile(r"\b(?:embarazad[oa]s?|embarazos?|encinta|gestante)\b", re.IGNORECASE)
+# Edad en palabras, de 18 a 29 (la demo es con jóvenes de 18 a 29), solo seguida de "años" o
+# después de "edad": "dos años de experiencia" no es una edad y no se toca.
+_EDAD_PALABRAS = (
+    r"(?:die(?:ci|z\s+y\s+)(?:ocho|nueve)|veinte"
+    r"|veinti(?:[uú]n|uno|d[oó]s|tr[eé]s|cuatro|cinco|s[eé]is|siete|ocho|nueve))"
+)
+_EDAD_EN_PALABRAS = re.compile(
+    rf"\bedad\s*(?:de|:)?\s*{_EDAD_PALABRAS}\b(?:\s*a[nñ]os)?|\b{_EDAD_PALABRAS}\s+a[nñ]os\b",
+    re.IGNORECASE,
+)
+# Año o fecha de nacimiento: "nacida en 2006", "nació el 3 de mayo de 2006", "año de nacimiento: 2006".
+_NACIMIENTO = re.compile(
+    r"\bnac(?:id[oa]s?|i[oó]|í)\s+(?:en|el)\s+(?:el\s+)?(?:a[nñ]o\s+)?"
+    r"(?:(?:\d{1,2}\s+de\s+)?[a-záéíóú]+\s+del?\s+)?(?:19|20)\d{2}\b"
+    r"|\b(?:a[nñ]o|fecha)\s+de\s+nacimiento\b(?:\s*(?::|es|fue)?\s*"
+    r"(?:(?:\d{1,2}\s+de\s+)?[a-záéíóú]+\s+del?\s+(?:19|20)\d{2}\b|\d[\d/.-]*\d))?",
+    re.IGNORECASE,
+)
+# Sexo dicho de forma coloquial. Solo en el mensaje del orientador: en la evidencia literal del
+# joven "chica" suele ser otra cosa ("manejo la caja chica de la fonda").
+_TERMINOS_SEXO_COLOQUIALES = re.compile(
+    r"\b(?:chic[oa]s?|muchach[oa]s?|se[nñ]oritas?)\b", re.IGNORECASE
+)
 
 
 def _patron_literal(texto: str) -> str:
@@ -138,12 +172,19 @@ def _patron_literal(texto: str) -> str:
     return "".join(piezas)
 
 
-def cegar(texto: str, perfil: Perfil) -> str:
+def cegar(texto: str, perfil: Perfil, *, del_orientador: bool = False) -> str:
     """Quita de un texto que va a la empresa lo que identifica al joven por lo que no es su trabajo.
 
-    Reemplaza por "[dato omitido]" el corregimiento del perfil, su edad ("20 años", "edad 20")
-    y los términos de género. Se aplica a cada línea que sale hacia la empresa (CV y mensaje):
-    la evidencia es literal y puede traer "tengo 20 años y vivo en La Chorrera".
+    Reemplaza por "[dato omitido]" el corregimiento del perfil, su edad ("20 años", "edad 20"),
+    la edad en palabras de 18 a 29 ("veinte años"), el año de nacimiento ("nacida en 2006"), el
+    estado civil ("soltera", "madre soltera", "está unida"), el embarazo y los términos de
+    género. Se aplica a cada línea que sale hacia la empresa (CV y mensaje): la evidencia es
+    literal y puede traer "tengo 20 años y vivo en La Chorrera".
+
+    La edad en cifras sigue siendo solo la exacta del perfil, para no borrar "2 años de
+    experiencia" ni "trabajé 3 años". ``del_orientador=True`` es para el texto libre del
+    orientador: quita además "chica", "muchacha" y parecidos, que en la evidencia del joven
+    suelen ser otra cosa ("la caja chica").
     """
     patrones = []
     if str(perfil.corregimiento or "").strip():
@@ -153,7 +194,13 @@ def cegar(texto: str, perfil: Perfil) -> str:
         patrones.append(rf"\b{perfil.edad}\s*a[nñ]os\b")
     for patron in patrones:
         texto = re.sub(patron, "[dato omitido]", texto, flags=re.IGNORECASE)
-    return _TERMINOS_GENERO.sub("[dato omitido]", texto)
+    texto = _UNIDO.sub(lambda m: f"{m.group(1)} [dato omitido]", texto)
+    terminos = [_ESTADO_CIVIL, _EMBARAZO, _EDAD_EN_PALABRAS, _NACIMIENTO, _TERMINOS_GENERO]
+    if del_orientador:
+        terminos.append(_TERMINOS_SEXO_COLOQUIALES)
+    for patron in terminos:
+        texto = patron.sub("[dato omitido]", texto)
+    return texto
 
 
 def contenido_cv(perfil: Perfil, oferta: Oferta) -> list[str]:

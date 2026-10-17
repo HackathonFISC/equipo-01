@@ -77,6 +77,13 @@ def test_datos_iniciales_demo_incluyen_caso_yaritza_ley11_y_fuentes_sinteticas()
     assert "corregimiento" in estado["auditoria"]["nota_metodologica"].lower()
     assert "referencia_inec" in estado["metricas"]
     assert "operativas_demo" in estado["metricas"]
+    inec = estado["metricas"]["referencia_inec"]
+    assert inec["fecha"] == "agosto de 2026"
+    assert inec["desocupacion_20_24_pct"] == 22.6
+    assert inec["desocupacion_25_29_pct"] == 14.4
+    assert inec["informalidad_no_agricola_pct"] == 45.8
+    assert inec["fuente_desocupacion_url"].startswith("https://www.inec.gob.pa/")
+    assert inec["fuente_informalidad_url"].startswith("https://www.inec.gob.pa/")
 
 
 def test_traslado_faltante_no_inventa_45_min_y_descarta_con_motivo() -> None:
@@ -388,3 +395,32 @@ def test_endpoints_http_validaciones_path_traversal_415_y_422(
             await client.post("/api/reset")
 
     asyncio.run(_ejecutar())
+
+
+def test_el_no_del_joven_en_el_grafo_manda_sobre_aprobar_en_el_tablero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Si en el grafo el joven dijo «no» (#54), aprobar en el tablero no genera CV ni .ics (#12)."""
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path)
+    estado = obtener_datos_iniciales_demo(db_path=tmp_path / "test_puente.db")
+    grafo, cfg = estado["_grafo"], estado["_config_grafo"]
+    grafo.update_state(cfg, {"consentimientos": [
+        {"perfil_id": "PERFIL-YARITZA", "oferta_id": "OF-CHORRERA-01", "otorgado": False,
+         "medio": "joven", "timestamp": "2026-10-16T21:00:00-05:00"},
+    ]})
+    with pytest.raises(ErrorValidacionTablero, match="consentimiento"):
+        procesar_accion_orientador(
+            estado,
+            accion="aprobar",
+            perfil_id="PERFIL-YARITZA",
+            oferta_id="OF-CHORRERA-01",
+            consentimiento_joven=True,
+        )
+    assert list(tmp_path.glob("*.pdf")) == [] and list(tmp_path.glob("*.ics")) == []
+    post = next(
+        p for p in estado["postulaciones"]
+        if p["perfil_id"] == "PERFIL-YARITZA" and p["oferta_id"] == "OF-CHORRERA-01"
+    )
+    assert post["estado"] != "enviado"

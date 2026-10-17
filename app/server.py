@@ -30,7 +30,7 @@ from starlette.staticfiles import StaticFiles
 
 from puente.agents.auditor import nodo_auditor
 from puente.agents.formacion import nodo_formacion
-from puente.agents.postulacion import postular
+from puente.agents.postulacion import consentimiento_otorgado, consentimientos_para, postular
 from puente.graph import (
     aprobacion_pendiente,
     config_caso,
@@ -337,8 +337,13 @@ def _calcular_metricas_impacto(estado: dict[str, Any]) -> dict[str, Any]:
         {
             "referencia_inec": {
                 "fuente": "INEC Panamá · Encuesta de Mercado Laboral",
-                "desempleo_juvenil_pct": 16.8,
-                "informalidad_juvenil_pct": 48.2,
+                "fecha": "agosto de 2026",
+                "desocupacion_nacional_pct": 8.5,
+                "desocupacion_20_24_pct": 22.6,
+                "desocupacion_25_29_pct": 14.4,
+                "informalidad_no_agricola_pct": 45.8,
+                "fuente_desocupacion_url": "https://www.inec.gob.pa/archivos/P0579518620260930152328Cuadro%205.pdf",
+                "fuente_informalidad_url": "https://www.inec.gob.pa/archivos/P0862619320260930153357Bolet%C3%ADn%20de%20la%20Encuesta%20de%20Mercado%20Laboral%20-%20Agosto%202026.pdf",
                 "nota": "Cifras contextuales de referencia nacional; las métricas operativas corresponden al lote sintético de la demo.",
             },
             "operativas_demo": {
@@ -392,10 +397,16 @@ def recalcular_pipeline_tablero(
         pares_aprob = {
             (a["perfil_id"], a["oferta_id"]) for a in (aprobacion.get("aprobados") or [])
         }
+        # Los consentimientos del grafo (el «no» del joven manda, #54) más el que confirmó el
+        # orientador en el tablero para cada aprobado sin registro propio (#12, Ley 81 de 2019).
+        consentimientos = consentimientos_para(
+            sorted(pares_aprob), estado_g.get("consentimientos"), str(aprobacion.get("timestamp") or "")
+        )
         matches_aprob = [
             m
             for m in (estado_g.get("lista_corta") or [])
             if (m.perfil_id, m.oferta_id) in pares_aprob
+            and consentimiento_otorgado(consentimientos, (m.perfil_id, m.oferta_id))
         ]
         if not matches_aprob:
             return {}
@@ -419,6 +430,7 @@ def recalcular_pipeline_tablero(
                 aprobacion=aprobacion,
                 conn=conn,
                 outbox=RUTA_OUTBOX,
+                consentimientos=consentimientos,
             )
         finally:
             conn.close()
@@ -1158,6 +1170,12 @@ def procesar_accion_orientador(
                 brechas=match_activo["brechas"],
                 explicacion=match_activo["explicacion"],
             )
+            # Los del grafo primero: si ahí el joven dijo «no», manda sobre el check del tablero (#54).
+            previos = [
+                *((grafo.get_state(cfg_grafo).values.get("consentimientos") or []) if grafo is not None and cfg_grafo is not None else []),
+                *(estado.get("consentimientos") or []),
+            ]
+            consentimientos = consentimientos_para([(req.perfil_id, req.oferta_id)], previos, ahora)
             RUTA_OUTBOX.mkdir(parents=True, exist_ok=True)
             conn = _conectar_db_estado(estado)
             try:
@@ -1172,7 +1190,11 @@ def procesar_accion_orientador(
                     },
                     conn=conn,
                     outbox=RUTA_OUTBOX,
+                    consentimientos=consentimientos,
                 )
+            except ValueError as error:
+                # Sin consentimiento, oferta bloqueada o datos incompletos: error claro, nunca un 500.
+                raise ErrorValidacionTablero(f"No se envió nada a la empresa: {error}") from error
             finally:
                 conn.close()
             archivos_generados = [arch.name for arch in res_post.archivos]

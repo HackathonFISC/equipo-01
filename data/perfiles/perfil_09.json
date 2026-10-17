@@ -1,0 +1,38 @@
+{
+  "id": "P09",
+  "nombre": "Perfil I (ficticio)",
+  "edad": 26,
+  "corregimiento": "San Miguelito",
+  "horario_libre": [
+    {
+      "dias": [
+        "lunes",
+        "martes",
+        "miercoles",
+        "jueves",
+        "viernes"
+      ],
+      "hora_inicio": "08:00",
+      "hora_fin": "17:00"
+    }
+  ],
+  "horario_clases": [],
+  "salario_minimo": 650,
+  "presupuesto_pasaje_diario": 2.0,
+  "experiencia_texto": "En un ejercicio de emprendimiento registré llamadas de clientes, anoté sus consultas en un registro digital y respondí reclamos.",
+  "habilidades": [
+    {
+      "skill_id": "registro_llamadas",
+      "evidencia": "registré llamadas de clientes"
+    },
+    {
+      "skill_id": "registro_datos",
+      "evidencia": "anoté sus consultas en un registro digital"
+    },
+    {
+      "skill_id": "resolver_reclamos",
+      "evidencia": "respondí reclamos"
+    }
+  ],
+  "datos_sinteticos": true
+}
