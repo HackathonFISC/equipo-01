@@ -27,7 +27,7 @@ CONTEO_ESPERADO = {
     "perfil_sin_cv": 4,
     "matching_factible": 3,
     "sesgo_contrafactual": 3,
-    "guardrails": 3,
+    "guardrails": 7,
 }
 
 
@@ -125,7 +125,7 @@ def test_entradas_de_matching_y_sesgo_cumplen_los_esquemas(casos):
             Oferta(**oferta)
 
 
-def test_nada_depende_de_la_carpeta_data(casos):
+def test_casos_de_matching_y_sesgo_no_dependen_de_datos_de_demo(casos):
     texto = run.RUTA_CASOS.read_text(encoding="utf-8")
     for linea in texto.splitlines():
         if linea.lstrip().startswith("#"):
@@ -577,7 +577,7 @@ def test_main_imprime_y_guarda_tabla(tmp_path, capsys):
     for seccion in ("## Tabla por categoría", "## Detalle por caso", "## Registro de fallos"):
         assert seccion in guardado
     assert "hora de Panamá" in guardado
-    assert "Taxonomía usada en esta corrida" in guardado and "copia literal de `data/taxonomia.csv`" in guardado
+    assert "Taxonomía usada en esta corrida" in guardado and "el mismo catálogo que usa la demo" in guardado
 
 
 def test_modulo_se_ejecuta_como_script(tmp_path):
@@ -783,7 +783,10 @@ def _oferta_extraida(**cambios):
     return OfertaExtraida(**{**datos, **cambios})
 
 
-def test_taxonomia_en_linea_cubre_los_skill_id_esperados(casos):
+def test_taxonomia_de_demo_cubre_los_skill_id_esperados(casos):
+    from puente.rules.taxonomia import cargar_taxonomia
+
+    assert casos["taxonomia"] == cargar_taxonomia(RAIZ / "data" / "taxonomia.csv")
     esperados = set()
     for caso in casos["casos"]:
         if caso["categoria"] in ("extraccion_ofertas", "perfil_sin_cv"):
