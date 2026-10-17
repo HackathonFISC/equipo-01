@@ -250,7 +250,7 @@ Redactor y Micromisión se usan por línea de comandos y en los evals; todavía 
 | `data/perfiles/` | 10 perfiles de 18 a 29 años, incluida Yaritza | Sintético |
 | `data/cursos.csv` | 9 cursos con títulos y áreas reales del INADEH | Cupos y horarios de prueba |
 | `data/retos.csv` | Retos cortos por habilidad de Micromisión (#158) | De prueba |
-| `data/grabaciones/`, `evals/grabaciones/` | Respuestas grabadas de Claude para la demo y los evals sin red | Generado |
+| `data/grabaciones/`, `evals/grabaciones/` | Respuestas grabadas de Claude para la demo y los evals sin red, salvo dos de `data/grabaciones/` (el volante y el CV sintéticos de #170), escritas a mano y rotuladas así en su `nota` (ver [`data/grabaciones/README.md`](data/grabaciones/README.md)) | Generado, salvo esas dos |
 
 Supuestos del equipo, configurables en el solver: 60 minutos por trayecto, pasaje de hasta 15 % del salario, 22 días laborables al mes y la misma duración y tarifa a la ida y a la vuelta.
 
