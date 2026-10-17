@@ -23,6 +23,8 @@ from typing import Any, Literal
 from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Mount, Route
@@ -89,13 +91,44 @@ from puente.guardrails import EDAD_MAX, EDAD_MIN, evaluar_entrada, limpiar_entra
 from puente.rules.taxonomia import normalizar_habilidad
 from puente.schemas import DIAS_VALIDOS, EntradaPerfil
 
+def es_modo_demo_publica() -> bool:
+    """True cuando el servidor corre en Vercel (`VERCEL=1`) o con `PUENTE_DEMO_PUBLICA=1` (#161)."""
+    return bool(
+        os.getenv("VERCEL", "").strip() in ("1", "true", "True")
+        or os.getenv("PUENTE_DEMO_PUBLICA", "").strip() in ("1", "true", "True")
+    )
+
+
+if es_modo_demo_publica():
+    os.environ["LLM_MODO"] = "reproducir"
+
+
+class MiddlewareDemoPublicaReadOnly(BaseHTTPMiddleware):
+    """En modo demo pública (Vercel / PUENTE_DEMO_PUBLICA=1), bloquea mutaciones (POST, PUT, DELETE, PATCH) con 403 (#161)."""
+
+    async def dispatch(self, request: Request, call_next):
+        if es_modo_demo_publica() and request.method not in ("GET", "HEAD", "OPTIONS"):
+            return JSONResponse(
+                {
+                    "detail": "Modo demostración pública en Vercel: el servidor opera en solo lectura para preservar la demo del hackathon (#161).",
+                    "modo_demo_publica": True,
+                },
+                status_code=403,
+            )
+        return await call_next(request)
+
+
 from app import joven_fase2  # Vista del joven, fase 2 (#166): la lógica vive en app/joven_fase2.py
 
 RUTA_APP = Path(__file__).resolve().parent
 RUTA_STATIC = RUTA_APP / "static"
 RUTA_RAIZ = RUTA_APP.parent
 RUTA_DATA = RUTA_RAIZ / "data"
-RUTA_OUTBOX = RUTA_RAIZ / "outbox"
+RUTA_OUTBOX = (
+    Path(tempfile.gettempdir()) / "puente_outbox"
+    if es_modo_demo_publica()
+    else RUTA_RAIZ / "outbox"
+)
 RUTA_DB_TABLERO = Path(tempfile.gettempdir()) / "puente_tablero.db"
 
 PATRON_ID_SEGURO = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -236,6 +269,8 @@ class EventoEmpresaTableroRequest(BaseModel):
         if not PATRON_ID_SEGURO.fullmatch(limpio):
             raise ValueError(f"ID inválido '{valor}': solo se permiten caracteres [A-Za-z0-9_-]")
         return limpio
+
+
 def _slug_seguro(texto: str, prefijo: str = "ITEM") -> str:
     """Convierte un texto en un slug seguro [A-Z0-9-] sin caracteres especiales."""
     sin_tildes = texto.strip().upper().translate(str.maketrans("ÁÉÍÓÚÑ", "AEIOUN"))
@@ -2585,11 +2620,18 @@ def serializar_estado_publico(estado: dict[str, Any]) -> dict[str, Any]:
         # `entradas_perfil` (#52) trae las respuestas en texto libre de cada joven: no sale.
         if not k.startswith("_") and k != "entradas_perfil"
     }
+    es_publica = es_modo_demo_publica()
     payload["conteo_embudo"] = conteo_embudo
     payload["catalogo_data"] = listar_catalogo_data()
     payload["decisiones_db"] = _leer_decisiones_db(estado)
     payload["metricas"] = _calcular_metricas_impacto(estado)
     payload["operacion"] = obtener_panel_operacion(estado)
+    payload["modo_demo_publica"] = es_publica
+    payload["aviso_demo_publica"] = (
+        "Demo pública de solo lectura (estado efímero): corre con LLM_MODO=reproducir sin claves y el estado se reinicia entre invocaciones."
+        if es_publica
+        else None
+    )
     return payload
 
 
@@ -3507,6 +3549,7 @@ async def _ciclo_de_vida(_app: Starlette):
 app = Starlette(
     debug=False,
     lifespan=_ciclo_de_vida,
+    middleware=[Middleware(MiddlewareDemoPublicaReadOnly)],
     routes=[
         Route("/", endpoint_index, methods=["GET"]),
         Route("/api/estado", endpoint_estado, methods=["GET"]),
