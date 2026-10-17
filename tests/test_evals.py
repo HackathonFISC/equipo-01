@@ -1236,3 +1236,49 @@ def test_casos_del_225_corren_sin_llm_y_sin_tocar_la_raiz(casos, monkeypatch):
     e2e = resultados["E2E-01"]
     assert e2e.estado == "ok" or e2e.detalle.startswith("0/1 corridas acertaron; difiere en listas_cortas;"), e2e.detalle
     assert {p.name for p in RAIZ.iterdir()} == antes
+
+
+# ---------------------------------------------------------------------------- #231: no reescribir resultados.md si solo cambia la hora
+def _un_resultado(estado="ok"):
+    if estado == "ok":
+        return ResultadoCaso("GRD-01", "guardrails", "ok", 1, 1, {"veredicto": "rechazar"}, "cumple lo esperado")
+    return ResultadoCaso("GRD-01", "guardrails", "fallo", 0, 1, {"veredicto": "aceptar"}, "difiere en veredicto")
+
+
+def test_resultados_no_se_reescribe_si_solo_cambia_la_hora(tmp_path, casos):
+    ruta = tmp_path / "r.md"
+    run.escribir_resultados([_un_resultado()], casos, ruta, ahora=datetime.fromisoformat("2026-10-17T08:00:00+00:00"))
+    primero, marca = ruta.read_bytes(), ruta.stat().st_mtime_ns
+
+    run.escribir_resultados([_un_resultado()], casos, ruta, ahora=datetime.fromisoformat("2026-10-17T09:30:00+00:00"))
+    assert ruta.read_bytes() == primero and ruta.stat().st_mtime_ns == marca  # ni contenido ni marca de tiempo
+    assert "2026-10-17 03:00" in ruta.read_text(encoding="utf-8")  # queda la hora de la corrida que sí escribió
+
+
+def test_resultados_si_se_reescribe_si_cambia_algo_ademas_de_la_hora(tmp_path, casos):
+    ruta = tmp_path / "r.md"
+    run.escribir_resultados([_un_resultado()], casos, ruta, ahora=datetime.fromisoformat("2026-10-17T08:00:00+00:00"))
+
+    run.escribir_resultados([_un_resultado("fallo")], casos, ruta, ahora=datetime.fromisoformat("2026-10-17T09:30:00+00:00"))
+    texto = ruta.read_text(encoding="utf-8")
+    assert "2026-10-17 04:30" in texto and "difiere en veredicto" in texto
+    assert "Estados: 0 ok · 1 fallo" in texto
+
+
+def test_resultados_con_saltos_de_linea_de_windows_tampoco_se_reescriben(tmp_path, casos):
+    """Un clon con core.autocrlf trae el archivo con CRLF: sigue siendo el mismo contenido."""
+    ruta = tmp_path / "r.md"
+    run.escribir_resultados([_un_resultado()], casos, ruta, ahora=datetime.fromisoformat("2026-10-17T08:00:00+00:00"))
+    ruta.write_bytes(ruta.read_bytes().replace(b"\n", b"\r\n"))
+    con_crlf = ruta.read_bytes()
+    run.escribir_resultados([_un_resultado()], casos, ruta, ahora=datetime.fromisoformat("2026-10-17T09:30:00+00:00"))
+    assert ruta.read_bytes() == con_crlf
+
+
+def test_main_dos_veces_seguidas_deja_el_archivo_como_estaba(tmp_path):
+    """El caso del #231: dos corridas del runner sobre el mismo archivo y la segunda no lo toca."""
+    salida = tmp_path / "r.md"
+    assert run.main(["--salida", str(salida), "--sin-llm"]) == 0
+    primero, marca = salida.read_bytes(), salida.stat().st_mtime_ns
+    assert run.main(["--salida", str(salida), "--sin-llm"]) == 0
+    assert salida.read_bytes() == primero and salida.stat().st_mtime_ns == marca

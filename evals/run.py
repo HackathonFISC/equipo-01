@@ -1406,6 +1406,14 @@ def _entorno_llm(modo: str = MODO_LLM_POR_DEFECTO) -> Iterator[None]:
                 os.environ[nombre] = valor
 
 
+_LINEA_DE_HORA = re.compile(r"^Generado por `uv run python -m evals\.run` el .*$", re.MULTILINE)
+
+
+def _sin_la_hora(texto: str) -> str:
+    """El archivo sin la línea «Generado por … el <fecha y hora>»: lo único que cambia entre dos corridas iguales."""
+    return _LINEA_DE_HORA.sub("Generado por `uv run python -m evals.run` el <hora>", texto.replace("\r\n", "\n"))
+
+
 def escribir_resultados(
     resultados: list[ResultadoCaso],
     casos: dict,
@@ -1413,7 +1421,11 @@ def escribir_resultados(
     *,
     ahora: datetime | None = None,
 ) -> Path:
-    """Guarda la tabla, el detalle por caso y el registro de fallos en un archivo markdown."""
+    """Guarda la tabla, el detalle por caso y el registro de fallos en un archivo markdown.
+
+    Si el archivo ya existe y solo cambiaría la hora de la línea «Generado por …», no lo reescribe: el archivo está
+    versionado y una corrida igual a la anterior no debe ensuciar `git status` (#231, procedimiento del tag #17).
+    """
     ruta = Path(ruta)
     ahora = (ahora or datetime.now(HUSO_PANAMA)).astimezone(HUSO_PANAMA)
     conteo = _conteo_estados(resultados)
@@ -1451,8 +1463,13 @@ def escribir_resultados(
     for r in resultados:
         lineas.append(f"| {r.id} | {r.categoria} | {r.estado} | {r.aciertos}/{r.corridas} | {_celda(r.detalle)} |")
     lineas += ["", *_registro_de_fallos(resultados, casos), ""]
+    contenido = "\n".join(lineas)
+    if ruta.is_file():
+        with contextlib.suppress(OSError, UnicodeDecodeError):
+            if _sin_la_hora(ruta.read_text(encoding="utf-8")) == _sin_la_hora(contenido):
+                return ruta
     ruta.parent.mkdir(parents=True, exist_ok=True)
-    ruta.write_text("\n".join(lineas), encoding="utf-8", newline="\n")
+    ruta.write_text(contenido, encoding="utf-8", newline="\n")
     return ruta
 
 
