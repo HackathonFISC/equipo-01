@@ -1,0 +1,32 @@
+{
+  "hash": "e2995edfd1ca8d21761734032a4d1a09f3ffe1ecdcd9bc28236e284bde2d27eb",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "mercado",
+  "esquema": "OfertaExtraida",
+  "salida": {
+    "puesto": "Reponedor",
+    "empresa": "Minimarket Los Cuatro Vientos",
+    "corregimiento": "Arraiján",
+    "ubicacion_texto": "Arraijan",
+    "salario_mensual": 450.0,
+    "salario_tipo": "exacto",
+    "horario": null,
+    "horario_tipo": "no_publicado",
+    "plazas": null,
+    "franjas_entrevista": [],
+    "habilidades": [
+      "acomodar productos en estantes",
+      "recibir mercancía",
+      "control de inventario"
+    ],
+    "requisitos_texto": "Presentarse con hoja de vida.",
+    "transcripcion_literal": null
+  },
+  "uso": {
+    "entrada": 2528,
+    "salida": 194
+  },
+  "creado": "2026-10-17T04:22:17+00:00"
+}

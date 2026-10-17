@@ -88,6 +88,11 @@ casos:
         observado: "grabando con Claude en vivo: mercado no devolvió ninguna oferta (HTTP 400 «Schema is too complex» al pedir OfertaExtraida)"
         cambio_hecho: "pendiente: simplificar el esquema o el pedido de Mercado (#137) y volver a grabar"
         issue: "#137"
+        nueva_ejecucion: "2026-10-16 23:22: ya responde tras #140; nuevo fallo #152"
+      - fecha: "2026-10-16"
+        observado: "Mercado dejó corregimiento vacío aunque la oferta dice La Chorrera."
+        cambio_hecho: "Pendiente de corregir en #152; esperado original conservado"
+        issue: "#152"
         nueva_ejecucion: "pendiente"
 
   - id: EXT-02
@@ -111,6 +116,11 @@ casos:
         observado: "grabando con Claude en vivo: mercado no devolvió ninguna oferta (HTTP 400 «Schema is too complex» al pedir OfertaExtraida)"
         cambio_hecho: "pendiente: simplificar el esquema o el pedido de Mercado (#137) y volver a grabar"
         issue: "#137"
+        nueva_ejecucion: "2026-10-16 23:22: ya responde tras #140; nuevo fallo #153"
+      - fecha: "2026-10-16"
+        observado: "Mercado solo conservó inventario; faltan reposición y recepción de mercancía."
+        cambio_hecho: "Pendiente de corregir en #153; esperado original conservado"
+        issue: "#153"
         nueva_ejecucion: "pendiente"
 
   - id: EXT-03
@@ -134,6 +144,11 @@ casos:
         observado: "grabando con Claude en vivo: mercado no devolvió ninguna oferta (HTTP 400 «Schema is too complex» al pedir OfertaExtraida)"
         cambio_hecho: "pendiente: simplificar el esquema o el pedido de Mercado (#137) y volver a grabar"
         issue: "#137"
+        nueva_ejecucion: "2026-10-16 23:22: ya responde tras #140; nuevo fallo #154"
+      - fecha: "2026-10-16"
+        observado: "Mercado dejó corregimiento vacío y solo conservó Excel; faltan registro y archivo."
+        cambio_hecho: "Pendiente de corregir en #154; esperado original conservado"
+        issue: "#154"
         nueva_ejecucion: "pendiente"
 
   - id: EXT-04
@@ -156,6 +171,11 @@ casos:
         observado: "grabando con Claude en vivo: mercado no devolvió ninguna oferta (HTTP 400 «Schema is too complex» al pedir OfertaExtraida)"
         cambio_hecho: "pendiente: simplificar el esquema o el pedido de Mercado (#137) y volver a grabar"
         issue: "#137"
+        nueva_ejecucion: "2026-10-16 23:22: ya responde tras #140; nuevo fallo #155"
+      - fecha: "2026-10-16"
+        observado: "Mercado omitió ventas de mostrador y solo conservó atención al cliente."
+        cambio_hecho: "Pendiente de corregir en #155; esperado original conservado"
+        issue: "#155"
         nueva_ejecucion: "pendiente"
 
   - id: EXT-05
@@ -179,7 +199,7 @@ casos:
         observado: "grabando con Claude en vivo: mercado no devolvió ninguna oferta (timeout del modelo)"
         cambio_hecho: "pendiente: simplificar el esquema o el pedido de Mercado (#137) y volver a grabar"
         issue: "#137"
-        nueva_ejecucion: "pendiente"
+        nueva_ejecucion: "2026-10-16 23:22: ok con grabación Opus tras #140"
 
   # ------------------------------------------------------------------ Requisitos discriminatorios (6)
   - id: DIS-01
