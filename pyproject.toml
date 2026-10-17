@@ -16,9 +16,9 @@ dependencies = [
     "pydantic",
     "pypdf>=6.21.0",
     "python-dotenv",
+    "python-multipart>=0.0.32",
     "pyyaml",
     "starlette",
-    "streamlit",
     "uvicorn",
 ]
 

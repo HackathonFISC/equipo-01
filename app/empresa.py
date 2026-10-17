@@ -131,6 +131,16 @@ def verificar_token_empresa(estado: dict[str, Any], empresa_id: str, token: str 
         )
 
 
+def empresa_del_token(estado: dict[str, Any], token: str | None) -> str | None:
+    """El id de la empresa dueña de ese código, o None. Comparación en tiempo constante, igual que `verificar_token_empresa`."""
+    if not token:
+        return None
+    for empresa_id, esperado in (estado.get("_tokens_empresa") or {}).items():
+        if hmac.compare_digest(token.encode(), esperado.encode()):
+            return empresa_id
+    return None
+
+
 def _ref(estado: dict[str, Any], empresa_id: str, perfil_id: str, oferta_id: str) -> str:
     """Referencia opaca del candidato para esa empresa: el perfil_id puede llevar el nombre."""
     clave = (estado.get("_tokens_empresa") or {}).get(empresa_id, "")
@@ -219,6 +229,27 @@ def _texto_fecha(inicio: datetime) -> str:
 
 def _ics_confirmado(post: dict[str, Any]) -> str | None:
     return next((a for a in post.get("archivos_generados") or [] if str(a).startswith(PREFIJO_ICS)), None)
+
+
+def postulaciones_ciegas(estado: dict[str, Any], empresa_id: str) -> list[dict[str, Any]]:
+    """Las postulaciones a las vacantes de esa empresa que ya puede ver, sin nada que identifique a la persona.
+
+    Solo enviadas y con consentimiento vigente, igual que la lista ciega, y solo de sus vacantes. Cada una trae
+    la referencia opaca (`ref`) con que responde en la lista corta, nunca el `perfil_id`, que puede llevar el nombre.
+    """
+    filas = []
+    for oferta in _ofertas_de(estado, empresa_id):
+        for post in _candidatos_visibles(estado, oferta["id"]):
+            filas.append(
+                {
+                    "oferta_id": oferta["id"],
+                    "puesto": oferta.get("puesto"),
+                    "empresa": oferta.get("empresa"),
+                    "estado": post.get("estado"),
+                    "ref": _ref(estado, empresa_id, post["perfil_id"], oferta["id"]),
+                }
+            )
+    return filas
 
 
 def lista_corta_ciega(estado: dict[str, Any], empresa_id: str) -> dict[str, Any]:
