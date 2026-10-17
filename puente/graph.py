@@ -1,8 +1,10 @@
 """Grafo LangGraph: guardrails, router, agentes, aprobación del orientador con interrupt() y trazas. Issue #10.
 
-Fase 1: el flujo completo corre con stubs y se detiene en la aprobación. Los stubs están
-marcados con `STUB` y no llaman al LLM; la Fase 2 los reemplaza por los agentes reales
-pasando `nodos={"mercado": ..., ...}` a `construir_grafo`.
+Fase 2: los nodos son los agentes reales de main (Mercado #5/#43, Perfil #6/#44, Matching
+con el solver CP-SAT #4, Auditor v2 #50 y Formación #14). Postulación sigue como stub
+hasta #12. Los stubs de la Fase 1 quedan en `NODOS_FASE_1` para probar la mecánica del grafo.
+El LLM de Mercado y Perfil es inyectable (`nodos_fase_2`); los tests y la demo sin conexión
+usan respuestas grabadas, nunca la red.
 
     START → guardrails ─rechazo→ END
                 └→ router ─oferta→ mercado ─bloqueada→ alerta_oferta → END
@@ -10,7 +12,7 @@ pasando `nodos={"mercado": ..., ...}` a `construir_grafo`.
                      ├─perfil→ perfil → matching
                      └─consulta→ consulta → END
     matching ─sin matches→ sin_matches → END
-        └→ auditor ─sesgo (una vez)→ matching
+        └→ auditor ─sesgo (una vez)→ matching, o perfil si el sesgo viene de la lectura del perfil
               └→ formacion → aprobacion (interrupt)
     aprobacion: aprobar/editar → postulacion · quitar → matching · rechazar → END
     postulacion → aprobacion si quedan vacantes por decidir, si no END
@@ -18,11 +20,13 @@ pasando `nodos={"mercado": ..., ...}` a `construir_grafo`.
 Contrato con el tablero (#11):
     grafo = construir_grafo(checkpointer=checkpointer_sqlite())
     config = config_caso(perfil_id)
-    grafo.invoke(estado, config)                      # corre hasta el interrupt
+    grafo.invoke(limpiar_entrada(estado), config)     # corre hasta el interrupt; sin PII en el checkpoint
     aprobacion_pendiente(grafo, config)              # o grafo.get_state(config)
     grafo.invoke(Command(resume={...}), config)       # ver RESPUESTA_APROBACION
 
-LangSmith se activa solo con LANGSMITH_TRACING=true y LANGSMITH_API_KEY en `.env`.
+LangSmith se activa solo con LANGSMITH_TRACING=true y LANGSMITH_API_KEY en `.env`; cada nodo
+aparece como un run con su nombre (guardrails, router, mercado, perfil, matching, auditor,
+formacion, aprobacion, postulacion) bajo el run `puente:<thread_id>`.
 """
 
 from __future__ import annotations
@@ -32,6 +36,7 @@ import json
 import os
 import sqlite3
 import sys
+from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -40,11 +45,32 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
+from pydantic import BaseModel
 
-from puente.agents.auditor import ruta_post_auditor
-from puente.guardrails import RESPUESTA_FUERA_DE_ALCANCE, nodo_guardrails
+from puente.agents.auditor import nodo_auditor, ruta_post_auditor
+from puente.agents.formacion import nodo_formacion
+from puente.agents.matching import nodo_matching
+from puente.agents.mercado import crear_nodo_mercado, extractor_claude
+from puente.agents.perfil import llm_gemini, nodo_perfil
+from puente.guardrails import (
+    RESPUESTA_FUERA_DE_ALCANCE,
+    limpiar_entrada,
+    nodo_guardrails,
+    ocultar_trazas_langsmith,
+)
 from puente.rules.discriminacion import esta_bloqueada, revisar_texto
-from puente.schemas import Decision, EstadoPuente, Match, Oferta, Perfil
+from puente.rules.taxonomia import RUTA_TAXONOMIA, cargar_taxonomia
+from puente.schemas import (
+    REQUIERE_CONFIRMACION,
+    Decision,
+    EstadoPuente,
+    Match,
+    Oferta,
+    OfertaExtraida,
+    Perfil,
+    agregar_decision,
+)
+from puente.solver.asignacion import ConfigSolver
 
 Nodo = Callable[[dict], Any]
 
@@ -61,30 +87,26 @@ RESPUESTA_APROBACION = {
 }
 CANDIDATOS_POR_VACANTE = 3
 CHECKPOINTS_POR_DEFECTO = "checkpoints.db"
-CASO_YARITZA = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "caso_yaritza.json"
+RAIZ = Path(__file__).resolve().parents[1]
+CASO_YARITZA = RAIZ / "tests" / "fixtures" / "caso_yaritza.json"
+TAXONOMIA_MINI = RAIZ / "tests" / "fixtures" / "taxonomia_mini.csv"
 
 
 class EstadoGrafo(EstadoPuente, total=False):
-    """EstadoPuente más las claves que el grafo necesita y aún no están en schemas.py.
+    """EstadoPuente (#42) más las claves propias del grafo.
 
-    LangGraph descarta en silencio las claves que no declara el estado, así que sin esto
-    `entrada`, `excluidos` o el veredicto de guardrails nunca llegarían a los nodos.
-    Las de entrada (`entrada`, `tipo_entrada`, `ofertas_crudas`, `entradas_perfil`,
-    `excluidos`) llegan a EstadoPuente con #42; entonces esta clase se reduce a las propias del grafo.
+    LangGraph descarta en silencio las claves que no declara el estado: sin esto el
+    veredicto de guardrails o el contador del Auditor nunca llegarían al nodo siguiente.
     """
 
     entrada: dict[str, Any]
-    tipo_entrada: str
-    ofertas_crudas: list[Any]
-    entradas_perfil: list[dict[str, Any]]
     guardrails: dict[str, Any]
-    excluidos: list[dict[str, str]]
-    rutas_formacion: list[dict[str, Any]]
-    # Propias del grafo
     ofertas_nuevas: list[str]
     vacantes_resueltas: list[str]
     aviso_aprobacion: str | None
     respuesta: str
+    # El Auditor v2 (#50) cuenta sus propios reintentos y lo avisa con esta marca
+    _auditor_incremento: bool
 
 
 # ---------------------------------------------------------------- utilidades
@@ -100,10 +122,16 @@ def _campo(obj: Any, nombre: str, defecto: Any = None) -> Any:
     return getattr(obj, nombre, defecto)
 
 
+def _decision(estado: dict, agente: str, entrada: str, salida: str, razon: str) -> dict:
+    """`{"decisiones": [...]}` con la nueva al final, vía `agregar_decision()` de #42."""
+    return agregar_decision(
+        estado, Decision(agente=agente, entrada_resumen=entrada, salida_resumen=salida, razon=razon)
+    )
+
+
 def _con_decision(estado: dict, agente: str, entrada: str, salida: str, razon: str) -> list:
-    """Lista completa de decisiones con una nueva al final. Se cambia por `agregar_decision()` de #42."""
-    decision = Decision(agente=agente, entrada_resumen=entrada, salida_resumen=salida, razon=razon)
-    return [*(estado.get("decisiones") or []), decision]
+    """Lista completa de decisiones; la usan los stubs de la Fase 1."""
+    return _decision(estado, agente, entrada, salida, razon)["decisiones"]
 
 
 def _excluido(estado: dict, perfil_id: str, oferta_id: str) -> bool:
@@ -117,14 +145,18 @@ def _lista_corta_de(estado: dict, oferta_id: str) -> list:
 
 
 def vacantes_pendientes(estado: dict) -> list[str]:
-    """Vacantes con lista corta que el orientador todavía no decidió, en orden de aparición."""
+    """Vacantes con lista corta que el orientador todavía no decidió, en el orden de `ofertas`.
+
+    Ese orden no depende del solver: tras quitar un candidato, el orientador vuelve a ver la misma vacante.
+    """
     resueltas = set(estado.get("vacantes_resueltas") or [])
-    pendientes: list[str] = []
+    con_lista: list[str] = []
     for m in estado.get("lista_corta") or []:
         oid = _campo(m, "oferta_id")
-        if oid not in resueltas and oid not in pendientes:
-            pendientes.append(oid)
-    return pendientes
+        if oid not in resueltas and oid not in con_lista:
+            con_lista.append(oid)
+    orden = {_campo(o, "id"): i for i, o in enumerate(estado.get("ofertas") or [])}
+    return sorted(con_lista, key=lambda oid: orden.get(oid, len(orden)))
 
 
 # ---------------------------------------------------------------- guardrails y router
@@ -188,7 +220,7 @@ def nodo_router(estado: dict) -> dict:
     origen = "tipo_entrada" if estado.get("tipo_entrada") == tipo else "inferido del estado"
     return {
         "tipo_entrada": tipo,
-        "decisiones": _con_decision(estado, "router", f"tipo_entrada={estado.get('tipo_entrada')!r}", tipo, origen),
+        **_decision(estado, "router", f"tipo_entrada={estado.get('tipo_entrada')!r}", tipo, origen),
     }
 
 
@@ -200,9 +232,7 @@ def nodo_consulta(estado: dict) -> dict:
     """MVP: las consultas libres no se atienden todavía."""
     return {
         "respuesta": RESPUESTA_FUERA_DE_ALCANCE,
-        "decisiones": _con_decision(
-            estado, "consulta", "consulta libre", RESPUESTA_FUERA_DE_ALCANCE, "fuera de alcance en el MVP"
-        ),
+        **_decision(estado, "consulta", "consulta libre", RESPUESTA_FUERA_DE_ALCANCE, "fuera de alcance en el MVP"),
     }
 
 
@@ -255,7 +285,7 @@ def nodo_alerta_oferta(estado: dict) -> dict:
     respuesta = "Oferta bloqueada por requisitos discriminatorios. " + " | ".join(alertas)
     return {
         "respuesta": respuesta,
-        "decisiones": _con_decision(
+        **_decision(
             estado, "alerta_oferta", f"{len(nuevas)} oferta(s) nueva(s)", "bloqueada, no entra al Matching", respuesta
         ),
     }
@@ -346,11 +376,14 @@ def stub_matching(estado: dict) -> dict:
 
 
 def con_reintento_auditor(nodo: Nodo) -> Nodo:
-    """Si el Auditor devolvió el caso, cuenta el reintento para que `ruta_post_auditor` no entre en bucle."""
+    """Si el Auditor devolvió el caso, cuenta el reintento para que `ruta_post_auditor` no entre en bucle.
+
+    El Auditor v2 (#50) ya cuenta sus reintentos (`_auditor_incremento`); entonces no se cuenta dos veces.
+    """
 
     def matching(estado: dict) -> dict:
         cambios = nodo(estado)
-        if estado.get("devolver_a_matching"):
+        if estado.get("devolver_a_matching") and not estado.get("_auditor_incremento"):
             cambios = {
                 **cambios,
                 "reintentos_auditor": int(estado.get("reintentos_auditor", 0)) + 1,
@@ -374,7 +407,7 @@ def nodo_sin_matches(estado: dict) -> dict:
     respuesta = "Sin candidatos viables. " + ("; ".join(descartes) or "No hay ofertas disponibles.")
     return {
         "respuesta": respuesta,
-        "decisiones": _con_decision(
+        **_decision(
             estado, "sin_matches", f"{len(estado.get('matches') or [])} pareja(s) evaluada(s)", "fin sin lista corta", respuesta
         ),
     }
@@ -425,6 +458,167 @@ def ruta_post_postulacion(estado: dict) -> str:
     return "aprobacion" if vacantes_pendientes(estado) else END
 
 
+# ---------------------------------------------------------------- agentes reales (Fase 2)
+
+
+def cargar_taxonomia_grafo() -> dict[str, dict]:
+    """PUENTE_TAXONOMIA o data/taxonomia.csv; mientras #3 no la sube, la mini de los tests, como la demo de Perfil."""
+    for ruta in (os.getenv("PUENTE_TAXONOMIA"), RAIZ / RUTA_TAXONOMIA, TAXONOMIA_MINI):
+        if ruta and Path(ruta).exists():
+            return cargar_taxonomia(ruta)
+    return {}
+
+
+def _extractor_grabado(estado: dict) -> Callable[[Any], Any]:
+    """Modo sin conexión de Mercado: la `respuesta_llm` guardada en cada oferta cruda, buscada por su texto,
+    validada como la `OfertaExtraida` del contrato que devuelve `extractor_claude`."""
+    grabadas = {
+        str(c.get("texto", "")).strip(): c["respuesta_llm"]
+        for c in estado.get("ofertas_crudas") or []
+        if isinstance(c, dict) and c.get("respuesta_llm")
+    }
+
+    def extraer(entrada: Any) -> Any:
+        try:
+            return OfertaExtraida.model_validate(grabadas[entrada.texto.strip()])
+        except KeyError:
+            raise ValueError("sin respuesta grabada para esta oferta (modo sin conexión)") from None
+
+    return extraer
+
+
+def _llm_grabado(entrada: dict) -> Callable[[str], str]:
+    """Modo sin conexión de Perfil: `respuesta_llm` de la entrada o, si no trae, sus `habilidades`.
+
+    Igual que con Gemini, Perfil verifica cada habilidad contra la taxonomía y la evidencia literal.
+    """
+    texto = json.dumps(entrada.get("respuesta_llm") or {"habilidades": entrada.get("habilidades") or []}, ensure_ascii=False)
+    return lambda _prompt: texto
+
+
+def crear_nodo_mercado_grafo(
+    extraer: Callable[[Any], Any] | None = None, *, grabado: bool = False, taxonomia: dict[str, dict] | None = None
+) -> Nodo:
+    """Mercado real (#5, #43) más `ofertas_nuevas`, que decide si la entrada termina en alerta_oferta."""
+
+    def mercado(estado: dict) -> dict:
+        previas = {_campo(o, "id") for o in estado.get("ofertas") or []}
+        extractor = _extractor_grabado(estado) if grabado else (extraer or extractor_claude)
+        nodo = crear_nodo_mercado(extractor, taxonomia if taxonomia is not None else cargar_taxonomia_grafo())
+        cambios = nodo(estado)
+        return {**cambios, "ofertas_nuevas": [o.id for o in cambios["ofertas"] if o.id not in previas]}
+
+    return mercado
+
+
+def crear_nodo_perfil_grafo(
+    llm: Callable[[str], str] | None = None, *, grabado: bool = False, taxonomia: dict[str, dict] | None = None
+) -> Nodo:
+    """Perfil real (#6, #44). La entrevista corre fuera del grafo y llega como un elemento de `entradas_perfil`."""
+
+    def perfil(estado: dict) -> dict:
+        tax = taxonomia if taxonomia is not None else cargar_taxonomia_grafo()
+        if not grabado:
+            return nodo_perfil(estado, llm=llm or llm_gemini, taxonomia=tax)
+        cambios: dict = {}
+        for entrada in estado.get("entradas_perfil") or []:
+            parcial = {**estado, **cambios, "entradas_perfil": [entrada]}
+            cambios.update(nodo_perfil(parcial, llm=_llm_grabado(entrada), taxonomia=tax))
+        return cambios
+
+    return perfil
+
+
+def _perfil_para_solver(perfil: Any) -> dict:
+    """El solver de #4 lanza IndexError con `horario_libre=[]`; sin la clave lo trata como sin restricción.
+
+    Rodeo hasta que #48 lo corrija en `puente/solver/`; el estado conserva el Perfil original.
+    """
+    datos = perfil.model_dump() if isinstance(perfil, BaseModel) else dict(perfil)
+    if not datos.get("horario_libre"):
+        datos.pop("horario_libre", None)
+    return datos
+
+
+def _config_solver(estado: dict) -> ConfigSolver:
+    config = estado.get("config_solver")
+    return config if isinstance(config, ConfigSolver) else ConfigSolver(**(config or {}))
+
+
+def nodo_matching_grafo(estado: dict) -> dict:
+    """Matching real (#4) sin las parejas que el orientador quitó.
+
+    El solver todavía no recibe exclusiones (#48). Sin tope de vacantes por perfil cada vacante se
+    resuelve sola, así que se le pide k + (exclusiones de la vacante más afectada), se quitan las
+    parejas excluidas y cada vacante se recorta a k por el puntaje del solver: el lugar que deja
+    el excluido lo ocupa el siguiente viable. Con tope por perfil solo se filtra.
+    """
+    excluidos = {(e.get("perfil_id"), e.get("oferta_id")) for e in estado.get("excluidos") or []}
+    config = _config_solver(estado)
+    k = config.max_candidatos_por_vacante
+    holgura = 0
+    if excluidos and config.max_vacantes_por_perfil is None:
+        holgura = max(Counter(oferta for _, oferta in excluidos).values())
+    vista = {
+        **estado,
+        "perfiles": [_perfil_para_solver(p) for p in estado.get("perfiles") or []],
+        "config_solver": config.model_copy(update={"max_candidatos_por_vacante": k + holgura}),
+    }
+    cambios = nodo_matching(vista)
+    if not excluidos:
+        return cambios
+
+    lista_corta: list = []
+    por_vacante: Counter = Counter()
+    sobran: list = []
+    candidatos = [m for m in cambios["lista_corta"] if (m.perfil_id, m.oferta_id) not in excluidos]
+    for m in sorted(candidatos, key=lambda m: (m.oferta_id, -m.puntaje, m.perfil_id)):
+        por_vacante[m.oferta_id] += 1
+        (lista_corta if por_vacante[m.oferta_id] <= k else sobran).append(m)
+    fuera = {(m.perfil_id, m.oferta_id) for m in sobran} | excluidos
+    elegidos = {id(m) for m in lista_corta}
+    lista_corta = [m for m in candidatos if id(m) in elegidos]  # conserva el orden del solver
+    matches = [m for m in cambios["matches"] if (m.perfil_id, m.oferta_id) not in fuera]
+
+    decisiones = list(cambios["decisiones"])
+    texto = ", ".join(f"{p} → {o}" for p, o in sorted(excluidos))
+    if decisiones and isinstance(decisiones[-1], Decision):
+        ultima = decisiones[-1]
+        decisiones[-1] = ultima.model_copy(
+            update={
+                "salida_resumen": f"{len(lista_corta)} candidato(s) en lista corta sin las parejas excluidas",
+                "razon": f"{ultima.razon} Parejas excluidas por el orientador, filtradas en el grafo hasta #48: {texto}.",
+            }
+        )
+    return {**cambios, "matches": matches, "lista_corta": lista_corta, "decisiones": decisiones}
+
+
+def nodo_auditor_grafo(estado: dict) -> dict:
+    """Auditor v2 (#50) con los perfiles en la forma que acepta el solver; el estado conserva los originales."""
+    vista = {**estado, "perfiles": [_perfil_para_solver(p) for p in estado.get("perfiles") or []]}
+    cambios = nodo_auditor(vista)
+    return {k: v for k, v in cambios.items() if k not in ("perfiles", "ofertas")}
+
+
+def nodos_fase_2(
+    *,
+    llm_perfil: Callable[[str], str] | None = None,
+    extraer_oferta: Callable[[Any], Any] | None = None,
+    grabado: bool = False,
+    taxonomia: dict[str, dict] | None = None,
+) -> dict[str, Nodo]:
+    """Los agentes reales. Sin `llm_perfil` ni `extraer_oferta` usan Gemini; `grabado=True` usa la
+    `respuesta_llm` guardada en cada entrada (demo sin conexión). Postulación sigue como stub (#12)."""
+    return {
+        "mercado": crear_nodo_mercado_grafo(extraer_oferta, grabado=grabado, taxonomia=taxonomia),
+        "perfil": crear_nodo_perfil_grafo(llm_perfil, grabado=grabado, taxonomia=taxonomia),
+        "matching": nodo_matching_grafo,
+        "auditor": nodo_auditor_grafo,
+        "formacion": nodo_formacion,
+        "postulacion": stub_postulacion,
+    }
+
+
 # ---------------------------------------------------------------- aprobación del orientador
 
 
@@ -440,6 +634,7 @@ def solicitud_aprobacion(estado: dict, oferta_id: str) -> dict[str, Any]:
     """Lo que ve el orientador en el interrupt: una vacante y su lista corta, todo serializable."""
     oferta = next((o for o in estado.get("ofertas") or [] if o.id == oferta_id), None)
     perfiles = {p.id: p for p in estado.get("perfiles") or []}
+    rutas = [r for r in estado.get("rutas_formacion") or [] if r.get("oferta_id") == oferta_id]
     candidatos = [
         {
             "perfil_id": m.perfil_id,
@@ -447,16 +642,27 @@ def solicitud_aprobacion(estado: dict, oferta_id: str) -> dict[str, Any]:
             "puntaje": m.puntaje,
             "brechas": list(m.brechas),
             "explicacion": m.explicacion,
+            "requiere_confirmacion": list(m.desglose.get(REQUIERE_CONFIRMACION) or []),
+            "rutas_formacion": [r for r in rutas if r.get("perfil_id") == m.perfil_id],
         }
         for m in _lista_corta_de(estado, oferta_id)
     ]
     return {
         "tipo": "aprobacion",
         "oferta_id": oferta_id,
-        "oferta": {"puesto": _campo(oferta, "puesto"), "empresa": _campo(oferta, "empresa")},
+        "oferta": {
+            "puesto": _campo(oferta, "puesto"),
+            "empresa": _campo(oferta, "empresa"),
+            "salario_mensual": _campo(oferta, "salario_mensual"),
+            "salario_tipo": _campo(oferta, "salario_tipo"),
+            "horario_tipo": _campo(oferta, "horario_tipo"),
+            "alertas": list(_campo(oferta, "alertas") or []),
+            "requiere_confirmacion": oferta.por_confirmar() if isinstance(oferta, Oferta) else [],
+        },
         "candidatos": candidatos,
         "mensaje_sugerido": _mensaje_sugerido(oferta, candidatos),
         "alertas_auditor": list(estado.get("alertas_auditor") or []),
+        "reporte_auditor": estado.get("reporte_auditor"),
         "vacantes_pendientes": vacantes_pendientes(estado),
         "acciones": list(ACCIONES),
         "respuesta_esperada": RESPUESTA_APROBACION,
@@ -498,7 +704,7 @@ def nodo_aprobacion(estado: dict) -> Command:
 
     def decision(salida: str, razon: str) -> list:
         entrada = f"lista corta de {oferta_id}: {', '.join(en_lista)}"
-        return _con_decision(estado, "aprobacion", entrada, salida, f"{orientador or 'orientador'}: {razon}")
+        return _decision(estado, "aprobacion", entrada, salida, f"{orientador or 'orientador'}: {razon}")["decisiones"]
 
     if accion == "quitar":
         perfil_id = respuesta.get("perfil_id")
@@ -574,12 +780,14 @@ NODOS_FASE_1: dict[str, Nodo] = {
 
 
 def construir_grafo(nodos: dict[str, Nodo] | None = None, checkpointer: Any = None):
-    """Compila el grafo. `nodos` reemplaza cualquiera de NODOS_FASE_1 (Fase 2 o tests).
+    """Compila el grafo con los agentes reales (`nodos_fase_2()`, Gemini por defecto).
 
+    `nodos` reemplaza cualquiera de ellos: `nodos_fase_2(grabado=True)` para la demo sin
+    conexión, LLM falsos en los tests o `NODOS_FASE_1` para probar solo la mecánica.
     Sin checkpointer el grafo no puede detenerse en la aprobación; el tablero y la demo
     usan `checkpointer_sqlite()`.
     """
-    agentes = {**NODOS_FASE_1, **(nodos or {})}
+    agentes = {**nodos_fase_2(), **(nodos or {})}
     grafo = StateGraph(EstadoGrafo)
     grafo.add_node("guardrails", nodo_entrada_guardrails)
     grafo.add_node("router", nodo_router)
@@ -603,7 +811,9 @@ def construir_grafo(nodos: dict[str, Nodo] | None = None, checkpointer: Any = No
     grafo.add_edge("perfil", "matching")
     grafo.add_conditional_edges("matching", ruta_post_matching, ["auditor", "sin_matches"])
     grafo.add_edge("sin_matches", END)
-    grafo.add_conditional_edges("auditor", ruta_post_auditor, {"matching": "matching", "continuar": "formacion"})
+    grafo.add_conditional_edges(
+        "auditor", ruta_post_auditor, {"matching": "matching", "perfil": "perfil", "continuar": "formacion"}
+    )
     grafo.add_edge("formacion", "aprobacion")
     grafo.add_conditional_edges("postulacion", ruta_post_postulacion, ["aprobacion", END])
     return grafo.compile(checkpointer=checkpointer)
@@ -717,9 +927,15 @@ def _respuesta_automatica(paso: str, solicitud: dict[str, Any]) -> dict[str, Any
 def _mostrar(solicitud: dict[str, Any], escribir: Callable[[str], None]) -> None:
     oferta = solicitud["oferta"]
     escribir(f"\n⏸  Aprobación pendiente · {solicitud['oferta_id']} · {oferta['puesto']} en {oferta['empresa']}")
+    if oferta.get("requiere_confirmacion"):
+        escribir(f"   Por confirmar con la empresa: {', '.join(oferta['requiere_confirmacion'])}")
     for c in solicitud["candidatos"]:
         brechas = f" · brechas: {', '.join(c['brechas'])}" if c["brechas"] else ""
         escribir(f"   - {c['nombre']} ({c['perfil_id']}) puntaje {c['puntaje']}{brechas}")
+        for ruta in c.get("rutas_formacion") or []:
+            cursos = ", ".join(curso["curso"] for curso in ruta.get("cursos_seleccionados") or [])
+            if cursos:
+                escribir(f"     Formación sugerida: {cursos}")
     if solicitud["alertas_auditor"]:
         escribir(f"   Auditor: {'; '.join(solicitud['alertas_auditor'])}")
     if solicitud["error"]:
@@ -733,8 +949,17 @@ def main(argv: list[str] | None = None, leer: Callable[[str], str] = input, escr
     parser.add_argument("--caso", default=str(CASO_YARITZA), help="JSON del caso")
     parser.add_argument("--checkpoints", default=None, help="archivo SQLite de checkpoints (PUENTE_CHECKPOINTS)")
     parser.add_argument("--thread", default=None, help="thread_id; por defecto <id del caso>-<hora>")
-    parser.add_argument("--auto", default=None, help="decisiones sin preguntar, p. ej. 'quitar:carlos,aprobar,rechazar'")
+    parser.add_argument("--auto", default=None, help="decisiones sin preguntar, p. ej. 'quitar:maria,aprobar,rechazar'")
+    parser.add_argument(
+        "--llm",
+        default="grabado",
+        choices=["grabado", "gemini"],
+        help="grabado: respuestas guardadas en el caso, sin red (por defecto); gemini: GOOGLE_API_KEY en .env",
+    )
     args = parser.parse_args(argv)
+    # Con la salida redirigida en Windows (cp1252) no existen ⏸, ⚠ ni →: se reemplazan en vez de cortar la demo.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")
 
     try:
         from dotenv import load_dotenv
@@ -742,13 +967,16 @@ def main(argv: list[str] | None = None, leer: Callable[[str], str] = input, escr
         load_dotenv()
     except ImportError:  # pragma: no cover
         pass
+    ocultar_trazas_langsmith()
 
     caso_id, estado = cargar_caso(args.caso)
+    estado = limpiar_entrada(estado)  # sin cédula, teléfono ni dirección en el checkpoint
     thread_id = args.thread or f"{caso_id}-{datetime.now(UTC):%Y%m%d%H%M%S}"
-    grafo = construir_grafo(checkpointer=checkpointer_sqlite(args.checkpoints))
+    nodos = nodos_fase_2(grabado=args.llm == "grabado")
+    grafo = construir_grafo(nodos=nodos, checkpointer=checkpointer_sqlite(args.checkpoints))
     config = config_caso(thread_id)
     pasos = [p.strip() for p in args.auto.split(",")] if args.auto else None
-    escribir(f"Caso {args.demo} · thread_id={thread_id}")
+    escribir(f"Caso {args.demo} · thread_id={thread_id} · LLM {args.llm}")
 
     final = grafo.invoke(estado, config)
     while (solicitud := aprobacion_pendiente(grafo, config)) is not None:

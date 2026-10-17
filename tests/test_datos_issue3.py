@@ -48,3 +48,15 @@ def test_casos_sinteticos_de_duplicados_incluyen_sucursales_distintas():
     assert distinto["a"]["empresa"] == distinto["b"]["empresa"]
     assert distinto["a"]["puesto"] == distinto["b"]["puesto"]
     assert distinto["a"]["corregimiento"] != distinto["b"]["corregimiento"]
+
+
+def test_datos_sin_marcadores_de_conflicto_y_taxonomia_sin_repetidos():
+    """Un merge mal resuelto deja marcadores que csv.DictReader lee como filas; las pruebas de arriba pasarían igual."""
+    for ruta in DATA.rglob("*"):
+        if ruta.is_file() and ruta.suffix in {".csv", ".md", ".json", ".txt"}:
+            for linea in ruta.read_text(encoding="utf-8").splitlines():
+                marcador = linea.startswith(("<<<<<<<", ">>>>>>>")) or linea.rstrip() == "======="
+                assert not marcador, f"{ruta.relative_to(DATA)}: marcador de conflicto «{linea[:20]}»"
+    with (DATA / "taxonomia.csv").open(encoding="utf-8", newline="") as archivo:
+        skill_ids = [fila["skill_id"] for fila in csv.DictReader(archivo)]
+    assert len(skill_ids) == len(set(skill_ids)), "skill_id repetido en taxonomia.csv"

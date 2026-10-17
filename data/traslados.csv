@@ -1,0 +1,92 @@
+origen,destino,minutos_hora_pico,pasaje_ida_usd,modo,fuente,fecha_medicion
+La Chorrera,La Chorrera,15,0.50,Ruta interna La Chorrera,Tarifa interna ATTT Panamá Oeste + Google Maps Transit (07:00),2026-10-16
+La Chorrera,Vista Alegre,20,0.75,Chiva / bus interurbano Oeste,Tarifa interurbana ATTT Panamá Oeste + Google Maps Transit (07:00),2026-10-16
+La Chorrera,Arraiján,30,1.00,Bus La Chorrera - Arraiján,Tarifa interurbana ATTT Panamá Oeste + Google Maps Transit (07:00),2026-10-16
+La Chorrera,Ancón,50,1.50,Bus Expreso La Chorrera - Albrook,Tarifa Expreso La Chorrera-Albrook ATTT ($1.50) + Google Maps Transit (07:00),2026-10-16
+La Chorrera,Calidonia,55,1.85,Bus La Chorrera + Metro L1,Expreso La Chorrera ($1.50) + Metro L1 ($0.35) + Google Maps Transit (07:00),2026-10-16
+La Chorrera,Bella Vista,58,1.85,Bus La Chorrera + Metro L1,Expreso La Chorrera ($1.50) + Metro L1 ($0.35) + Google Maps Transit (07:00),2026-10-16
+La Chorrera,Betania,60,1.85,Bus La Chorrera + Metro L1,Expreso La Chorrera ($1.50) + Metro L1 ($0.35) + Google Maps Transit (07:00),2026-10-16
+La Chorrera,San Francisco,65,2.10,Bus La Chorrera + Metro L1 + Metrobús,Expreso La Chorrera ($1.50) + Metro L1 ($0.35) + MiBus troncal ($0.25),2026-10-16
+La Chorrera,San Miguelito,70,1.85,Bus La Chorrera + Metro L1,Expreso La Chorrera ($1.50) + Metro L1 ($0.35) + Google Maps Transit (07:00),2026-10-16
+La Chorrera,Juan Díaz,80,2.35,Bus La Chorrera + Metro L1/L2,Expreso La Chorrera ($1.50) + Metro L1/L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+La Chorrera,Pedregal,88,2.35,Bus La Chorrera + Metro L1/L2,Expreso La Chorrera ($1.50) + Metro L1/L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+La Chorrera,Tocumen,95,2.35,Bus La Chorrera + Metro L1/L2,Expreso La Chorrera ($1.50) + Metro L1/L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+La Chorrera,24 de Diciembre,100,2.35,Bus La Chorrera + Metro L1/L2,Expreso La Chorrera ($1.50) + Metro L1/L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+Vista Alegre,Vista Alegre,12,0.50,Ruta interna Vista Alegre,Tarifa interna ATTT Arraiján + Google Maps Transit (07:00),2026-10-16
+Vista Alegre,Arraiján,18,0.75,Chiva / bus Oeste,Tarifa interurbana ATTT Oeste + Google Maps Transit (07:00),2026-10-16
+Vista Alegre,Ancón,42,1.25,Bus Vista Alegre - Albrook,Tarifa Vista Alegre-Albrook ATTT ($1.25) + Google Maps Transit (07:00),2026-10-16
+Vista Alegre,Calidonia,48,1.60,Bus Vista Alegre + Metro L1,Bus Vista Alegre ($1.25) + Metro L1 ($0.35) + Google Maps Transit (07:00),2026-10-16
+Vista Alegre,Bella Vista,50,1.60,Bus Vista Alegre + Metro L1,Bus Vista Alegre ($1.25) + Metro L1 ($0.35) + Google Maps Transit (07:00),2026-10-16
+Vista Alegre,Betania,52,1.60,Bus Vista Alegre + Metro L1,Bus Vista Alegre ($1.25) + Metro L1 ($0.35) + Google Maps Transit (07:00),2026-10-16
+Vista Alegre,San Francisco,56,1.85,Bus Vista Alegre + Metro L1 + Metrobús,Bus Vista Alegre ($1.25) + Metro L1 ($0.35) + MiBus ($0.25),2026-10-16
+Vista Alegre,San Miguelito,62,1.60,Bus Vista Alegre + Metro L1,Bus Vista Alegre ($1.25) + Metro L1 ($0.35) + Google Maps Transit (07:00),2026-10-16
+Vista Alegre,Juan Díaz,72,2.10,Bus Vista Alegre + Metro L1/L2,Bus Vista Alegre ($1.25) + Metro L1/L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+Vista Alegre,Pedregal,78,2.10,Bus Vista Alegre + Metro L1/L2,Bus Vista Alegre ($1.25) + Metro L1/L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+Vista Alegre,Tocumen,85,2.10,Bus Vista Alegre + Metro L1/L2,Bus Vista Alegre ($1.25) + Metro L1/L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+Vista Alegre,24 de Diciembre,90,2.10,Bus Vista Alegre + Metro L1/L2,Bus Vista Alegre ($1.25) + Metro L1/L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+Arraiján,Arraiján,12,0.50,Ruta interna Arraiján,Tarifa interna ATTT Arraiján + Google Maps Transit (07:00),2026-10-16
+Arraiján,Ancón,32,1.00,Bus Arraiján - Albrook,Tarifa Arraiján-Albrook ATTT ($1.00) + Google Maps Transit (07:00),2026-10-16
+Arraiján,Calidonia,38,1.35,Bus Arraiján + Metro L1,Bus Arraiján ($1.00) + Metro L1 ($0.35) + Google Maps Transit (07:00),2026-10-16
+Arraiján,Bella Vista,42,1.35,Bus Arraiján + Metro L1,Bus Arraiján ($1.00) + Metro L1 ($0.35) + Google Maps Transit (07:00),2026-10-16
+Arraiján,Betania,45,1.35,Bus Arraiján + Metro L1,Bus Arraiján ($1.00) + Metro L1 ($0.35) + Google Maps Transit (07:00),2026-10-16
+Arraiján,San Francisco,48,1.60,Bus Arraiján + Metro L1 + Metrobús,Bus Arraiján ($1.00) + Metro L1 ($0.35) + MiBus ($0.25),2026-10-16
+Arraiján,San Miguelito,52,1.35,Bus Arraiján + Metro L1,Bus Arraiján ($1.00) + Metro L1 ($0.35) + Google Maps Transit (07:00),2026-10-16
+Arraiján,Juan Díaz,62,1.85,Bus Arraiján + Metro L1/L2,Bus Arraiján ($1.00) + Metro L1/L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+Arraiján,Pedregal,68,1.85,Bus Arraiján + Metro L1/L2,Bus Arraiján ($1.00) + Metro L1/L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+Arraiján,Tocumen,75,1.85,Bus Arraiján + Metro L1/L2,Bus Arraiján ($1.00) + Metro L1/L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+Arraiján,24 de Diciembre,80,1.85,Bus Arraiján + Metro L1/L2,Bus Arraiján ($1.00) + Metro L1/L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+Ancón,Ancón,15,0.50,Metrobús / ruta interna Ancón,Tarifa MiBus troncal ($0.25-$0.50) + Google Maps Transit (07:00),2026-10-16
+Ancón,Calidonia,19,0.60,Metrobús / Metro L1,Tarifa integrada Metro L1 ($0.35) + MiBus ($0.25),2026-10-16
+Ancón,Bella Vista,22,0.60,Metrobús / Metro L1,Tarifa integrada Metro L1 ($0.35) + MiBus ($0.25),2026-10-16
+Ancón,Betania,24,0.60,Metrobús / Metro L1,Tarifa integrada Metro L1 ($0.35) + MiBus ($0.25),2026-10-16
+Ancón,San Francisco,28,0.60,Metrobús / Metro L1,Tarifa integrada Metro L1 ($0.35) + MiBus ($0.25),2026-10-16
+Ancón,San Miguelito,32,0.85,Metro L1 + L2 / Metrobús,Tarifa Metro L1 + MiBus trasbordo + Google Maps Transit (07:00),2026-10-16
+Ancón,Juan Díaz,39,0.85,Metro L1 + L2 / Metrobús,Tarifa Metro L1/L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+Ancón,Pedregal,47,0.85,Metro L1 + L2 / Metrobús,Tarifa Metro L1/L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+Ancón,Tocumen,59,0.85,Metro L1 + L2 / Metrobús,Tarifa Metro L1/L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+Ancón,24 de Diciembre,65,0.85,Metro L1 + L2 / Metrobús,Tarifa Metro L1/L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+Calidonia,Calidonia,15,0.50,Metrobús / ruta interna Calidonia,Tarifa MiBus troncal + Google Maps Transit (07:00),2026-10-16
+Calidonia,Bella Vista,18,0.60,Metrobús / Metro L1,Tarifa Metro L1 ($0.35) + MiBus ($0.25),2026-10-16
+Calidonia,Betania,20,0.60,Metrobús / Metro L1,Tarifa Metro L1 ($0.35) + MiBus ($0.25),2026-10-16
+Calidonia,San Francisco,24,0.60,Metrobús / Metro L1,Tarifa MiBus troncal + Metro L1,2026-10-16
+Calidonia,San Miguelito,28,0.85,Metro L1 + L2 / Metrobús,Tarifa Metro L1 + MiBus + Google Maps Transit (07:00),2026-10-16
+Calidonia,Juan Díaz,35,0.85,Metro L1 + L2 / Metrobús,Tarifa Metro L1/L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+Calidonia,Pedregal,43,0.85,Metro L1 + L2 / Metrobús,Tarifa Metro L1/L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+Calidonia,Tocumen,55,0.85,Metro L1 + L2 / Metrobús,Tarifa Metro L1/L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+Calidonia,24 de Diciembre,61,0.85,Metro L1 + L2 / Metrobús,Tarifa Metro L1/L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+Bella Vista,Bella Vista,15,0.50,Metrobús / ruta interna Bella Vista,Tarifa MiBus troncal + Google Maps Transit (07:00),2026-10-16
+Bella Vista,Betania,18,0.60,Metrobús / Metro L1,Tarifa Metro L1 ($0.35) + MiBus ($0.25),2026-10-16
+Bella Vista,San Francisco,20,0.60,Metrobús / Metro L1,Tarifa MiBus troncal + Google Maps Transit (07:00),2026-10-16
+Bella Vista,San Miguelito,25,0.60,Metrobús / Metro L1,Tarifa Metro L1 ($0.35) + MiBus ($0.25),2026-10-16
+Bella Vista,Juan Díaz,32,0.85,Metro L1 + L2 / Metrobús,Tarifa Metro L1/L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+Bella Vista,Pedregal,40,0.85,Metro L1 + L2 / Metrobús,Tarifa Metro L1/L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+Bella Vista,Tocumen,52,0.85,Metro L1 + L2 / Metrobús,Tarifa Metro L1/L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+Bella Vista,24 de Diciembre,58,0.85,Metro L1 + L2 / Metrobús,Tarifa Metro L1/L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+Betania,Betania,15,0.50,Metrobús / ruta interna Betania,Tarifa MiBus troncal + Google Maps Transit (07:00),2026-10-16
+Betania,San Francisco,22,0.60,Metrobús / Metro L1,Tarifa MiBus troncal + Metro L1,2026-10-16
+Betania,San Miguelito,23,0.60,Metrobús / Metro L1,Tarifa Metro L1 ($0.35) + MiBus ($0.25),2026-10-16
+Betania,Juan Díaz,30,0.85,Metro L1 + L2 / Metrobús,Tarifa Metro L1/L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+Betania,Pedregal,38,0.85,Metro L1 + L2 / Metrobús,Tarifa Metro L1/L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+Betania,Tocumen,50,0.85,Metro L1 + L2 / Metrobús,Tarifa Metro L1/L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+Betania,24 de Diciembre,56,0.85,Metro L1 + L2 / Metrobús,Tarifa Metro L1/L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+San Francisco,San Francisco,15,0.50,Metrobús / ruta interna San Francisco,Tarifa MiBus troncal + Google Maps Transit (07:00),2026-10-16
+San Francisco,San Miguelito,28,0.60,Metrobús / Metro L1,Tarifa MiBus + Metro L1 + Google Maps Transit (07:00),2026-10-16
+San Francisco,Juan Díaz,26,0.60,Metrobús / Corredor Sur / Vía España,Tarifa MiBus troncal + Google Maps Transit (07:00),2026-10-16
+San Francisco,Pedregal,36,0.85,Metrobús + Metro L2,Tarifa MiBus + Metro L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+San Francisco,Tocumen,45,0.85,Metrobús + Metro L2,Tarifa MiBus + Metro L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+San Francisco,24 de Diciembre,52,0.85,Metrobús + Metro L2,Tarifa MiBus + Metro L2 ($0.85) + Google Maps Transit (07:00),2026-10-16
+San Miguelito,San Miguelito,15,0.50,Metrobús / ruta interna San Miguelito,Tarifa MiBus troncal + Google Maps Transit (07:00),2026-10-16
+San Miguelito,Juan Díaz,22,0.60,Metrobús / Metro L2,Tarifa Metro L2 ($0.50) + Google Maps Transit (07:00),2026-10-16
+San Miguelito,Pedregal,30,0.85,Metro L2 + Metrobús,Tarifa Metro L2 ($0.50) + MiBus ($0.35),2026-10-16
+San Miguelito,Tocumen,42,0.85,Metro L2 + Metrobús,Tarifa Metro L2 ($0.50) + MiBus ($0.35),2026-10-16
+San Miguelito,24 de Diciembre,48,0.85,Metro L2 + Metrobús,Tarifa Metro L2 ($0.50) + MiBus ($0.35),2026-10-16
+Juan Díaz,Juan Díaz,15,0.50,Metrobús / ruta interna Juan Díaz,Tarifa MiBus troncal + Google Maps Transit (07:00),2026-10-16
+Juan Díaz,Pedregal,23,0.60,Metrobús / Metro L2,Tarifa Metro L2 ($0.50) + Google Maps Transit (07:00),2026-10-16
+Juan Díaz,Tocumen,35,0.85,Metro L2 + Metrobús,Tarifa Metro L2 ($0.50) + MiBus ($0.35),2026-10-16
+Juan Díaz,24 de Diciembre,41,0.85,Metro L2 + Metrobús,Tarifa Metro L2 ($0.50) + MiBus ($0.35),2026-10-16
+Pedregal,Pedregal,15,0.50,Metrobús / ruta interna Pedregal,Tarifa MiBus troncal + Google Maps Transit (07:00),2026-10-16
+Pedregal,Tocumen,27,0.60,Metrobús / Metro L2,Tarifa Metro L2 ($0.50) + Google Maps Transit (07:00),2026-10-16
+Pedregal,24 de Diciembre,33,0.85,Metro L2 + Metrobús,Tarifa Metro L2 ($0.50) + MiBus ($0.35),2026-10-16
+Tocumen,Tocumen,15,0.50,Metrobús / ruta interna Tocumen,Tarifa MiBus troncal + Google Maps Transit (07:00),2026-10-16
+Tocumen,24 de Diciembre,21,0.60,Metrobús / Metro L2,Tarifa Metro L2 ($0.50) + Google Maps Transit (07:00),2026-10-16
+24 de Diciembre,24 de Diciembre,15,0.50,Metrobús / ruta interna 24 de Diciembre,Tarifa MiBus troncal + Google Maps Transit (07:00),2026-10-16

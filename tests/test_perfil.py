@@ -1,13 +1,14 @@
 """Agente Perfil (#6, #44): evidencia literal, taxonomía, PII fuera del LLM, formulario fijo,
 modo terminal y nodo del grafo.
 
-Sin red ni claves: el LLM es un falso que devuelve respuestas guardadas y anota cada prompt,
-y la taxonomía es un falso con la interfaz acordada con #5 sobre tests/fixtures/taxonomia_mini.csv.
+Sin red, claves ni `puente.llm`: el LLM es un falso que devuelve `PerfilExtraido` guardados y
+anota cada prompt, y la taxonomía es un falso con la interfaz acordada con #5 sobre tests/fixtures/taxonomia_mini.csv.
 """
 import csv
 import json
 import subprocess
 import sys
+import types
 import unicodedata
 from pathlib import Path
 
@@ -32,7 +33,7 @@ from puente.agents.perfil import (
     quitar_pii,
     tiene_evidencia,
 )
-from puente.schemas import Decision, Perfil
+from puente.schemas import Decision, Perfil, PerfilExtraido
 
 FIXTURES = Path(__file__).parent / "fixtures"
 RAIZ = Path(__file__).resolve().parents[1]
@@ -68,13 +69,17 @@ def normalizar_falso(texto: str, taxonomia: dict[str, dict]) -> str | None:
 
 
 class LLMFalso:
+    """Imita `llm_puente`: recibe el prompt y devuelve un PerfilExtraido (o el texto dado)."""
+
     def __init__(self, respuesta: dict | str):
-        self.respuesta = respuesta if isinstance(respuesta, str) else json.dumps(respuesta, ensure_ascii=False)
+        self.respuesta = respuesta
         self.prompts: list[str] = []
 
-    def __call__(self, prompt: str) -> str:
+    def __call__(self, prompt: str) -> PerfilExtraido | str:
         self.prompts.append(prompt)
-        return f"```json\n{self.respuesta}\n```"
+        if isinstance(self.respuesta, str):
+            return self.respuesta
+        return PerfilExtraido.model_validate(self.respuesta)
 
 
 @pytest.fixture
@@ -109,6 +114,7 @@ def test_yaritza_sin_cv_fonda(taxonomia):
     assert perfil.salario_minimo == 400 and perfil.presupuesto_pasaje_diario == 3.0
     assert "6123-4567" not in llm.prompts[0]
     assert "liderazgo" in decision.razon and "ventas" in decision.razon
+    assert "ignorado del LLM" in decision.razon and "edad=25" in decision.razon
 
 
 @pytest.mark.parametrize("caso", CASOS, ids=[c["nombre"] for c in CASOS])
@@ -286,7 +292,14 @@ def test_cv_pdf(tmp_path, taxonomia):
 def test_llm_sin_json_es_error(taxonomia):
     entrada = {"id": "x", "edad": 20, "corregimiento": "Tocumen", "respuestas": ["hola"]}
     with pytest.raises(ValueError, match="JSON"):
-        construir_perfil(entrada, taxonomia=taxonomia, normalizar=normalizar_falso, llm=lambda _: "no sé")
+        construir_perfil(entrada, taxonomia=taxonomia, normalizar=normalizar_falso, llm=LLMFalso("no sé"))
+
+
+def test_salida_que_no_cumple_perfil_extraido_es_error(taxonomia):
+    entrada = {"id": "x", "edad": 20, "corregimiento": "Tocumen", "respuestas": ["hola"]}
+    llm = LLMFalso('{"habilidades": "muchas"}')
+    with pytest.raises(ValueError, match="PerfilExtraido"):
+        construir_perfil(entrada, taxonomia=taxonomia, normalizar=normalizar_falso, llm=llm)
 
 
 # ---------------------------------------------------------------- formulario fijo (#44)
@@ -300,8 +313,18 @@ def test_preguntas_solo_piden_habilidades():
 
 
 def test_prompt_no_pide_datos_del_formulario(taxonomia):
-    prompt = construir_prompt("texto", "entrevista", taxonomia)
+    prompt = construir_prompt("texto del joven", "entrevista", taxonomia)
+    assert "Llena solo \"habilidades\"" in prompt and "manejo_caja" in prompt and "texto del joven" in prompt
     assert '"edad"' not in prompt and '"salario_minimo"' not in prompt and '"horario_clases"' not in prompt
+
+
+def test_acepta_llm_que_devuelve_texto_json_como_el_grabado_del_grafo(taxonomia):
+    """`_llm_grabado` de puente/graph.py devuelve el JSON como texto con la firma llm(prompt)."""
+    caso = _caso("yaritza_fonda_sin_cv")
+    texto = json.dumps(caso["respuesta_llm"], ensure_ascii=False)
+    perfil, _ = construir_perfil(caso["entrada"], taxonomia=taxonomia, normalizar=normalizar_falso, llm=lambda _p: texto)
+    assert {"atencion_cliente", "manejo_caja", "inventario"} <= {h.skill_id for h in perfil.habilidades}
+    assert agente.llm_gemini is agente.llm_puente, "alias temporal mientras graph.py importe llm_gemini"
 
 
 def test_sin_edad_en_el_formulario_es_error_aunque_el_llm_la_diga(taxonomia):
@@ -489,13 +512,13 @@ class LLMPorId:
     def __init__(self):
         self.prompts: list[str] = []
 
-    def __call__(self, prompt: str) -> str:
+    def __call__(self, prompt: str) -> PerfilExtraido:
         self.prompts.append(prompt)
         for caso in CASOS:
             muestra = (caso["entrada"].get("respuestas") or [caso["entrada"].get("cv_texto", "")])[-1][-30:]
             if muestra in prompt:
-                return json.dumps(caso["respuesta_llm"], ensure_ascii=False)
-        return "{}"
+                return PerfilExtraido.model_validate(caso["respuesta_llm"])
+        return PerfilExtraido()
 
 
 def test_nodo_perfil_devuelve_listas_completas(taxonomia):
@@ -531,9 +554,102 @@ def test_nodo_sin_taxonomia_registra_error(monkeypatch):
     assert "taxonomía no disponible" in salida["errores"][0]
 
 
-def test_modelo_se_lee_de_variable_de_entorno():
-    assert agente.MODELO_POR_DEFECTO
-    assert "PUENTE_MODELO_LLM" in Path(agente.__file__).read_text(encoding="utf-8")
+# ---------------------------------------------------------------- capa común de LLM (#45)
+
+
+def _puente_llm_falso(monkeypatch, salida=None, error=None):
+    """Instala un `puente.llm` falso con la interfaz de #45 y anota cada llamada."""
+    llamadas: list[dict] = []
+
+    class ErrorLLM(RuntimeError):
+        def __init__(self, mensaje, *, causa="error_proveedor"):
+            super().__init__(mensaje)
+            self.causa = causa
+
+    def generar_estructurado(prompt, esquema, archivos=None, **kwargs):
+        llamadas.append({"prompt": prompt, "esquema": esquema, "archivos": archivos, **kwargs})
+        if error:
+            raise ErrorLLM(error, causa="grabacion_faltante")
+        return esquema.model_validate(salida)
+
+    modulo = types.ModuleType("puente.llm")
+    modulo.generar_estructurado = generar_estructurado
+    modulo.ErrorLLM = ErrorLLM
+    monkeypatch.setitem(sys.modules, "puente.llm", modulo)
+    return llamadas
+
+
+def test_llm_por_defecto_usa_puente_llm_con_perfil_extraido(monkeypatch, taxonomia):
+    caso = _caso("yaritza_fonda_sin_cv")
+    llamadas = _puente_llm_falso(monkeypatch, salida=caso["respuesta_llm"])
+    perfil, _ = construir_perfil(caso["entrada"], taxonomia=taxonomia, normalizar=normalizar_falso)
+
+    assert len(llamadas) == 1
+    llamada = llamadas[0]
+    assert llamada["esquema"] is PerfilExtraido and llamada["agente"] == "perfil"
+    assert not llamada["archivos"], "nunca se mandan archivos: el CV en foto se lee con OCR local"
+    assert "6123-4567" not in llamada["prompt"] and "[TELEFONO]" in llamada["prompt"]
+    assert {"atencion_cliente", "manejo_caja", "inventario"} <= {h.skill_id for h in perfil.habilidades}
+
+
+def test_cv_en_foto_no_manda_la_imagen_al_llm(monkeypatch, tmp_path, taxonomia):
+    llamadas = _puente_llm_falso(monkeypatch, salida={"habilidades": []})
+    ruta = tmp_path / "cv.png"
+    ruta.write_bytes(b"foto con cedula")
+    construir_perfil(
+        {"id": "f", "edad": 21, "cv_ruta": ruta}, taxonomia=taxonomia, normalizar=normalizar_falso,
+        ocr=lambda _: "Cédula 4-111-2222. Vivo en Pedregal.",
+    )
+    assert not llamadas[0]["archivos"] and "4-111-2222" not in llamadas[0]["prompt"]
+
+
+def test_error_del_llm_queda_en_errores_del_nodo(monkeypatch, taxonomia):
+    _puente_llm_falso(monkeypatch, error="Falta la grabación abc para el agente perfil")
+    caso = _caso("yaritza_fonda_sin_cv")
+    salida = nodo_perfil({"entradas_perfil": [caso["entrada"]]}, taxonomia=taxonomia, normalizar=normalizar_falso)
+    assert salida["perfiles"] == []
+    assert salida["errores"] == ["perfil: Falta la grabación abc para el agente perfil"]
+
+
+def test_sin_puente_llm_el_nodo_registra_error(monkeypatch, taxonomia):
+    monkeypatch.setitem(sys.modules, "puente.llm", None)  # import falla como si #45 no estuviera en main
+    caso = _caso("yaritza_fonda_sin_cv")
+    salida = nodo_perfil({"entradas_perfil": [caso["entrada"]]}, taxonomia=taxonomia, normalizar=normalizar_falso)
+    assert "falta puente/llm.py" in salida["errores"][0]
+
+
+def test_modo_terminal_desde_archivo_de_casos_con_puente_llm(monkeypatch):
+    """Lo que corre `LLM_MODO=grabar|reproducir ... --desde tests/fixtures/perfiles_eval.json --id yaritza`."""
+    caso = _caso("yaritza_fonda_sin_cv")
+    llamadas = _puente_llm_falso(monkeypatch, salida=caso["respuesta_llm"])
+    salida: list[str] = []
+    codigo = main(
+        ["--desde", str(FIXTURES / "perfiles_eval.json"), "--id", "yaritza",
+         "--taxonomia", str(FIXTURES / "taxonomia_mini.csv")],
+        preguntar=lambda _: pytest.fail("no debe preguntar"),
+        mostrar=salida.append,
+    )
+    texto = "\n".join(salida)
+    assert codigo == 0, texto
+    assert len(llamadas) == 1 and llamadas[0]["agente"] == "perfil"
+    assert "inventario: «anoto lo que se va acabando para comprar el surtido»" in texto
+
+
+def test_modo_terminal_reporta_error_del_llm(monkeypatch):
+    _puente_llm_falso(monkeypatch, error="Falta la grabación abc")
+    salida: list[str] = []
+    codigo = main(
+        ["--desde", str(FIXTURES / "perfiles_eval.json"), "--id", "yaritza",
+         "--taxonomia", str(FIXTURES / "taxonomia_mini.csv")],
+        mostrar=salida.append,
+    )
+    assert codigo == 1 and salida[-1] == "Error: Falta la grabación abc"
+
+
+def test_perfil_no_llama_al_modelo_directamente():
+    fuente = Path(agente.__file__).read_text(encoding="utf-8")
+    assert "langchain_google_genai" not in fuente and "import anthropic" not in fuente
+    assert "from puente.llm import generar_estructurado" in fuente
 
 
 def test_nodo_con_taxonomia_real_de_mercado():
