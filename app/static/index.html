@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="light dark" />
   <title>Puente · Tablero del orientador</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23e2a11b'/%3E%3Cg fill='none' stroke='%231d1604' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M5 23h22M8 23V10M24 23V10M8 12c2.6 3.4 5.3 5 8 5s5.4-1.6 8-5M12 23v-6M16 23v-5.5M20 23v-6'/%3E%3C/g%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="/static/styles.css?v=2" />
+  <link rel="stylesheet" href="/static/styles.css?v=3" />
 </head>
 <body>
   <!-- Íconos en línea: la demo debe funcionar sin conexión, así que nada se carga de fuera. -->
@@ -229,7 +229,7 @@
               />
             </label>
             <div class="form-actions full-width">
-              <button type="submit" class="btn btn--primary">Extraer habilidades y recalcular</button>
+              <button type="submit" class="btn btn--primary">Registrar perfil y recalcular</button>
             </div>
           </form>
         </details>
@@ -242,8 +242,8 @@
         <div>
           <h2>Ofertas revisadas con la Ley 11 de 2005</h2>
           <p>
-            El agente Mercado bloquea las ofertas que discriminan por edad o sexo y marca con una alerta
-            «buena presencia», foto o estado civil. La frase exacta queda resaltada en el texto original.
+            Las reglas de la Ley 11 en código, las mismas que aplica el agente Mercado, bloquean las ofertas
+            que discriminan por edad o sexo y marcan con una alerta «buena presencia», foto o estado civil. La frase exacta queda resaltada en el texto original.
           </p>
         </div>
       </div>
@@ -285,7 +285,7 @@
             <small class="field__hint">Prueba con «18 a 25 años», «solo hombres» o «buena presencia».</small>
           </label>
           <div class="form-actions full-width">
-            <button type="submit" class="btn btn--primary">Analizar con el agente Mercado</button>
+            <button type="submit" class="btn btn--primary">Revisar con la Ley 11 y recalcular</button>
           </div>
         </form>
       </details>
@@ -397,6 +397,7 @@
               <option value="auditor">Auditor</option>
               <option value="formacion">Formación</option>
               <option value="orientador_humano">Orientador</option>
+              <option value="tablero">Tablero</option>
               <option value="consentimiento">Consentimiento</option>
               <option value="postulacion">Postulación</option>
             </select>
@@ -421,6 +422,6 @@
 
   <div id="toast-msg" class="toast hidden" role="status" aria-live="polite"></div>
 
-  <script src="/static/app.js?v=2"></script>
+  <script src="/static/app.js?v=3"></script>
 </body>
 </html>
