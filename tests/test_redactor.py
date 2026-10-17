@@ -1,7 +1,7 @@
 """Redactor de puente semántico (#157): la legalidad y la cifra salen del código; el LLM solo redacta.
 
-Ninguna prueba llama al modelo: el redactor se inyecta. La única que pasa por `puente.llm` lo hace en
-`reproducir` con la grabación de OF-BLOQ-EDAD-04 (la demo sin conexión).
+Ninguna prueba llama al modelo: el redactor se inyecta (plantilla o un falso). Las que dejan el de por
+defecto (`redactor_claude`) prueban que, sin grabación ni clave, la propuesta cae a la plantilla.
 """
 
 from __future__ import annotations
@@ -14,9 +14,9 @@ import pytest
 from puente.agents import redactor as r
 from puente.llm import ErrorLLM
 from puente.rules.discriminacion import esta_bloqueada, revisar_texto
+from puente.rules.traslados import indexar_traslados
 from puente.schemas import Oferta, Perfil
 from puente.solver.asignacion import ConfigSolver, evaluar_factibilidad_par
-from puente.rules.traslados import indexar_traslados
 
 RAIZ = Path(__file__).resolve().parents[1]
 OFERTA_DEMO = json.loads((RAIZ / "tests" / "fixtures" / "oferta_bloq_edad_04.json").read_text(encoding="utf-8"))
@@ -230,6 +230,49 @@ def test_el_texto_del_llm_que_no_pasa_se_cambia_por_la_plantilla(pool, texto, mo
         OFERTA_DEMO["requisitos_texto"], r.cambios_para(OFERTA_DEMO["requisitos_texto"], destino="Bella Vista", minutos=60)
     )
     assert not propuesta.bloqueada_despues and propuesta.viables_despues == 1
+
+
+def test_sin_grabacion_el_redactor_por_defecto_cae_a_la_plantilla(pool, monkeypatch, tmp_path):
+    """La demo sin clave: `redactor_claude` en reproducir sin grabación sube ErrorLLM y queda la plantilla."""
+    monkeypatch.setenv("LLM_MODO", "reproducir")
+    monkeypatch.setenv("LLM_DIR_GRABACIONES", str(tmp_path))
+    propuesta = r.proponer_version(OFERTA_DEMO, pool)
+    assert propuesta.redactado_por == "plantilla" and "grabacion_faltante" in propuesta.nota_redaccion
+    assert not propuesta.bloqueada_despues and propuesta.resumen_viables() == "viables: 0 → 1"
+
+
+def test_el_texto_del_llm_sin_el_tope_de_traslado_se_descarta():
+    """El LLM quitó «que viva cerca de…» pero no escribió el tope de minutos: el texto no diría con qué
+    restricción cuenta el solver, así que queda la plantilla."""
+    oferta = _oferta("Atención en recepción; que viva cerca de Vía España.")
+    propuesta = r.proponer_version(oferta, [], redactar=_falso("Atención en recepción."), traslados=TRASLADOS, minutos=30)
+    assert propuesta.redactado_por == "plantilla" and "faltan reemplazos" in propuesta.nota_redaccion
+    assert "poder llegar a Bella Vista en 30 minutos o menos" in propuesta.texto_nuevo
+
+
+def test_los_minutos_no_pasan_del_maximo_del_solver():
+    oferta = _oferta("Atención en recepción; que viva cerca de Vía España.")
+    propuesta = r.proponer_version(oferta, [], redactar=r.redactor_plantilla, traslados=TRASLADOS, minutos=90)
+    assert propuesta.max_minutos_traslado == 60
+    assert "en 60 minutos o menos" in propuesta.texto_nuevo and "90" not in propuesta.texto_nuevo
+
+
+def test_bloqueada_sin_frase_que_bloquee_no_se_desbloquea():
+    """Mercado la bloqueó por algo que no está en el puesto ni en los requisitos (la transcripción de una
+    imagen, por ejemplo): el código no sabe qué cambiar y no inventa viables."""
+    oferta = _oferta("Manejo de caja y atención al cliente.", bloqueada=True)
+    propuesta = r.proponer_version(oferta, [_perfil("a", "Calidonia", 22)], redactar=r.redactor_plantilla, traslados=TRASLADOS)
+    assert propuesta.bloqueada_antes and propuesta.bloqueada_despues
+    assert (propuesta.viables_antes, propuesta.viables_despues) == (0, 0)
+    assert propuesta.decision.salida_resumen.startswith("sin propuesta")
+    envio, _ = r.enviar_propuesta(propuesta, orientador="Ana Ficticia", aprobada=True)
+    assert envio is None
+
+
+def test_la_plantilla_conserva_el_punto_de_la_clausula_quitada():
+    texto = "Se solicita personal masculino únicamente, soltero. Control de inventario y despacho de pedidos."
+    nuevo = r.redactar_plantilla(texto, r.cambios_para(texto, destino="", minutos=60))
+    assert nuevo == "Abierta a todas las personas, sin distinción de sexo. Control de inventario y despacho de pedidos."
 
 
 def test_si_el_llm_falla_queda_la_plantilla(pool):

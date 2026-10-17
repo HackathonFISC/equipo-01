@@ -18,6 +18,9 @@ Reparto de trabajo (AGENTS.md, sección 2: el LLM nunca decide si una oferta es 
 Demo sin red (pool de `PUENTE_DB` o, si está vacío, `data/perfiles`):
 
     LLM_MODO=reproducir uv run python -m puente.agents.redactor --oferta OF-BLOQ-EDAD-04
+
+Sin clave ni grabación, `--llm claude` (el de por defecto) cae a la plantilla y lo dice en la nota de la
+propuesta; `--llm plantilla` ni siquiera intenta el LLM. La cifra y la legalidad son las mismas en los dos.
 """
 
 from __future__ import annotations
@@ -243,6 +246,9 @@ def _reescribir_linea(linea: str, cambios: Sequence[Cambio], usados: set[str]) -
             continue
         reemplazos = [cambios[i].reemplazo for i in indices if cambios[i].reemplazo and cambios[i].reemplazo not in usados]
         usados.update(reemplazos)
+        if not reemplazos and salida and separador.strip().startswith("."):
+            # La cláusula quitada cerraba la oración («…, soltero. Control de…»): el punto pasa a la anterior.
+            salida[-1] = (salida[-1][0], separador)
         if reemplazos:
             texto = ", ".join(reemplazos)
             if salida and salida[-1][1].strip().endswith("."):
@@ -348,6 +354,11 @@ def problemas_de_redaccion(texto_nuevo: str, original: str, cambios: Sequence[Ca
         problemas.append(f"conserva frases que había que cambiar: {quedan}")
     if detectar_residencia(texto_nuevo):
         problemas.append("conserva una exigencia de residencia")
+    # El reemplazo lo decidió el código y va con esas mismas palabras: sin él, el texto no diría, por ejemplo,
+    # el tope de minutos con el que el solver cuenta los viables después.
+    faltan = [c.reemplazo for c in cambios if c.reemplazo and not c.en_linea and _plano(c.reemplazo) not in plano]
+    if faltan:
+        problemas.append(f"faltan reemplazos decididos por el código: {faltan}")
     permitidas = set(_CIFRA.findall(original)) | {n for c in cambios for n in _CIFRA.findall(c.reemplazo)}
     nuevas = sorted(set(_CIFRA.findall(texto_nuevo)) - permitidas)
     if nuevas:
@@ -496,10 +507,11 @@ def proponer_version(
     """Propone una versión legal de `oferta` y cuenta con el solver cuántos perfiles del pool son viables
     antes y después. `redactar` solo escribe el texto; si falla o su texto no pasa las verificaciones de
     código, queda la plantilla. `minutos` es el tope de traslado que reemplaza a «vivir cerca de»; por
-    defecto, el máximo del solver (parámetro del orientador, 60 min)."""
+    defecto, el máximo del solver (parámetro del orientador, 60 min), y nunca más que ese máximo: el texto
+    no puede prometer un traslado que el solver no acepta."""
     oferta = oferta if isinstance(oferta, Oferta) else Oferta.model_validate(oferta)
     config = config if isinstance(config, ConfigSolver) else ConfigSolver(**(config or {}))
-    minutos = int(minutos or config.max_minutos_traslado)
+    minutos = min(int(minutos or config.max_minutos_traslado), config.max_minutos_traslado)
     indice = indexar_traslados(traslados)
 
     cambios = cambios_para(_texto_oferta(oferta), destino=oferta.corregimiento, minutos=minutos)
@@ -534,7 +546,10 @@ def proponer_version(
         texto_nuevo = (texto_nuevo.rstrip(" .") + ". " if texto_nuevo.strip() else "") + _mayuscula_inicial("; ".join(extra)) + "."
 
     hallazgos_despues = revisar_texto("\n".join(t for t in (puesto_nuevo, texto_nuevo) if t))
-    bloqueada_despues = esta_bloqueada(hallazgos_despues)
+    # Bloqueada sin una frase que bloquee en el puesto ni en los requisitos (Mercado la bloqueó por la
+    # transcripción de una imagen, por ejemplo): el código no sabe qué cambiar y no la desbloquea.
+    bloqueo_fuera_del_texto = oferta.bloqueada and not any(c.bloquea for c in cambios)
+    bloqueada_despues = esta_bloqueada(hallazgos_despues) or bloqueo_fuera_del_texto
     corregida = oferta.model_copy(
         update={
             "puesto": puesto_nuevo,
@@ -562,7 +577,12 @@ def proponer_version(
     cumplen = [pid for pid in despues if medibles and cumple(por_id[pid])]
     nuevos = [pid for pid in despues if pid not in antes]
 
-    decision = _decision(oferta, corregida, cambios, redactado_por, nota, antes, despues, len(perfiles), bloqueada_despues)
+    bloqueada_antes = oferta.bloqueada or bloqueada_por_reglas
+    if bloqueo_fuera_del_texto:
+        nota = (nota + " · " if nota else "") + "llegó bloqueada sin frase que bloquee en el texto: la revisa el orientador"
+    decision = _decision(
+        oferta, corregida, cambios, redactado_por, nota, antes, despues, len(perfiles), bloqueada_antes, bloqueada_despues
+    )
     return Propuesta(
         oferta_id=oferta.id,
         puesto_original=oferta.puesto,
@@ -572,7 +592,7 @@ def proponer_version(
         cambios=[asdict(c) for c in cambios],
         redactado_por=redactado_por,
         nota_redaccion=nota,
-        bloqueada_antes=oferta.bloqueada or bloqueada_por_reglas,
+        bloqueada_antes=bloqueada_antes,
         bloqueada_despues=bloqueada_despues,
         alertas_despues=[h.como_texto() for h in hallazgos_despues],
         max_minutos_traslado=config_despues.max_minutos_traslado,
@@ -599,13 +619,14 @@ def _decision(
     antes: list[str],
     despues: list[str],
     pool: int,
+    bloqueada_antes: bool,
     bloqueada_despues: bool,
 ) -> Decision:
-    estado = "bloqueada" if oferta.bloqueada else ("con alertas" if cambios else "sin hallazgos")
-    if not cambios:
-        salida = "sin cambios que proponer"
-    elif bloqueada_despues:
+    estado = "bloqueada" if bloqueada_antes else ("con alertas" if cambios else "sin hallazgos")
+    if bloqueada_despues:
         salida = "sin propuesta: la versión nueva sigue bloqueada; el orientador la revisa a mano"
+    elif not cambios:
+        salida = "sin cambios que proponer"
     else:
         salida = f"propuesta legal pendiente del orientador · viables {len(antes)} → {len(despues)}"
     razones = [
