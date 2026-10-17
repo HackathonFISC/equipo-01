@@ -122,6 +122,18 @@ Los siete agentes mínimos que sugiere el documento del reto y dónde están en 
 
 **Tendencias del mercado (#198).** `puente/metricas.py` calcula en código las habilidades más pedidas, el salario por zona y los bloqueos de la Ley 11 sobre las ofertas de la base: `uv run python -m puente.cargar` y después `uv run python -m puente.metricas --tendencias`. Con las 20 ofertas de `data/`, atención al cliente es la más pedida (6).
 
+**Más allá de los siete agentes (stretch).** Verificado en `main` el 17 de octubre, sin red:
+
+- **Cobertura por turnos (#165).** Cuando ningún joven puede cubrir un turno completo porque le cruza con sus clases, `puente/solver/turnos.py` usa CP-SAT para proponer una dupla de mañana y tarde. En el tablero se prueba con «Probar escenario cobertura por turnos» (`POST /api/orientador/cobertura-turnos/demo`). Aprobar exige el consentimiento de los dos jóvenes. Pruebas en `tests/test_turnos.py`.
+- **Vista por rol y panel de operación (#168).** La cabecera del tablero tiene un selector de rol: «Orientador (Admin)», `/joven` y `/empresa`. El desplegable «Umbrales del solver editables y panel de operación (Admin)» hace dos cosas:
+  - recalcula con otros topes (`POST /api/orientador/umbrales`), por ejemplo 90 min de traslado, y deja una `Decision` firmada;
+  - muestra el uso del LLM por agente y el estado de los canales (`GET /api/admin/operacion`).
+- **Ofertas y CV por archivo (#170).** En el tablero, «Subir oferta (PDF o foto con cámara)» y «Subir CV (PDF o foto con cámara)» (`POST /api/ofertas/archivo` y `POST /api/perfiles/archivo`).
+  - Los guardrails de tamaño (5 MB) y de tipo se aplican antes de leer el archivo, y el audio se rechaza.
+  - La cédula y el teléfono se quitan antes del LLM.
+  - Sin red solo funcionan los archivos de prueba con grabación: `tests/fixtures/volante_sintetico.jpg` y `tests/fixtures/cv_sintetico.pdf`.
+- **Demo pública de solo lectura (#161).** `vercel.json` publica el tablero con `PUENTE_DEMO_PUBLICA=1` y `LLM_MODO=reproducir`. Toda acción que no sea GET responde 403 y el estado es efímero. **No es la demo en vivo** (#169), que corre en local. Para verlo en local: `PUENTE_DEMO_PUBLICA=1 uv run python -m app.server`.
+
 ## Arquitectura de agentes
 
 LangGraph orquesta los agentes. Principio de diseño: **el LLM trabaja en los bordes y el código decide en el centro**. El LLM lee ofertas, CVs y entrevistas y redacta; el código normaliza, aplica las reglas legales, calcula traslados y horarios, asigna con CP-SAT, audita el sesgo y decide qué sale. El LLM nunca ordena candidatos, nunca calcula traslados y nunca decide si una oferta es legal. Metodología completa en [`docs/metodologia.md`](docs/metodologia.md).
@@ -282,7 +294,7 @@ uv run python -m puente.graph --auto "aprobar,aprobar,empresa_rechaza:yaritza@of
 
 El CV ciego, el `.ics` y los mensajes quedan en `outbox/` (o en `PUENTE_OUTBOX`) y la base en `puente.db` (o en `PUENTE_DB`). Telegram solo sale con `--telegram`.
 
-**2. La extracción real de Mercado sobre las 20 ofertas.** Las pasa por Mercado con las respuestas grabadas de Claude y las guarda en `puente.db`, junto con 10 perfiles. La primera corrida imprime «ofertas: 20 leídas con el LLM, 0 desde cargas · en la base: 20 (7 bloqueadas)». Las siguientes reutilizan lo ya extraído.
+**2. La extracción real de Mercado sobre las 20 ofertas.** Las pasa por Mercado con las respuestas grabadas de Claude y las guarda en `puente.db`, junto con 10 perfiles. Con una base vacía, la primera corrida imprime «ofertas: 20 leídas con el LLM, 0 desde cargas · en la base: 20 (7 bloqueadas)». Si antes corriste el paso 1 en la misma `puente.db`, dice 22 ofertas y 13 perfiles, porque el grafo dejó ahí sus 2 ofertas y sus 3 perfiles. Para ver 20, usa otra base: `PUENTE_DB=cargar.db uv run python -m puente.cargar`. Las siguientes reutilizan lo ya extraído.
 
 ```bash
 uv run python -m puente.cargar
@@ -299,6 +311,8 @@ uv run python -m app.server
 - **`/empresa/lista-corta`**: la empresa ve su lista corta ciega y puede aceptar, rechazar o dar la vacante por cubierta; rechazar o cubrir dispara el reacomodo.
 
 Los códigos de acceso de `/joven` y `/empresa/lista-corta` se imprimen en la consola al arrancar y en cada reinicio.
+
+El selector de rol, los umbrales y el panel de operación, subir ofertas o CV por archivo y la cobertura por turnos están en el mismo tablero: ver «Más allá de los siete agentes».
 
 **4. Agentes por línea de comandos**, también sin red:
 
@@ -376,7 +390,7 @@ Cada afirmación de diseño tiene una prueba que cualquiera puede repetir:
 
   En el tablero, `POST /api/orientador/accion` responde **422 sin efectos** en tres casos: si falta el consentimiento, si el joven dijo «no» en `/joven` o si el Auditor marcó sesgo en el lote (#189). Lo cubre `tests/test_tablero.py`.
 - **La Ley 11 de 2005, con la frase.** Cada hallazgo de [`puente/rules/discriminacion.py`](puente/rules/discriminacion.py) guarda la regla y la frase literal de la oferta. Solo bloquean el límite de edad (art. 2) y la exigencia de sexo (art. 1), y las demás causales del art. 1 alertan citando el artículo. «Buena presencia», foto y estado civil solo alertan, sin artículo, porque la ley no menciona la apariencia. Lo cubren los 11 casos de requisitos discriminatorios de los evals.
-- **CV ciego.** `cegar()` en [`puente/tools/pdf.py`](puente/tools/pdf.py) quita de la evidencia que llega a la empresa la edad, la fecha de nacimiento, el corregimiento, el estado civil, la pareja, los hijos, el embarazo y los términos de género. El CV nunca lleva el presupuesto, el salario mínimo pedido ni las ofertas descartadas. La carta de presentación ([`puente/tools/carta.py`](puente/tools/carta.py), #212) pasa por lo mismo: se arma por plantilla, sin LLM, solo con habilidades que tienen evidencia, y cada línea pasa por `cegar()` (pruebas en `tests/test_carta.py`).
+- **CV y carta sin datos sensibles.** `cegar()` en [`puente/tools/pdf.py`](puente/tools/pdf.py) quita de la evidencia que llega a la empresa la edad, la fecha de nacimiento, el corregimiento, el estado civil, la pareja, los hijos, el embarazo y los términos de género. El CV nunca lleva el presupuesto, el salario mínimo pedido ni las ofertas descartadas. La carta de presentación ([`puente/tools/carta.py`](puente/tools/carta.py), #212) pasa por lo mismo: se arma por plantilla, sin LLM, solo con habilidades que tienen evidencia, y cada línea pasa por `cegar()` (pruebas en `tests/test_carta.py`).
   - El nombre, por decisión de @jesus12ga del 16 de octubre (#123), va o no según lo que mande la persona: Puente no lo agrega ni lo quita, y todo lo demás de esta lista sí se oculta.
   - La vista de la empresa sí lo quita: allí cada persona es «Candidato N».
   - Pruebas en `tests/test_cv_ciego.py`.
