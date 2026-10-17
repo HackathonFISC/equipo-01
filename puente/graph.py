@@ -20,7 +20,7 @@ usan respuestas grabadas, nunca la red.
 Contrato con el tablero (#11):
     grafo = construir_grafo(checkpointer=checkpointer_sqlite())
     config = config_caso(perfil_id)
-    grafo.invoke(estado, config)                      # corre hasta el interrupt
+    grafo.invoke(limpiar_entrada(estado), config)     # corre hasta el interrupt; sin PII en el checkpoint
     aprobacion_pendiente(grafo, config)              # o grafo.get_state(config)
     grafo.invoke(Command(resume={...}), config)       # ver RESPUESTA_APROBACION
 
@@ -957,6 +957,9 @@ def main(argv: list[str] | None = None, leer: Callable[[str], str] = input, escr
         help="grabado: respuestas guardadas en el caso, sin red (por defecto); gemini: GOOGLE_API_KEY en .env",
     )
     args = parser.parse_args(argv)
+    # Con la salida redirigida en Windows (cp1252) no existen ⏸, ⚠ ni →: se reemplazan en vez de cortar la demo.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")
 
     try:
         from dotenv import load_dotenv
