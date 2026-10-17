@@ -301,7 +301,9 @@ uv run python -m puente.graph
   - `claude` llama a Claude a través de `puente.llm`.
 - **`--auto`** decide sin preguntar, por ejemplo `--auto "aprobar,aprobar,empresa_rechaza:yaritza@of-cajero-vista-alegre,aprobar"`. Sin esta opción, la demo pregunta en cada vacante.
 - **`--telegram`**: en la demo por terminal es la única forma de que algo salga por Telegram. Sin esta opción, todo se escribe en `outbox/`, aunque `.env` traiga token.
-  - **El tablero no tiene esa opción y tiene dos caminos de salida.** La lista corta a la empresa (CV ciego, `.ics` y mensaje) sale por Telegram si el entorno del proceso trae `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID_EMPRESA`; si no, queda en `outbox/` de la raíz del repositorio. Los avisos del reacomodo al joven pasan por el nodo `avisos` del grafo, que el tablero no reemplaza: tiene Telegram apagado y escribe en `PUENTE_OUTBOX` o, si falta, en `outbox/` del directorio desde donde se arrancó el servidor.
+  - **El tablero no tiene esa opción y tiene dos caminos de salida:**
+    - **Postulación.** La lista corta a la empresa (CV ciego, `.ics` y mensaje) la arma `_nodo_postulacion_tablero` en `app/server.py`. Llama a `postular()` (`puente/agents/postulacion.py`) con `outbox/` de la raíz del repositorio, y `postular()` la manda con `enviar_lista_corta()` (`puente/tools/telegram.py`). Sale por Telegram si el entorno del proceso trae `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID_EMPRESA`; si no, queda en esa carpeta.
+    - **Avisos del reacomodo.** Los avisos al joven los escribe el nodo `avisos` del grafo, que el tablero no reemplaza: `crear_nodo_avisos()` de `nodos_fase_2()` (`puente/graph.py`), con el transporte `sin_telegram`. Nunca salen por Telegram y van a `PUENTE_OUTBOX` o, si falta, a `outbox/` del directorio desde donde se arrancó el servidor (`outbox_por_entorno()`).
 
 **Otras piezas:**
 
