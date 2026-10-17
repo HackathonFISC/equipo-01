@@ -815,3 +815,70 @@ def test_mayores_de_18_y_menores_de_un_tope_bloquea_por_edad(texto, frase):
 )
 def test_mayor_y_menor_de_otros_o_de_experiencia_no_bloquea(texto):
     assert revisar_texto(texto) == []
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Mayores de 18 años, menores de 18 abstenerse",
+        "Solo mayores de 18 años, menores de 18 no aplican",
+        "Mayores de 18 y menores de 18 no aplican",
+        "No se solicita prueba de embarazo",
+        "No se requiere prueba de embarazo",
+        "No pedimos prueba de embarazo",
+        "Prohibido pedir prueba de embarazo (Ley 11)",
+        "No se exige ninguna prueba de embarazo",
+    ],
+)
+def test_edad_legal_repetida_o_prueba_de_embarazo_negada_no_bloquea(texto):
+    """Revisión del PR #210: repetir la edad legal con «menores de 18» o decir que NO se pide la prueba de
+    embarazo no excluye a nadie."""
+    assert not esta_bloqueada(revisar_texto(texto)), texto
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Mayores de 18 años y menores de 35",
+        "Mayores de 18 años, menores de 30",
+        "Indispensable prueba de embarazo",
+        "Prueba de embarazo obligatoria",
+        "Se realizará prueba de embarazo",
+        "Requisitos: no estar embarazada, prueba de embarazo negativa",
+    ],
+)
+def test_tope_de_edad_y_prueba_de_embarazo_siguen_bloqueando(texto):
+    assert esta_bloqueada(revisar_texto(texto)), texto
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "No debe estar embarazada",
+        "Las aspirantes no deben estar embarazadas",
+        "No puede estar embarazada",
+        "No aplican embarazadas",
+        "No aplicar embarazadas",
+        "Edad no mayor a 35 años",
+        "Mayor de 18 años y no mayor a 35 años",
+        "Hasta los 30 años",
+    ],
+)
+def test_frases_comunes_de_embarazo_y_tope_de_edad_bloquean(texto):
+    """Formas frecuentes en anuncios que la primera corrección del PR #210 dejaba pasar."""
+    assert esta_bloqueada(revisar_texto(texto)), texto
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "No se aceptan menores a 18 años",
+        "Experiencia no mayor a 10 años",
+        "Cuidar niños menores a 10 años",
+        "Atención a pacientes embarazadas",
+        "Seguro médico que cubre a cónyuge e hijos hasta los 25 años",
+        "No aplican sin experiencia",
+    ],
+)
+def test_experiencia_edad_de_otros_y_atencion_no_bloquean(texto):
+    assert not esta_bloqueada(revisar_texto(texto)), texto

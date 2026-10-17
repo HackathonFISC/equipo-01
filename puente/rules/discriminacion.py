@@ -60,11 +60,11 @@ _RANGO = re.compile(
 _DESDE = r"(?:a\s+partir\s+de|desde)(?:\s+los)?"
 _EN_ADELANTE = r"(?:\s+en\s+adelante\b)?"
 # Singular y plural (#121): "menor de 28 años" y "mayor de 25 años" son el mismo límite que "menores de".
-_MENOR_MAYOR = r"(?:no\s+)?(?:menor|mayor)(?:es)?\s+de"
+_MENOR_MAYOR = r"(?:no\s+)?(?:menor|mayor)(?:es)?\s+(?:de|a)"
 # "máximo", "máxima", "máx." y "máx" (#121), y lo mismo para el mínimo.
 _MAX_MIN = r"(?:maxim[oa]|minim[oa]|max|min)\.?"
 _TOPE_EDAD = re.compile(
-    rf"\b(?:{_MENOR_MAYOR}|{_MAX_MIN}|hasta|no\s+mas\s+de|{_DESDE})\s+\d{{2}}\s*{_ANOS}\b{_EN_ADELANTE}"
+    rf"\b(?:{_MENOR_MAYOR}|{_MAX_MIN}|hasta(?:\s+los)?|no\s+mas\s+de|{_DESDE})\s+\d{{2}}\s*{_ANOS}\b{_EN_ADELANTE}"
     rf"|\b\d{{2}}\s*{_ANOS}\s+en\s+adelante\b"
     rf"|\b\d{{2}}\s*\+\s*{_ANOS}\b"
     rf"|\bedad\s+(?:maxima|minima|max\.?|min\.?|limite|tope|requerida)\s*:?\s*(?:de\s+)?\d{{2}}\b(?:\s*\+)?(?:\s*{_ANOS}\b)?"
@@ -142,9 +142,11 @@ _SEXO_ENTRE_PARENTESIS = re.compile(rf"\(\s*(?:solo\s+|solamente\s+|unicamente\s
 # seguro cubre embarazo y parto» no excluyen a nadie. La prueba cuenta en singular: «realizar pruebas de
 # embarazo» es una tarea de laboratorio, y venderlas en una farmacia tampoco excluye a nadie (_VENTA_ANTES).
 _EMBARAZO = re.compile(
-    r"\b(?:no|ni)\s+(?:(?:estar|este|esten|encontrarse|se\s+encuentren?)\s+)?"
+    r"\b(?:no|ni)\s+(?:(?:debe|deben|debera|deberan|puede|pueden|podra|podran)\s+)?"
+    r"(?:(?:estar|este|esten|encontrarse|se\s+encuentren?)\s+)?"
     r"(?:embarazadas?|en\s+(?:estado\s+de\s+)?(?:embarazo|gestacion|gravidez))\b"
-    r"|\b(?:no\s+(?:se\s+)?(?:aceptan?|aceptamos|admiten?|admitimos|contratan?|contratamos|reciben?|recibimos)"
+    r"|\b(?:no\s+(?:se\s+)?(?:aceptan?|aceptamos|admiten?|admitimos|contratan?|contratamos|reciben?|recibimos"
+    r"|aplican?|aplicar)"
     r"|abstenerse|excepto|salvo)\s+(?:a\s+)?(?:(?:mujeres|personas|damas|senoras)\s+)?embarazadas\b"
     r"|\bembarazadas?\s*[,:\-–]?\s*(?:abstenerse|abstente|no\s+(?:aplican?|aplicar|postularse|se\s+aceptan|se\s+admiten))\b"
     r"|\bsin\s+(?:estar\s+)?(?:embarazo|embarazada)\b"
@@ -156,6 +158,15 @@ _VENTA_ANTES = re.compile(
     r"\b(?:venta|ventas|vender|vendemos|venden|despacho|despachar|inventario|reponer|reposicion|surtir)"
     r"\s+(?:de\s+)?(?:la\s+|las\s+|los\s+|el\s+|una?\s+)?$"
 )
+# «No se solicita prueba de embarazo», «No pedimos prueba de embarazo» o «Prohibido pedir prueba de embarazo»
+# anuncian lo contrario de una exigencia: no excluyen a nadie. «Indispensable prueba de embarazo» sigue bloqueando.
+_NO_PIDE_ANTES = re.compile(
+    r"\b(?:no\s+(?:se\s+)?(?:solicita|solicitamos|solicitan|requiere|requerimos|requieren|pide|pedimos|piden"
+    r"|exige|exigimos|exigen|necesita|necesitamos|realiza|realizamos|hace|hacemos)"
+    r"|(?:prohibido|se\s+prohibe)\s+(?:pedir|solicitar|exigir|requerir))"
+    r"\s+(?:ninguna?\s+|una?\s+|la\s+)?$"
+)
+_VENTA_O_NO_PIDE_ANTES = re.compile(rf"(?:{_VENTA_ANTES.pattern})|(?:{_NO_PIDE_ANTES.pattern})")
 # Apariencia (#191): «buena apariencia» es «buena presencia» con otra palabra y solo alerta. También «imagen
 # personal» y «presentación personal», con o sin adjetivo delante. La de un lugar o una cosa («mantener la
 # buena apariencia del local») no habla del candidato, y «asesora de imagen personal» es un oficio.
@@ -180,7 +191,7 @@ _EXCLUSION_ANTES = {
     _SEXO_SUELTO: _OBJETO_ANTES,
     _FEMENINO_SUELTO: _DESTINATARIO_ANTES,
     _DAMAS_CABALLEROS: _DESTINATARIO_U_OBJETO_ANTES,
-    _EMBARAZO: _VENTA_ANTES,
+    _EMBARAZO: _VENTA_O_NO_PIDE_ANTES,
     _APARIENCIA: _OFICIO_DE_IMAGEN_ANTES,
 }
 _EXCLUSION_DESPUES = {_APARIENCIA: _COSA_DESPUES}
@@ -322,6 +333,13 @@ def _atiende_a_otros(plegado: str, inicio: int) -> bool:
     return _ATENDIDOS_ANTES.search(plegado[max(0, inicio - 60) : inicio]) is not None
 
 
+def _tope_del_rango(m: re.Match[str]) -> int:
+    """El número de «menor(es) de N» en «mayores de 18 y menores de N». «Mayores de 18 años, menores de 18
+    abstenerse» repite la edad legal con las dos palabras: un tope de 18 o menos no es un límite de edad."""
+    numero = re.search(r"menor(?:es)?\s+de\s+(\d{2})", m.group(0))
+    return int(numero.group(1)) if numero else 99
+
+
 def _es_minimo_legal(frase: str) -> bool:
     """"Mayor de 18 años", "a partir de 18 años", "18 años en adelante", "edad mínima 18", "mín. 18",
     "no menor de 18" o "Edad: 18+" es la edad legal para trabajar, no un límite discriminatorio. Un
@@ -333,14 +351,14 @@ def _es_minimo_legal(frase: str) -> bool:
 
 def _describe_a_otros(plegado: str, m: re.Match[str]) -> bool:
     """"Niños menores de 10 años" o "adultos mayores de 65 años": la edad es de otros, no del candidato."""
-    return re.match(r"(?:menor|mayor)(?:es)?\s+de\b", m.group(0)) is not None and bool(
+    return re.match(r"(?:(?:menor|mayor)(?:es)?\s+(?:de|a)|hasta)\b", m.group(0)) is not None and bool(
         _OTROS_ANTES.search(plegado[max(0, m.start() - 20) : m.start()])
     )
 
 
 def _niega_menores_de_edad(plegado: str, m: re.Match[str]) -> bool:
     """"No se aceptan menores de 18 años" o "abstenerse menores de 18": repite la edad legal."""
-    numero = re.match(r"menor(?:es)?\s+de\s+(\d{2})", m.group(0))
+    numero = re.match(r"menor(?:es)?\s+(?:de|a)\s+(\d{2})", m.group(0))
     return bool(numero) and int(numero.group(1)) <= 18 and bool(
         _NEGACION_ANTES.search(plegado[max(0, m.start() - 40) : m.start()])
     )
@@ -394,7 +412,12 @@ def revisar_texto(texto: str) -> list[Hallazgo]:
     # experiencia o la edad de otros («niños mayores de 10 y menores de 12 años»), sus partes tampoco cuentan.
     descartados: list[tuple[int, int]] = []
     for m in _MAYOR_Y_MENOR.finditer(plegado):
-        if _es_experiencia(plegado, m) or _describe_a_otros(plegado, m) or _atiende_a_otros(plegado, m.start()):
+        if (
+            _tope_del_rango(m) <= 18
+            or _es_experiencia(plegado, m)
+            or _describe_a_otros(plegado, m)
+            or _atiende_a_otros(plegado, m.start())
+        ):
             descartados.append((m.start(), m.end()))
         else:
             anotar(EDAD, m.start(), m.end())
