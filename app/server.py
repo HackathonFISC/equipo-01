@@ -1237,6 +1237,11 @@ def procesar_accion_orientador(
         consentimiento_joven=consentimiento_joven,
         consentidos=consentidos,
     )
+    # Nota y mensaje son texto libre del orientador: sin cédula, teléfono ni dirección exacta antes de
+    # guardarlos en la explicación, la postulación o `decisiones`, en cualquier acción (#213).
+    req = req.model_copy(
+        update=limpiar_entrada({"nota_edicion": req.nota_edicion, "mensaje_empresa": req.mensaje_empresa})
+    )
     ahora = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     match_activo = next(
