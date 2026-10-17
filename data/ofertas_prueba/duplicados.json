@@ -1,0 +1,57 @@
+{
+  "tipo_dato": "sintetico_de_prueba",
+  "nota": "Formatos inspirados en portales distintos; estas publicaciones no existieron. No confundir con las 20 ofertas reales de data/ofertas/.",
+  "pares_duplicados": [
+    {
+      "nombre": "cajero_misma_vacante_dos_formatos",
+      "a": {
+        "formato": "estilo_Computrabajo",
+        "texto": "Empresa de prueba A busca Cajero(a) para sucursal de Los Andes. Requisitos: secundaria completa, manejo de caja y atención al cliente. Turno de lunes a sábado de 07:00 a 15:00. Salario B/. 650 mensuales más incentivos.",
+        "puesto": "Cajero(a)",
+        "empresa": "Empresa de prueba A",
+        "corregimiento": "Los Andes"
+      },
+      "b": {
+        "formato": "estilo_Konzerta",
+        "texto": "Empresa confidencial busca cajero(a) para su sucursal de Los Andes. Requisitos: secundaria completa, manejo de caja, atención al cliente. Turno lunes a sábado 07:00 a 15:00. Salario: B/.650 mensual + incentivos. Postúlate.",
+        "puesto": "Cajero(a)",
+        "empresa": "Confidencial",
+        "corregimiento": "Los Andes"
+      }
+    },
+    {
+      "nombre": "runner_misma_vacante_dos_formatos",
+      "a": {
+        "formato": "estilo_Computrabajo",
+        "texto": "Empresa de prueba B solicita Runner de restaurante en Bella Vista. Llevar platos de cocina a mesas, atender pedidos y apoyar al equipo. Horario de miércoles a domingo de 16:00 a 23:00. Pago B/. 300 quincenal más propinas.",
+        "puesto": "Runner de restaurante",
+        "empresa": "Empresa de prueba B",
+        "corregimiento": "Bella Vista"
+      },
+      "b": {
+        "formato": "estilo_Konzerta",
+        "texto": "Empresa de prueba B solicita Runner de restaurante - Bella Vista. Llevar platos de cocina a las mesas, atender pedidos y apoyar al equipo. Horario: miércoles a domingo, 16:00 a 23:00. Pago de B/.300 quincenales + propinas. Vacante presencial.",
+        "puesto": "Runner de restaurante",
+        "empresa": "Confidencial (nombre oculto en portal de prueba)",
+        "corregimiento": "Bella Vista"
+      }
+    }
+  ],
+  "par_distinto": {
+    "nombre": "misma_cadena_dos_sucursales",
+    "a": {
+      "formato": "estilo_Computrabajo",
+      "texto": "Cadena de prueba C busca Cajero(a) para sucursal de Arraiján. Requisitos: bachiller y manejo de caja. Horario lunes a viernes 08:00 a 16:00. Salario B/. 650 mensual. Presentarse en sucursal de Arraiján.",
+      "puesto": "Cajero(a)",
+      "empresa": "Cadena de prueba C",
+      "corregimiento": "Arraiján"
+    },
+    "b": {
+      "formato": "estilo_Konzerta",
+      "texto": "Cadena de prueba C busca Cajero(a) para sucursal de Tocumen. Requisitos: bachiller y manejo de caja. Horario martes a sábado 10:00 a 18:00. Salario B/. 620 mensual. Presentarse en sucursal de Tocumen.",
+      "puesto": "Cajero(a)",
+      "empresa": "Cadena de prueba C",
+      "corregimiento": "Tocumen"
+    }
+  }
+}
