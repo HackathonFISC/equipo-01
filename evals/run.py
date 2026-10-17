@@ -58,6 +58,8 @@ AUDITOR_AUDITAR = ("puente.agents.auditor", "auditar_lista_corta", 8)
 HORARIO_LEER = ("puente.agents.horario", "leer_tirilla", 164)  # (archivo, *, hoy) -> RevisionTirilla (usa puente.llm)
 HORARIO_VALIDAR = ("puente.agents.horario", "validar_bloques", 164)  # (bloques) -> ValidacionBloques
 HORARIO_CONVERTIR = ("puente.agents.horario", "a_horario_clases", 164)  # (bloques válidos) -> list[Horario]
+REDACTOR_PROPONER = ("puente.agents.redactor", "proponer_version", 157)  # (oferta, perfiles, *, redactar, traslados, minutos) -> Propuesta
+REDACTOR_PLANTILLA = ("puente.agents.redactor", "redactor_plantilla", 157)  # (texto, cambios) -> TextoRedactado, sin LLM
 RAIZ_REPO = Path(__file__).resolve().parent.parent
 
 # Reglas de discriminación -> artículo de la Ley 11 de 2005 (solo las que bloquean) o alerta (las que no).
@@ -429,6 +431,37 @@ def _diferencias_horario(esperado: dict, observado: dict) -> list[str]:
     return malos
 
 
+def _diferencias_redactor(esperado: dict, observado: dict) -> list[str]:
+    """#157: bloqueo antes y después, hallazgos de revisar_texto sobre lo propuesto, cambios por (regla, frase) y
+    viables por id iguales a lo esperado. Del texto solo se exige lo que debe contener: lo redacta la plantilla o
+    el LLM, la legalidad la mide revisar_texto."""
+    malos = []
+    for campo in ("bloqueada_antes", "bloqueada_despues"):
+        if campo in esperado and bool(esperado[campo]) != bool(observado.get(campo)):
+            malos.append(campo)
+    if "hallazgos_despues" in esperado and sorted(map(_norm, _planos(esperado["hallazgos_despues"]))) != sorted(
+        map(_norm, _planos(observado.get("hallazgos_despues")))
+    ):
+        malos.append("hallazgos_despues")
+    if "cambios" in esperado:
+        clave = lambda c: (str(_a_dict(c).get("regla")), _norm(_a_dict(c).get("frase")))  # noqa: E731
+        if sorted(map(clave, _planos(esperado["cambios"]))) != sorted(map(clave, _planos(observado.get("cambios")))):
+            malos.append("cambios")
+    for campo in ("viables_antes", "viables_despues", "cumplen_filtro_original"):
+        if campo in esperado and sorted(map(str, _planos(esperado[campo]))) != sorted(map(str, _planos(observado.get(campo)))):
+            malos.append(campo)
+    for campo in ("redactado_por", "max_minutos_traslado"):
+        if campo in esperado and str(esperado[campo]) != str(observado.get(campo)):
+            malos.append(campo)
+    if "nota_contiene" in esperado and _norm(esperado["nota_contiene"]) not in _norm(observado.get("nota_redaccion") or ""):
+        malos.append("nota_redaccion")
+    texto = _norm(observado.get("texto_nuevo") or "")
+    malos += [f"texto sin «{f}»" for f in _planos(esperado.get("texto_contiene")) if _norm(f) not in texto]
+    if esperado.get("decision_pendiente") and not observado.get("decision_pendiente"):
+        malos.append("decision_pendiente")
+    return malos
+
+
 _DIFERENCIAS: dict[str, Callable[[dict, dict], list[str]]] = {
     "extraccion_ofertas": _diferencias_extraccion,
     "requisitos_discriminatorios": _diferencias_discriminacion,
@@ -438,6 +471,7 @@ _DIFERENCIAS: dict[str, Callable[[dict, dict], list[str]]] = {
     "guardrails": _diferencias_guardrails,
     "horario_tirilla": _diferencias_horario,
     "horario_validacion": _diferencias_horario,
+    "redactor_puente": _diferencias_redactor,
 }
 
 
@@ -756,6 +790,44 @@ def _ejecutar_horario_validacion(caso: dict) -> dict:
     }
 
 
+def _ejecutar_redactor(caso: dict) -> dict:
+    """#157: proponer_version(oferta, perfiles, redactar=, traslados=, minutos=) -> Propuesta. Sin LLM real ni red:
+    redacta la plantilla del código o, si el caso trae `llm_falso`, un redactor falso que devuelve ese texto (el
+    código lo verifica igual que al LLM). Los hallazgos de después se miden aparte con revisar_texto sobre el puesto
+    y el texto propuestos; los viables son los ids que contó el solver."""
+    proponer = _resolver(REDACTOR_PROPONER)
+    revisar = _resolver(DISCRIMINACION_REVISAR)
+    entrada = caso["entrada"]
+    if "llm_falso" in entrada:
+        texto_llm = str(entrada["llm_falso"])
+        redactar: Callable[..., Any] = lambda _texto, _cambios: texto_llm  # noqa: E731
+    else:
+        redactar = _resolver(REDACTOR_PLANTILLA)
+    oferta = entrada.get("oferta") or json.loads((RAIZ_REPO / entrada["oferta_ruta"]).read_text(encoding="utf-8"))
+    argumentos: dict[str, Any] = {"redactar": redactar, "traslados": entrada.get("traslados")}
+    if entrada.get("minutos") is not None:
+        argumentos["minutos"] = int(entrada["minutos"])
+    propuesta = _a_dict(proponer(oferta, list(entrada.get("perfiles") or []), **argumentos))
+    propuesto = "\n".join(str(t) for t in (propuesta.get("puesto_nuevo"), propuesta.get("texto_nuevo")) if t)
+    hallazgos = [_a_dict(h) for h in _lista(revisar(propuesto))]
+    decision = _a_dict(propuesta.get("decision") or {})
+    return {
+        "viables": f"{propuesta.get('viables_antes')} → {propuesta.get('viables_despues')}",
+        "bloqueada_antes": propuesta.get("bloqueada_antes"),
+        "bloqueada_despues": propuesta.get("bloqueada_despues"),
+        "hallazgos_despues": [f"{h.get('regla')} «{h.get('frase')}»" for h in hallazgos],
+        "cambios": [{"regla": c.get("regla"), "frase": c.get("frase")} for c in map(_a_dict, _lista(propuesta.get("cambios")))],
+        "viables_antes": _lista(propuesta.get("viables_antes_ids")),
+        "viables_despues": _lista(propuesta.get("viables_despues_ids")),
+        "cumplen_filtro_original": _lista(propuesta.get("cumplen_filtro_original")),
+        "redactado_por": propuesta.get("redactado_por"),
+        "nota_redaccion": propuesta.get("nota_redaccion"),
+        "max_minutos_traslado": propuesta.get("max_minutos_traslado"),
+        "texto_nuevo": propuesta.get("texto_nuevo"),
+        "decision_pendiente": "pendiente del orientador" in str(decision.get("salida_resumen") or ""),
+    }
+
+
 def ejecutores_por_defecto(
     taxonomia: dict | None = None,
     *,
@@ -775,6 +847,7 @@ def ejecutores_por_defecto(
         "guardrails": _ejecutar_guardrails,
         "horario_tirilla": _ejecutar_horario_tirilla,
         "horario_validacion": _ejecutar_horario_validacion,
+        "redactor_puente": _ejecutar_redactor,
     }
 
 
