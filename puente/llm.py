@@ -14,6 +14,8 @@ por proceso y el cliente queda en caché: tras editar `.env`, reinicie el tabler
 - `ANTHROPIC_WORKSPACE_ID` (opcional): workspace al que se carga el gasto, para claves que no son de un workspace.
 - `LLM_PROVEEDOR_RESPALDO` y `LLM_MODELO_RESPALDO` (opcionales): un solo reintento si el modelo rechaza (refusal).
 - `PUENTE_LLM_FALLBACKS` (`false` por defecto): respaldo del servidor de Anthropic (beta). Sin verificar con clave.
+- `PUENTE_LLM_TOPE_USD`: límite estimado por proceso para llamadas reales; se comprueba antes y después de cada
+  respuesta. El costo exacto de una llamada solo se conoce cuando el proveedor devuelve su uso.
 
 La salida estructurada usa `messages.create` con `output_config.format` y valida el JSON aquí, después de revisar
 `stop_reason`: así un corte por `max_tokens` o un rechazo con texto no llegan como un error de esquema. El esquema que
@@ -35,6 +37,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import math
 import mimetypes
 import os
 import re
@@ -165,6 +168,32 @@ def _costo(modelo: str, entrada: int, salida: int) -> float:
     return entrada * precio_entrada / 1e6 + salida * precio_salida / 1e6
 
 
+def _tope_usd() -> float | None:
+    valor = (os.getenv("PUENTE_LLM_TOPE_USD") or "").strip()
+    if not valor:
+        return None
+    try:
+        tope = float(valor)
+    except ValueError as exc:
+        raise ErrorLLM("PUENTE_LLM_TOPE_USD debe ser un número positivo.", causa="configuracion") from exc
+    if not math.isfinite(tope) or tope <= 0:
+        raise ErrorLLM("PUENTE_LLM_TOPE_USD debe ser un número positivo.", causa="configuracion")
+    return tope
+
+
+def _verificar_tope(agente: str, modelo: str) -> None:
+    tope = _tope_usd()
+    if tope is None:
+        return
+    with _candado:
+        gastado = sum(fila["costo_usd"] for fila in _uso.values())
+    if gastado >= tope:
+        raise ErrorLLM(
+            f"Se alcanzó el tope estimado de US${tope:.2f} de esta sesión; no se llama al modelo.",
+            causa="tope_gasto", modelo=modelo, agente=agente,
+        )
+
+
 def _registrar(agente: str, modelo: str, entrada: int, salida: int, *, reproducida: bool = False) -> None:
     """Suma una llamada al contador del agente. Reproducir cuenta la llamada con tokens y costo 0."""
     with _candado:
@@ -178,6 +207,12 @@ def _registrar(agente: str, modelo: str, entrada: int, salida: int, *, reproduci
         fila["tokens_entrada"] += entrada
         fila["tokens_salida"] += salida
         fila["costo_usd"] += _costo(modelo, entrada, salida)
+        tope = _tope_usd()
+        if tope is not None and sum(f["costo_usd"] for f in _uso.values()) > tope:
+            raise ErrorLLM(
+                f"La última llamada superó el tope estimado de US${tope:.2f} de esta sesión.",
+                causa="tope_gasto", modelo=modelo, agente=agente,
+            )
 
 
 def uso_por_agente() -> dict[str, dict[str, Any]]:
@@ -769,6 +804,7 @@ def _despachar(
 
     def intentar(prov: str, mod: str, cli: Any | None) -> tuple[Any, int, int]:
         try:
+            _verificar_tope(agente, mod)
             cli = cli if cli is not None else _cliente_por_defecto(prov, mod, agente)
             if prov == "anthropic":
                 return _llamar_anthropic(
