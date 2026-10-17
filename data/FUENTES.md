@@ -94,6 +94,7 @@ Sin un corregimiento con traslado medido, el Matching no puede comprobar el tope
 - `perfiles/*.json`: diez personajes ficticios de 18 a 29 años, incluida Yaritza del [issue #3](https://github.com/HackathonFISC/equipo-01/issues/3). Horarios, expectativas salariales, presupuestos, experiencias y evidencias son inventados para la demo. Cada horario usa bloques `dias`, `hora_inicio`, `hora_fin` compatibles con `puente/schemas.py`. No hay datos de personas reales.
 - `ofertas_prueba/duplicados.json`: dos pares de una misma vacante escritos en formatos de portal distintos y un caso negativo de la misma cadena en dos sucursales. Son **publicaciones simuladas**, no duplicados reales hallados entre Computrabajo y Konzerta. Empresa, sucursal, salario y horarios del fixture son datos de prueba. El caso negativo tiene una similitud de texto de 0.876, sobre el umbral de 0.85. Desde #89, Mercado no une dos publicaciones de la misma cadena si están en corregimientos distintos, así que ese caso ya no se fusiona ([#75](https://github.com/HackathonFISC/equipo-01/issues/75)).
 - Los nombres «Empresa A» a «Empresa T» en `ofertas/` son alias de prueba añadidos por el equipo. No fueron publicados por los portales.
+- En diez fichas de Computrabajo, el campo consultado solo decía «años de experiencia», sin un número visible. Se conservó así en las fichas; el equipo no infiere una cantidad mínima.
 
 ## 5. Taxonomía y decisiones del equipo
 
