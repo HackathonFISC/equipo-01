@@ -7,6 +7,7 @@ usa su propio estado del tablero, su SQLite y su outbox en `tmp_path`. El númer
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -370,3 +371,133 @@ def test_inyeccion_por_whatsapp_solo_se_marca(entorno) -> None:
 
 def test_leer_si_no() -> None:
     assert [bot.leer_si_no(t) for t in ("SÍ", "si", "Sí.", "NO", "no!", "tal vez")] == [True, True, True, False, False, None]
+
+
+# ---------------------------------------------------------------- Meta: número de prueba de la WhatsApp Cloud API
+
+SECRETO_META = "secreto-de-app-de-prueba"
+VERIFY_META = "verify-de-prueba"
+WA_ID = NUMERO.lstrip("+")  # Meta manda el número sin "+"
+
+
+@pytest.fixture
+def meta(entorno, monkeypatch: pytest.MonkeyPatch):
+    """El entorno del tablero más las claves de Meta y una Graph API falsa que anota cada envío."""
+    monkeypatch.setenv("META_APP_SECRET", SECRETO_META)
+    monkeypatch.setenv("META_WEBHOOK_VERIFY_TOKEN", VERIFY_META)
+    monkeypatch.setenv("META_WHATSAPP_TOKEN", "token-meta-de-prueba")
+    monkeypatch.setenv("META_WHATSAPP_PHONE_NUMBER_ID", "123456789")
+    monkeypatch.setattr(bot, "_IDS_META_VISTOS", {})
+    enviados: list[tuple[str, str]] = []
+
+    def graph_falsa(token, phone_number_id, destino, texto):
+        assert (token, phone_number_id) == ("token-meta-de-prueba", "123456789")
+        enviados.append((destino, texto))
+        return {"messaging_product": "whatsapp", "messages": [{"id": f"wamid.salida{len(enviados)}"}]}
+
+    monkeypatch.setattr(wa, "enviar_por_meta", graph_falsa)
+    return (*entorno, enviados)
+
+
+def _payload_meta(texto: str, id_mensaje: str, *, tipo: str = "text") -> dict:
+    mensaje = {"from": WA_ID, "id": id_mensaje, "timestamp": "1760000000", "type": tipo}
+    if tipo == "text":
+        mensaje["text"] = {"body": texto}
+    return {
+        "object": "whatsapp_business_account",
+        "entry": [{"id": "WABA", "changes": [{"field": "messages", "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {"display_phone_number": "15550000000", "phone_number_id": "123456789"},
+            "contacts": [{"profile": {"name": "Prueba"}, "wa_id": WA_ID}],
+            "messages": [mensaje],
+        }}]}],
+    }
+
+
+def _post_meta(cliente: TestClient, datos: dict, *, firma: str | None = None):
+    cuerpo = json.dumps(datos).encode()
+    firma = firma if firma is not None else wa.firma_meta(cuerpo, SECRETO_META)
+    return cliente.post(
+        "/api/whatsapp/meta", content=cuerpo, headers={"Content-Type": "application/json", "X-Hub-Signature-256": firma}
+    )
+
+
+def test_meta_verifica_el_webhook_solo_con_el_token(meta) -> None:
+    cliente, *_ = meta
+    ok = cliente.get("/api/whatsapp/meta", params={"hub.mode": "subscribe", "hub.verify_token": VERIFY_META, "hub.challenge": "reto-42"})
+    assert (ok.status_code, ok.text) == (200, "reto-42")
+    malo = cliente.get("/api/whatsapp/meta", params={"hub.mode": "subscribe", "hub.verify_token": "otro", "hub.challenge": "reto-42"})
+    assert malo.status_code == 403 and "reto-42" not in malo.text
+
+
+def test_meta_firma_invalida_403_y_sin_secreto_503(meta, monkeypatch: pytest.MonkeyPatch) -> None:
+    cliente, _, _, tmp_path, enviados = meta
+    assert _post_meta(cliente, _payload_meta("hola", "wamid.1"), firma="sha256=falsa").status_code == 403
+    assert _conversaciones(tmp_path / "wa.db") == [] and enviados == []
+    monkeypatch.delenv("META_APP_SECRET")
+    assert _post_meta(cliente, _payload_meta("hola", "wamid.2")).status_code == 503
+
+
+def test_meta_hola_recibe_la_primera_pregunta_por_la_graph_api(meta) -> None:
+    cliente, _, _, tmp_path, enviados = meta
+    r = _post_meta(cliente, _payload_meta("hola", "wamid.1"))
+    assert r.status_code == 200 and r.text == ""
+    assert [d for d, _ in enviados] == [WA_ID, WA_ID]
+    assert "Soy Puente" in enviados[0][1] and enviados[1][1] == bot.PREGUNTAS_FORMULARIO[0][1]
+    # La misma conversación que por Twilio: el hash no depende del «+».
+    assert _conversaciones(tmp_path / "wa.db") == [(wa.hash_numero(DESDE), "nombre", None)]
+
+
+def test_meta_ignora_avisos_de_estado_y_mensajes_repetidos(meta) -> None:
+    cliente, _, _, tmp_path, enviados = meta
+    estados = {"object": "whatsapp_business_account", "entry": [{"changes": [{"value": {"statuses": [{"status": "read"}]}}]}]}
+    assert _post_meta(cliente, estados).status_code == 200 and enviados == []
+    _post_meta(cliente, _payload_meta("hola", "wamid.1"))
+    _post_meta(cliente, _payload_meta("Yari", "wamid.2"))
+    _post_meta(cliente, _payload_meta("Yari", "wamid.2"))  # Meta reintenta: no avanza dos veces
+    assert _conversaciones(tmp_path / "wa.db")[0][1] == "edad"
+    assert len(enviados) == 3
+    # Un audio o una foto no rompe el guion: el bot pide texto.
+    _post_meta(cliente, _payload_meta("", "wamid.3", tipo="audio"))
+    assert "solo leo mensajes de texto" in enviados[-1][1]
+
+
+def test_meta_entrevista_completa_arma_el_perfil_y_avisa_por_meta(meta) -> None:
+    cliente, estado, llm, tmp_path, enviados = meta
+    perfiles_antes = len(estado["perfiles"])
+    for i, texto in enumerate(["hola", *FORMULARIO, *RESPUESTAS]):
+        assert _post_meta(cliente, _payload_meta(texto, f"wamid.{i}")).status_code == 200
+    assert len(llm.prompts) == 1 and len(estado["perfiles"]) == perfiles_antes + 1
+    assert estado["perfiles"][-1]["modalidad_ingreso"].startswith("WhatsApp")
+    assert any("Tu perfil está listo, Yari" in texto for _, texto in enviados)
+    # Con la Graph API respondiendo, nada cae al outbox; y el número no queda en la base.
+    assert not [a for a in _archivos_outbox(tmp_path) if a.name.startswith("whatsapp_")]
+    assert b"60000160" not in (tmp_path / "wa.db").read_bytes()
+
+
+def test_meta_sin_token_de_envio_responde_al_outbox(meta, monkeypatch: pytest.MonkeyPatch) -> None:
+    cliente, _, _, tmp_path, enviados = meta
+    monkeypatch.delenv("META_WHATSAPP_TOKEN")
+    assert _post_meta(cliente, _payload_meta("hola", "wamid.1")).status_code == 200
+    assert enviados == []
+    avisos = [a for a in _archivos_outbox(tmp_path) if a.name.startswith("whatsapp_")]
+    assert avisos and "Soy Puente" in avisos[0].read_text(encoding="utf-8")
+
+
+def test_meta_pasa_el_modo_demo_publica_solo_con_firma(meta, monkeypatch: pytest.MonkeyPatch) -> None:
+    cliente, *_ = meta
+    monkeypatch.setenv("PUENTE_DEMO_PUBLICA", "1")
+    assert _post_meta(cliente, _payload_meta("hola", "wamid.1")).status_code == 200
+    assert _post_meta(cliente, _payload_meta("hola", "wamid.2"), firma="sha256=falsa").status_code == 403
+
+
+def test_firma_meta_y_mensajes_meta() -> None:
+    cuerpo = b'{"a": 1}'
+    firma = wa.firma_meta(cuerpo, SECRETO_META)
+    assert firma.startswith("sha256=") and wa.firma_meta_valida(cuerpo, firma, SECRETO_META)
+    assert not wa.firma_meta_valida(cuerpo + b" ", firma, SECRETO_META)
+    assert not wa.firma_meta_valida(cuerpo, firma, None)
+    [m] = wa.mensajes_meta(_payload_meta("hola", "wamid.9"))
+    assert (m.numero, m.texto, m.id) == (WA_ID, "hola", "wamid.9")
+    assert wa.mensajes_meta({"entry": [{"changes": [{"value": {"statuses": []}}]}]}) == []
+    assert wa.mensajes_meta("basura") == []

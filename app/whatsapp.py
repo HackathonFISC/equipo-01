@@ -28,6 +28,8 @@ Sin import circular, como app/empresa.py: las funciones reciben `estado` y el en
 """
 from __future__ import annotations
 
+import hmac
+import json
 import logging
 import os
 import re
@@ -40,7 +42,7 @@ from pydantic import TypeAdapter, ValidationError
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import PlainTextResponse, Response
 
 from puente.agents.perfil import MAX_PREGUNTAS, PREGUNTAS_ENTREVISTA, detectar_corregimiento, leer_horario
 from puente.guardrails import detectar_inyeccion, limpiar_entrada, validar_texto
@@ -434,7 +436,7 @@ def armar_perfil(estado: dict[str, Any], numero_hash: str, llm: Any = None) -> l
     return mensajes
 
 
-async def _armar_y_avisar(numero: str, numero_hash: str) -> None:
+async def _armar_y_avisar(numero: str, numero_hash: str, proveedor: str = "twilio") -> None:
     """Tarea de fondo del webhook: el LLM corre fuera del bucle; el estado se toca en el bucle, como /joven."""
     srv = _servidor()
     estado = srv.ESTADO_GLOBAL
@@ -460,7 +462,19 @@ async def _armar_y_avisar(numero: str, numero_hash: str) -> None:
             # El detalle (proveedor, modelo, grabación) queda en la consola, no en el mensaje.
             _registro.exception("WhatsApp: el agente Perfil falló")
             mensajes = _no_se_pudo(estado, conv, "No pude leer tu entrevista ahora.")
-    wa.enviar(numero, "\n\n".join(mensajes), outbox=srv._ruta_outbox())
+    _enviar(proveedor, numero, ["\n\n".join(mensajes)])
+
+
+def _enviar(proveedor: str, numero: str, mensajes: list[str]) -> None:
+    """Lo que el bot manda por su cuenta: por Meta (Cloud API) o por Twilio, según de dónde llegó el joven."""
+    outbox = _servidor()._ruta_outbox()
+    for texto in (m for m in mensajes if m):
+        if proveedor == "meta":
+            resultado = wa.enviar_meta(numero, texto, outbox=outbox)
+        else:
+            resultado = wa.enviar(numero, texto, outbox=outbox)
+        if resultado.canal != "whatsapp":
+            _registro.warning("WhatsApp (%s): %s", proveedor, resultado.detalle)
 
 
 # ---------------------------------------------------------------- webhook
@@ -525,3 +539,90 @@ def _siguiente_paso_reintento(conv: wa.Conversacion) -> str:
     if respuestas:
         respuestas.pop()
     return f"p{len(respuestas)}"
+
+
+# ---------------------------------------------------------------- webhook de Meta (WhatsApp Cloud API)
+
+# Meta reintenta un webhook que no recibió 200 a tiempo: el id de cada mensaje ya procesado se recuerda
+# (solo en memoria, sin el número) para no avanzar dos veces el guion con el mismo mensaje.
+_IDS_META_VISTOS: dict[str, None] = {}
+_MAX_IDS_META = 500
+
+
+def _ya_visto(id_mensaje: str) -> bool:
+    if not id_mensaje:
+        return False
+    if id_mensaje in _IDS_META_VISTOS:
+        return True
+    _IDS_META_VISTOS[id_mensaje] = None
+    while len(_IDS_META_VISTOS) > _MAX_IDS_META:
+        _IDS_META_VISTOS.pop(next(iter(_IDS_META_VISTOS)))
+    return False
+
+
+def _variable(nombre: str) -> str | None:
+    """Lee la variable; si falta, vuelve a leer .env (las claves se pueden pegar con el servidor corriendo)."""
+    valor = os.getenv(nombre)
+    if not valor:
+        _servidor().cargar_dotenv()
+        valor = os.getenv(nombre)
+    return valor or None
+
+
+async def _responder_meta(envios: list[tuple[str, list[str]]], armar: list[tuple[str, str]]) -> None:
+    """Tarea de fondo: Meta no acepta la respuesta en el cuerpo del webhook, todo sale por la Graph API."""
+    for numero, mensajes in envios:
+        await run_in_threadpool(_enviar, "meta", numero, mensajes)
+    for numero, numero_hash in armar:
+        await _armar_y_avisar(numero, numero_hash, proveedor="meta")
+
+
+async def endpoint_meta(request: Request) -> Response:
+    """GET y POST /api/whatsapp/meta: verificación del webhook y mensajes del número de prueba de Meta.
+
+    GET: Meta manda hub.mode=subscribe, hub.verify_token y hub.challenge; se devuelve el challenge solo si
+    el token es META_WEBHOOK_VERIFY_TOKEN. POST: firma X-Hub-Signature-256 con META_APP_SECRET obligatoria;
+    se responde 200 de inmediato y los mensajes del bot salen en una tarea de fondo.
+    """
+    srv = _servidor()
+    if request.method == "GET":
+        esperado = _variable("META_WEBHOOK_VERIFY_TOKEN")
+        consulta = request.query_params
+        recibido = consulta.get("hub.verify_token") or ""
+        if consulta.get("hub.mode") == "subscribe" and esperado and hmac.compare_digest(recibido, esperado):
+            return PlainTextResponse(consulta.get("hub.challenge") or "")
+        _registro.warning("WhatsApp (Meta): verificación del webhook rechazada; revisa META_WEBHOOK_VERIFY_TOKEN")
+        return PlainTextResponse("", status_code=403)
+
+    secreto = _variable("META_APP_SECRET")
+    if not secreto:
+        return PlainTextResponse("", status_code=503)
+    cuerpo = await request.body()
+    if srv._cuerpo_demasiado_grande(request, cuerpo):
+        return PlainTextResponse("", status_code=413)
+    if not wa.firma_meta_valida(cuerpo, request.headers.get("x-hub-signature-256"), secreto):
+        _registro.warning("WhatsApp (Meta): firma inválida; revisa META_APP_SECRET")
+        return PlainTextResponse("", status_code=403)
+    try:
+        datos = json.loads(cuerpo or b"{}")
+    except ValueError:
+        return PlainTextResponse("", status_code=400)
+
+    envios: list[tuple[str, list[str]]] = []
+    armar: list[tuple[str, str]] = []
+    for mensaje in wa.mensajes_meta(datos):
+        if _ya_visto(mensaje.id):
+            continue
+        numero_hash = wa.hash_numero(mensaje.numero)
+        respuesta = procesar_mensaje(srv.ESTADO_GLOBAL, numero_hash, mensaje.texto)
+        if respuesta.armar_perfil and not srv._dentro_del_limite(request):
+            respuesta.mensajes = ["Recibimos muchas entrevistas seguidas. En un minuto vuelve a enviarme tu última respuesta."]
+            conv = _leer(srv.ESTADO_GLOBAL, numero_hash)
+            if conv is not None:
+                conv.paso = _siguiente_paso_reintento(conv)
+                _guardar(srv.ESTADO_GLOBAL, conv)
+        elif respuesta.armar_perfil:
+            armar.append((mensaje.numero, numero_hash))
+        envios.append((mensaje.numero, respuesta.mensajes))
+    tarea = BackgroundTask(_responder_meta, envios, armar) if envios or armar else None
+    return PlainTextResponse("", background=tarea)

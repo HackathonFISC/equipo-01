@@ -355,9 +355,20 @@ Es el **sandbox de Twilio**: un número compartido, gratis, solo para pruebas, q
 5. En la consola de Twilio, *Sandbox settings → When a message comes in*: `https://….trycloudflare.com/api/whatsapp`, método `POST`.
 6. Desde el teléfono: «hola». El bot responde con el saludo y la primera pregunta.
 
+**Sin pagar Twilio: el número de prueba de Meta.** Si Twilio pide subir de plan para el sandbox, el mismo bot corre sobre la WhatsApp Cloud API con el número de prueba gratis de Meta, que admite hasta 5 destinatarios verificados. La ruta es `/api/whatsapp/meta`:
+
+1. En developers.facebook.com: *My Apps → Create app*, caso de uso «Connect with customers through WhatsApp», y se agrega el producto WhatsApp.
+2. En *WhatsApp → API Setup* se copian el token temporal (dura 24 h) y el *Phone number ID*. En *To* se agrega el teléfono de prueba y se verifica con el código que Meta manda por WhatsApp.
+3. En *App settings → Basic* se copia el *App secret*.
+4. En `.env` van `META_WHATSAPP_TOKEN`, `META_WHATSAPP_PHONE_NUMBER_ID`, `META_APP_SECRET` y un `META_WEBHOOK_VERIFY_TOKEN` inventado. No hace falta reiniciar el servidor: lee `.env` de nuevo si le falta una clave.
+5. En *WhatsApp → Configuration → Webhook*: *Callback URL* `https://….trycloudflare.com/api/whatsapp/meta` y el mismo *Verify token*, luego *Verify and save*. En *Webhook fields* hay que suscribir `messages`.
+6. Desde el teléfono, «hola» al número de prueba que aparece en *API Setup → From*.
+
+Meta no acepta la respuesta en el cuerpo del webhook, como sí hace el TwiML de Twilio: el servidor contesta 200 de inmediato y los mensajes del bot salen por la Graph API en una tarea de fondo. La firma `X-Hub-Signature-256` es un HMAC-SHA256 del cuerpo con el *App secret*. Sin `META_APP_SECRET` la ruta responde 503 y con una firma inválida, 403. Los mensajes que Meta reintenta se reconocen por su id y no avanzan el guion dos veces.
+
 **Seguridad y datos.** `POST /api/whatsapp` exige la firma `X-Twilio-Signature`: un HMAC-SHA1 de la URL pública más los parámetros ordenados. Sin `TWILIO_AUTH_TOKEN` responde 503 y con una firma inválida, 403. Si sale 403 con el teléfono, la consola del servidor dice qué URL se usó para verificar la firma, que casi siempre es la causa: `PUBLIC_BASE_URL` viejo tras abrir un túnel nuevo. El número no se guarda: la conversación vive en la tabla `whatsapp_conversaciones` de `puente.db` bajo el SHA-256 del número. Ninguna `Decision` lo lleva, y el respaldo en `outbox/` se llama `whatsapp_<prefijo del hash>_*.txt`. El SHA-256 de un teléfono es un seudónimo, no anonimato: con tiempo se puede revertir probando números. Cada mensaje pierde cédula, teléfono y dirección antes de guardarse y pasa por guardrails: la inyección solo se marca. Las respuestas se borran de la conversación al armar el perfil y quedan solo en `entradas_perfil`, como las de `/joven`.
 
-**Modo demo pública.** Con `PUENTE_DEMO_PUBLICA=1` el tablero es de solo lectura (#161). La única excepción es `POST /api/whatsapp`, y solo con firma de Twilio válida: así la laptop puede exponerse por el túnel sin que nadie escriba en el tablero. En ese modo el LLM queda en `reproducir`, de modo que una entrevista nueva por WhatsApp no arma el perfil: el bot pide disculpas y lo dice. Para la demo en vivo, el servidor corre sin `PUENTE_DEMO_PUBLICA`, y la URL del túnel se pone solo en la consola de Twilio y se cierra al terminar, porque esa URL expone el tablero completo.
+**Modo demo pública.** Con `PUENTE_DEMO_PUBLICA=1` el tablero es de solo lectura (#161). Las únicas excepciones son `POST /api/whatsapp` y `POST /api/whatsapp/meta`, y solo con una firma válida de Twilio o de Meta: así la laptop puede exponerse por el túnel sin que nadie escriba en el tablero. En ese modo el LLM queda en `reproducir`, de modo que una entrevista nueva por WhatsApp no arma el perfil: el bot pide disculpas y lo dice. Para la demo en vivo, el servidor corre sin `PUENTE_DEMO_PUBLICA`, y la URL del túnel se pone solo en la consola de Twilio y se cierra al terminar, porque esa URL expone el tablero completo.
 
 ## Credenciales de demo
 
@@ -385,6 +396,7 @@ Solo existe [`.env.example`](.env.example), sin claves reales: se copia a `.env`
 | `PUENTE_SAL_ANONIMO` | Clave del código anónimo del scorecard (#158); vacía, una al azar por proceso |
 | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM` | Chatbot de WhatsApp por el sandbox de Twilio (#160). Sin token, el webhook no atiende; sin cuenta o sin red, los mensajes del bot van a `outbox/` |
 | `PUBLIC_BASE_URL` | URL pública del túnel, sin barra final; con ella se verifica la firma de Twilio. Vacía, se reconstruye con `X-Forwarded-Proto` y `Host` |
+| `META_WHATSAPP_TOKEN`, `META_WHATSAPP_PHONE_NUMBER_ID`, `META_APP_SECRET`, `META_WEBHOOK_VERIFY_TOKEN`, `META_GRAPH_VERSION` | El mismo bot por el número de prueba gratis de Meta (WhatsApp Cloud API), en `/api/whatsapp/meta` |
 
 ## Lo que se puede verificar
 

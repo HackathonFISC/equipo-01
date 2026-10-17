@@ -112,9 +112,9 @@ if es_modo_demo_publica():
     os.environ["LLM_MODO"] = "reproducir"
 
 
-# Única mutación que pasa el modo demo pública: el webhook de WhatsApp (#160). La ruta misma rechaza con
-# 403 todo lo que no traiga una firma de Twilio válida, así que nadie más escribe a través de ella.
-RUTAS_POST_DEMO_PUBLICA = frozenset({"/api/whatsapp"})
+# Únicas mutaciones que pasan el modo demo pública: los webhooks de WhatsApp (#160), de Twilio y de Meta.
+# Cada ruta rechaza con 403 lo que no traiga una firma válida, así que nadie más escribe a través de ellas.
+RUTAS_POST_DEMO_PUBLICA = frozenset({"/api/whatsapp", "/api/whatsapp/meta"})
 
 
 class MiddlewareDemoPublicaReadOnly(BaseHTTPMiddleware):
@@ -2585,7 +2585,7 @@ def obtener_panel_operacion(estado: dict[str, Any]) -> dict[str, Any]:
             "total": n_grab_data + n_grab_evals,
         },
         "telegram_estado": "activo" if os.getenv("TELEGRAM_BOT_TOKEN") else "outbox_local",
-        "whatsapp_estado": "activo" if os.getenv("TWILIO_AUTH_TOKEN") else "sandbox_inactivo",
+        "whatsapp_estado": "activo" if os.getenv("TWILIO_AUTH_TOKEN") or os.getenv("META_APP_SECRET") else "sandbox_inactivo",
         "umbrales_solver": cfg_solver,
         "roles_sistema": [
             {"rol": "admin", "nombre": "Admin (Orientador)", "ruta": "/", "agente": "orientador"},
@@ -4031,6 +4031,7 @@ app = Starlette(
         Route("/api/joven/{perfil_id}/postulaciones", joven_fase2.endpoint_postulaciones, methods=["GET"]),
         # Chatbot de WhatsApp del joven por Twilio Sandbox (#160); firma de Twilio obligatoria
         Route("/api/whatsapp", whatsapp.endpoint_webhook, methods=["POST"]),
+        Route("/api/whatsapp/meta", whatsapp.endpoint_meta, methods=["GET", "POST"]),
         # Lista corta ciega de la empresa (#167)
         Route("/empresa/lista-corta", empresa.endpoint_pagina, methods=["GET"]),
         Route("/api/empresa/{empresa_id}/lista-corta", empresa.endpoint_lista, methods=["GET"]),
