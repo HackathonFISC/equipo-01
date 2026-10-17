@@ -13,8 +13,9 @@ Modelo de lenguaje en el borde, código en el centro:
   tampoco alcanza, la respuesta es «sin respuesta legible». Nunca se inventa.
 - `calificar` corrige y pone el puntaje en código: tolerancia con `Decimal`, opción exacta, pasos en su lugar.
   No recibe nombre, género, edad ni corregimiento; `auditar_contrafactual` lo prueba con las variantes del Auditor.
-- El scorecard es ciego: código opaco por pareja (joven, oferta), evidencia literal con los filtros del CV ciego y
-  el resultado del reto. Sale a la empresa solo con el consentimiento otorgado de esa pareja (Ley 81 de 2019).
+- El scorecard es ciego: código opaco por pareja (joven, oferta) con HMAC y la clave `PUENTE_SAL_ANONIMO`, evidencia
+  literal con los filtros del CV ciego y el resultado del reto. Sale a la empresa solo con el consentimiento otorgado
+  de esa pareja (Ley 81 de 2019).
 
 El LLM entra por inyección (`llm(prompt)`): los tests pasan un falso y no necesitan red ni claves.
 
@@ -27,8 +28,11 @@ import argparse
 import csv
 import functools
 import hashlib
+import hmac
 import json
+import os
 import re
+import secrets
 import unicodedata
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -504,12 +508,25 @@ CLAVES_PERSONALES = frozenset(
     {"nombre", "edad", "genero", "corregimiento", "cedula", "telefono", "direccion", "perfil_id", "id"}
 )
 _LETRAS_CODIGO = "ABCDEFGHJKLMNPQRSTUVWXYZ"  # solo letras: una racha de cifras del hash parecería un teléfono
+# Sin PUENTE_SAL_ANONIMO, una clave al azar por proceso: los códigos cambian en cada reinicio de la demo.
+_SAL_DEL_PROCESO = secrets.token_bytes(32)
+
+
+def _clave_anonimo() -> bytes:
+    sal = (os.environ.get("PUENTE_SAL_ANONIMO") or "").strip()
+    return sal.encode() if sal else _SAL_DEL_PROCESO
 
 
 def codigo_anonimo(perfil_id: str, oferta_id: str | None = None) -> str:
-    """Código opaco y estable por pareja (joven, oferta): dos empresas no pueden cruzar sus scorecards."""
-    resumen = hashlib.sha256(f"{perfil_id}@{oferta_id or ''}".encode()).digest()
-    return "C-" + "".join(_LETRAS_CODIGO[b % len(_LETRAS_CODIGO)] for b in resumen[:8])
+    """Código opaco por pareja (joven, oferta): HMAC-SHA256 con una clave secreta, no un hash simple. Los ids de
+    perfil son adivinables («yaritza»): sin la clave, la empresa no puede recalcular el código ni cruzar scorecards."""
+    firma = hmac.new(_clave_anonimo(), f"{perfil_id}@{oferta_id or ''}".encode(), hashlib.sha256).digest()
+    return "C-" + "".join(_LETRAS_CODIGO[b % len(_LETRAS_CODIGO)] for b in firma[:8])
+
+
+def es_codigo_de(codigo: str, perfil_id: str, oferta_id: str | None = None) -> bool:
+    """Para Puente, que tiene la clave: ¿este código (p. ej. el que cita la empresa) es de esa pareja?"""
+    return hmac.compare_digest(str(codigo).encode(), codigo_anonimo(perfil_id, oferta_id).encode())
 
 
 def _como_perfil(perfil: Perfil | dict[str, Any]) -> Perfil:

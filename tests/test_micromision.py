@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from decimal import Decimal
 from pathlib import Path
 
@@ -260,9 +262,28 @@ def test_datos_personales_en_detecta_lo_que_se_cuela():
 
 
 def test_codigo_anonimo_estable_por_pareja_y_solo_letras():
-    codigo = codigo_anonimo("yaritza", "of-cajero-vista-alegre")
+    codigo = codigo_anonimo("yaritza", "of-cajero-vista-alegre")  # sin clave en el entorno: la del proceso
     assert codigo == codigo_anonimo("yaritza", "of-cajero-vista-alegre") != codigo_anonimo("yaritza", "otra-oferta")
-    assert codigo[2:].isalpha() and "yaritza" not in codigo.lower()
+    assert re.fullmatch(r"C-[A-Z]{8}", codigo) and "yaritza" not in codigo.lower()
+
+
+def _codigo_con_sha256_simple(perfil_id, oferta_id):
+    """Lo que una empresa podría recalcular sin la clave, adivinando el id del perfil."""
+    resumen = hashlib.sha256(f"{perfil_id}@{oferta_id}".encode()).digest()
+    return "C-" + "".join(micromision._LETRAS_CODIGO[b % len(micromision._LETRAS_CODIGO)] for b in resumen[:8])
+
+
+def test_codigo_anonimo_es_hmac_con_la_clave_y_no_se_recalcula_sin_ella(monkeypatch):
+    monkeypatch.setenv("PUENTE_SAL_ANONIMO", "clave-de-prueba-1")
+    con_clave = codigo_anonimo("yaritza", "of-1")
+    assert con_clave == codigo_anonimo("yaritza", "of-1")  # misma clave, mismo código
+    assert con_clave not in {_codigo_con_sha256_simple("yaritza", "of-1"), hashlib.sha256(b"yaritza@of-1").hexdigest()}
+    assert micromision.es_codigo_de(con_clave, "yaritza", "of-1") and not micromision.es_codigo_de(con_clave, "carlos", "of-1")
+    monkeypatch.setenv("PUENTE_SAL_ANONIMO", "clave-de-prueba-2")
+    assert codigo_anonimo("yaritza", "of-1") != con_clave  # otra clave, otro código
+    assert not micromision.es_codigo_de(con_clave, "yaritza", "of-1")
+    monkeypatch.setenv("PUENTE_SAL_ANONIMO", "  ")  # vacía, como en .env.example: la clave al azar del proceso
+    assert codigo_anonimo("yaritza", "of-1") not in {con_clave, _codigo_con_sha256_simple("yaritza", "of-1")}
 
 
 @pytest.mark.parametrize(
