@@ -1,0 +1,18 @@
+{
+  "_nota": "Copia sintética de OF-BLOQ-EDAD-04, la oferta discriminatoria del tablero de la demo (app/server.py, #11), con el horario en la forma del contrato. Empresa ficticia. La usan la CLI y los tests del redactor (#157).",
+  "id": "OF-BLOQ-EDAD-04",
+  "puesto": "Recepcionista y Atención Telefónica",
+  "empresa": "Servicios Balboa (Empresa de Prueba)",
+  "corregimiento": "Bella Vista",
+  "salario_mensual": 680.0,
+  "horario": {"dias": ["lunes", "martes", "miercoles", "jueves", "viernes"], "hora_inicio": "08:00", "hora_fin": "17:00"},
+  "habilidades": ["atencion_cliente"],
+  "requisitos_texto": "Requisitos: edad entre 18 a 25 años, excelente buena presencia y enviar foto en el CV.",
+  "alertas": [
+    "bloqueo · edad · límite de edad, Ley 11 de 2005 art. 2 · «edad entre 18 a 25 años»",
+    "alerta · buena_presencia · solo alerta: la ley no menciona la apariencia · «buena presencia»",
+    "alerta · foto · solo alerta: la ley no menciona la apariencia · «enviar foto»"
+  ],
+  "bloqueada": true,
+  "fuente": "datos de ejemplo (sintéticos)"
+}
