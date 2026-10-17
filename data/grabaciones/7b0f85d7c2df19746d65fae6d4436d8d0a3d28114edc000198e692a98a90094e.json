@@ -1,0 +1,48 @@
+{
+  "hash": "7b0f85d7c2df19746d65fae6d4436d8d0a3d28114edc000198e692a98a90094e",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "perfil",
+  "esquema": "PerfilExtraido",
+  "salida": {
+    "habilidades": [
+      {
+        "skill_id": "atencion_cliente",
+        "evidencia": "atiendo a los clientes"
+      },
+      {
+        "skill_id": "tomar_pedidos",
+        "evidencia": "les tomo el pedido"
+      },
+      {
+        "skill_id": "manejo_caja",
+        "evidencia": "cobro y doy el vuelto"
+      },
+      {
+        "skill_id": "cocina",
+        "evidencia": "preparo el arroz y las lentejas del almuerzo"
+      },
+      {
+        "skill_id": "preparar_vegetales",
+        "evidencia": "pico la verdura"
+      },
+      {
+        "skill_id": "pago_facturas",
+        "evidencia": "a pagar la luz por Yappy"
+      }
+    ],
+    "edad": null,
+    "corregimiento": null,
+    "ubicacion_texto": null,
+    "salario_minimo": null,
+    "horario_libre": [],
+    "horario_clases": [],
+    "transcripcion_literal": null
+  },
+  "uso": {
+    "entrada": 4698,
+    "salida": 283
+  },
+  "creado": "2026-10-17T08:04:49+00:00"
+}

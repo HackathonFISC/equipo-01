@@ -1,0 +1,17 @@
+{
+  "hash": "d6be09b09fff5841076d0b5d4869f247467fc155162a8a393ee6a3bbdd5d6eb2",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "micromision",
+  "esquema": "RespuestaExtraida",
+  "salida": {
+    "respuesta": "5.45",
+    "cita": "Primero sumo el almuerzo con la soda, eso se lo resto a los 10 del billete y le doy 5.45 de vuelto."
+  },
+  "uso": {
+    "entrada": 843,
+    "salida": 66
+  },
+  "creado": "2026-10-17T08:04:55+00:00"
+}
