@@ -154,20 +154,8 @@ No hagas: tocar archivos fuera del alcance del issue sin comentarlo · cambiar `
 
 ## 10. Línea de tiempo y congelamiento
 
-Propuesta; el tablero manda.
-
-| Horas | Issues | Nota |
-|---|---|---|
-| 0 a 1 | #1 | Esqueleto; los demás leen issues y preparan datos de juguete |
-| 1 a 3 | #2, #3, #4 (con datos de juguete) | Contratos primero |
-| 3 a 8 | #5, #6, #9, #7, #4 → #8 | Agentes y herramientas en paralelo |
-| 8 a 12 | #10, #12, #11 | Integración y tablero; **demo MVP en la hora 12** |
-| 12 a 16 | #13, bugs | Evals, correcciones, primer ensayo |
-| 16 a 20 | #15, #14 si hay tiempo | Documentación, stretch |
-| 21 | #16 | Grabar el video aunque falten detalles |
-| 22:30 | Freeze | Solo `fix` y `docs`; los `stretch` abiertos se cierran como fuera de alcance |
-| 23:00 | #17 | Ensayo final en clon limpio, modo sin conexión listo |
-| 23:30 | #17 | Solo @jesus12ga crea y empuja `final-24h`; después nadie hace push |
+El horario único de las 24 horas y los cortes de alcance están en el [issue #41](https://github.com/HackathonFISC/equipo-01/issues/41).
+Sus decisiones están copiadas en [`docs/decisiones.md`](docs/decisiones.md).
 
 ## 11. Comandos rápidos
 
