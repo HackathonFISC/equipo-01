@@ -214,7 +214,7 @@ Cómo se lee cada arista condicional:
    - 7 pares de nombre y género, con la concordancia del texto ajustada;
    - otro corregimiento que **conserva la misma fila de traslados**. Así se mide si el resultado cambia solo por el nombre del lugar, sin tocar el traslado real, que sí es una restricción legítima.
 
-   Una línea base de 3 corridas descuenta la variación propia del LLM. **Si una variante cambia el resultado, el grafo recalcula una sola vez. Si la diferencia persiste, no hay bucle:** pasa al orientador como alerta, con el texto «Tope de 1 recálculo alcanzado».
+   El Auditor admite una línea base de 3 corridas que descuenta la variación propia del LLM de Perfil. **En el grafo esa línea base no descuenta nada:** `nodo_auditor_grafo` no le pasa un `fn_perfil`, así que el perfil se reprocesa con la identidad y las corridas dan siempre lo mismo. **Si una variante cambia el resultado, el grafo recalcula una sola vez. Si la diferencia persiste, no hay bucle:** pasa al orientador como alerta, con el texto «Tope de 1 recálculo alcanzado».
 
 7. **Formación** (#14, #53). Para las brechas de habilidades, propone cursos de `data/cursos.csv` (9 cursos con títulos del INADEH). Cada curso tiene que cumplir:
    - tener cupo;
@@ -284,7 +284,7 @@ Todo corre en una sola máquina, sin Docker ni servidor externo.
 **Requisitos.** [uv](https://docs.astral.sh/uv/) y acceso a internet para instalar dependencias. `uv` descarga Python 3.12 si hace falta.
 
 ```bash
-uv sync                       # dependencias fijadas en uv.lock
+uv sync --locked              # exactamente las dependencias fijadas en uv.lock
 cp .env.example .env          # llenar solo lo que se tenga; .env nunca se sube
 uv run pytest -q              # pruebas sin red ni claves
 ```
@@ -299,7 +299,8 @@ uv run python -m puente.graph
   - `grabado`, el valor por defecto, usa las respuestas guardadas en el caso, así que no necesita red ni clave.
   - `claude` llama a Claude a través de `puente.llm`.
 - **`--auto`** decide sin preguntar, por ejemplo `--auto "aprobar,aprobar,empresa_rechaza:yaritza@of-cajero-vista-alegre,aprobar"`. Sin esta opción, la demo pregunta en cada vacante.
-- **`--telegram`** es la única forma de que algo salga por Telegram. Sin esta opción, todo se escribe en `outbox/`.
+- **`--telegram`**: en la demo por terminal es la única forma de que algo salga por Telegram. Sin esta opción, todo se escribe en `outbox/`, aunque `.env` traiga token.
+  - **El tablero no tiene esa opción.** Si el entorno del proceso trae `TELEGRAM_BOT_TOKEN` y los chats, envía de verdad; si no, escribe en `outbox/`.
 
 **Otras piezas:**
 
@@ -310,6 +311,8 @@ uv run python -m app.server                    # tablero en http://127.0.0.1:800
 uv run python -m evals.run                     # evals (escribe evals/resultados.md)
 ```
 
+La vista de la empresa (`/empresa/lista-corta`) se abre con un código por empresa. El servidor imprime cada código en la consola al arrancar y en cada `/api/reset`, con el enlace `/empresa/lista-corta#codigo=<empresa>.<token>`. Lo mismo pasa con los códigos de `/joven`.
+
 ### Modo sin red y sin claves
 
 - **Grabaciones.** La capa común de LLM (`puente/llm.py`) tiene tres modos, que se eligen con `LLM_MODO`:
@@ -317,7 +320,7 @@ uv run python -m evals.run                     # evals (escribe evals/resultados
   - `grabar` llama y guarda la respuesta en `data/grabaciones/`;
   - `reproducir` solo lee las grabaciones, así que no usa red ni clave.
 
-  La clave de cada grabación es un hash de proveedor, modelo, prompt y esquema, de modo que un cambio de prompt o de modelo invalida la grabación.
+  La clave de cada grabación es un hash (sha256) de proveedor, modelo, sistema, prompt, esquema y bytes de los archivos adjuntos. Cambiar cualquiera de ellos invalida la grabación.
   - **Carga sin red:** `LLM_MODO=reproducir uv run python -m puente.cargar` carga las 20 ofertas grabadas (7 bloqueadas) y los 10 perfiles (`data/grabaciones/README.md`).
   - **Evals y CI:** los evals reproducen sus grabaciones desde `evals/grabaciones/`, y el CI corre con `LLM_MODO=reproducir`.
 - **Sin clave en modo vivo,** el error es claro: `ErrorLLM` con «Falta ANTHROPIC_API_KEY… use LLM_MODO=reproducir». No se cae el proceso.
@@ -327,23 +330,23 @@ uv run python -m evals.run                     # evals (escribe evals/resultados
 
 ### Estado persistente
 
-| Archivo | Por defecto | Variable | Contenido |
-|---|---|---|---|
-| Base de Puente | `puente.db` | `PUENTE_DB` | Perfiles, ofertas, postulaciones con su historial, `decisiones`, `descartes` y `cargas` |
-| Checkpoints del grafo | `checkpoints.db` | `PUENTE_CHECKPOINTS` | Cada caso por `thread_id`, para retomarlo después del `interrupt()` |
-| Salida de mensajes | `outbox/` | `PUENTE_OUTBOX` | Mensajes a la empresa y al joven cuando no hay Telegram |
+| Archivo | Terminal y carga | Tablero | Variable | Contenido |
+|---|---|---|---|---|
+| Base de Puente | `puente.db` | `%TEMP%/puente_tablero.db` | `PUENTE_DB` | Perfiles, ofertas, postulaciones con su historial, `entrevistas`, `decisiones`, `descartes`, y las tablas de la carga `cargas` y `cargas_ofertas` |
+| Checkpoints del grafo | `checkpoints.db` | `<base>_checkpoints.db`, junto a la base | `PUENTE_CHECKPOINTS` | Cada caso por `thread_id`, para retomarlo después del `interrupt()` |
+| Salida de mensajes | `outbox/` | `outbox/` en la raíz del repositorio | `PUENTE_OUTBOX` (solo terminal) | CV ciego, `.ics` y mensajes a la empresa y al joven cuando no hay Telegram |
 
-Para repetir la demo desde cero se usa otra `PUENTE_DB` o se borran esos archivos.
+Hoy el tablero escribe siempre en `outbox/` de la raíz y no lee `PUENTE_OUTBOX`; eso cambia si se fusiona el #207. Para repetir la demo desde cero se usa otra `PUENTE_DB` o se borran esos archivos.
 
 ---
 
 ## 4. Decisiones de diseño
 
-El registro completo está en [`decisiones.md`](decisiones.md). El horario y las decisiones del 16 de octubre están en el issue #41. Las decisiones que dan forma al producto son estas:
+El registro completo está en [`decisiones.md`](decisiones.md). El horario y las decisiones del 16 de octubre están en el issue #41. Qué se hizo con IA, con qué herramienta y qué se cambió a mano está en la [bitácora de IA](bitacora_ia.md). Las decisiones que dan forma al producto son estas:
 
 1. **LLM en los bordes, código en el centro.**
    - **Por qué:** un modelo de lenguaje no da la misma respuesta dos veces, ni explica de forma verificable por qué descartó a alguien. La legalidad, el traslado, el pasaje, el horario, la asignación y la auditoría tienen que dar la misma salida con la misma entrada.
-   - **Cómo se aplica:** el LLM solo produce `OfertaExtraida` y `PerfilExtraido`; todo lo demás es código. Hasta la explicación del match es una plantilla determinística (#48).
+   - **Cómo se aplica:** en el flujo principal el LLM solo produce `OfertaExtraida` y `PerfilExtraido`; todo lo demás es código. Hasta la explicación del match es una plantilla determinística (#48). Las extensiones de fase 1 tienen sus propios esquemas de salida: Horario, Redactor y Micro-misión.
 2. **El traslado filtra y desempata, pero no pone a competir a unos jóvenes contra otros.**
    - **Por qué:** vivir lejos no debe dejar a nadie detrás de otro joven igual de apto para la misma vacante.
    - **Cómo se aplica:** los minutos descartan lo que el joven no puede alcanzar y desempatan entre las opciones de ese mismo joven. No restan puntaje: el peso por minuto es 0. El Auditor comprueba que cambiar solo el corregimiento, con el mismo traslado, no cambie el resultado.
@@ -355,7 +358,20 @@ El registro completo está en [`decisiones.md`](decisiones.md). El horario y las
      - «editar» cambia el mensaje y la nota, no el cálculo; «quitar» sí recalcula.
 4. **Consentimiento del joven y CV ciego.**
    - **Por qué:** el joven decide si su CV llega a una empresa, y la empresa no debe recibir datos que permitan discriminar antes de la entrevista.
-   - **Cómo se aplica:** solo se postula a quien consintió, y el «no» del joven pesa más que la confirmación del orientador (#54). El CV quita corregimiento, edad, género, foto, estado civil y nacimiento (#148), además de cédula, teléfono y dirección. Todavía lleva el nombre del joven (ver [Límites](#5-límites)).
+   - **Cómo se aplica:**
+     - Solo se postula a quien consintió, y el «no» del joven pesa más que la confirmación del orientador (#54).
+     - El CV (`puente/tools/pdf.py`) lleva el nombre, el puesto, las habilidades con su evidencia y la disponibilidad.
+     - Cada línea que sale hacia la empresa, del CV y del mensaje, pasa por `cegar()` (#148, #163). Esa función cambia por «[dato omitido]»:
+       - el corregimiento del perfil;
+       - la edad exacta en cifras («20 años», «edad 20») y la edad en palabras de 18 a 29;
+       - el año de nacimiento y las fechas que corresponden a su edad;
+       - el estado civil («soltera», «está unida», «separada»);
+       - el embarazo;
+       - la pareja y los hijos del joven;
+       - los términos de género;
+       - en el texto del orientador, además, palabras como «chica» o «muchacha».
+     - Después pasa `limpiar_pii()`, que quita cédula, teléfono y dirección.
+     - **El nombre es decisión de Jesus:** va tal como lo da la persona en su perfil, y Puente no lo agrega ni lo quita. En la demo todos los nombres son ficticios.
 5. **Datos de prueba rotulados.**
    - **Por qué:** ninguna cifra de prueba puede presentarse como medición real.
    - **Cómo se aplica:** las personas son sintéticas y las empresas llevan nombres de prueba. Los cupos y horarios de los cursos son datos de prueba. Los traslados están medidos, con fuente y fecha. Los umbrales se declaran como supuestos del equipo (`data/FUENTES.md`). Las métricas del tablero dicen «Ilustrativo, datos de la demo» (`puente/metricas.py`).
@@ -375,7 +391,7 @@ El registro completo está en [`decisiones.md`](decisiones.md). El horario y las
    - **Cómo se aplica:** el modelo es Claude Opus 5.5 (`claude-opus-5-5`) con el crédito del equipo, detrás de `puente/llm.py` (#45, #41), con Gemini como respaldo opcional (`LLM_PROVEEDOR=gemini`). Ningún agente crea su propio cliente.
 9. **Tablero en Starlette y Uvicorn, no en Streamlit.**
    - **Por qué:** Streamlit vuelve a ejecutar todo el programa en cada clic, y eso complica controlar la pausa del orientador (`interrupt()`) y probar el tablero de punta a punta por HTTP.
-   - **Cómo se aplica:** el tablero es un servidor web (Starlette y Uvicorn) con páginas en HTML, CSS y JavaScript sin framework (#11, #33).
+   - **Cómo se aplica:** el tablero es un servidor web (Starlette y Uvicorn) con páginas en HTML, CSS y JavaScript sin framework (#11, #33). `app/streamlit_app.py` quedó vacío, con solo su docstring, pero la dependencia `streamlit` sigue en `pyproject.toml`.
 
 ---
 
