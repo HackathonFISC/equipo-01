@@ -483,3 +483,17 @@ def test_cegar_familia_sin_falsos_positivos(texto):
     from puente.tools.pdf import cegar
 
     assert cegar(texto, _perfil()) == texto
+
+
+def test_fugas_de_familia_tampoco_llegan_al_pdf(tmp_path):
+    """Las 6 fugas de la segunda revisión, de punta a punta en el PDF que recibe la empresa (#148)."""
+    perfil = _perfil()
+    perfil.habilidades[0] = HabilidadPerfil(
+        skill_id="atencion_cliente",
+        evidencia="cuido a mis hijos; tengo hijos pequeños; soy madre de familia; tengo un bebé; "
+        "vivo con mi esposo y mi hija; nací en La Chorrera en 2006; atiendo la fonda de mi mamá",
+    )
+    texto = _texto_pdf(generar_cv(perfil, _oferta(), tmp_path / "cv")).lower()
+    for dato in ("mis hijos", "hijos peque", "madre de familia", "bebé", "mi hija", "2006", "la chorrera"):
+        assert dato not in texto
+    assert "atiendo la fonda de mi mam" in texto
