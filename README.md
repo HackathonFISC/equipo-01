@@ -222,7 +222,7 @@ Cómo se lee:
 
 | Componente | Código | Qué decide el código | Qué hace el LLM |
 |---|---|---|---|
-| Guardrails (#9, #56) | `puente/guardrails.py` | Rechaza archivos que no sean PDF, JPG o PNG o pasen de 5 MB, textos de más de 10,000 caracteres, edades fuera de 18 a 29, notas de voz y lo claramente fuera de alcance. Marca la inyección de instrucciones sin bloquear. Quita cédula, teléfono y dirección exacta antes de `graph.invoke` | Nada |
+| Guardrails (#9, #56) | `puente/guardrails.py` | Rechaza archivos que no sean PDF, JPG o PNG o pasen de 5 MB, textos de más de 10,000 caracteres, edades fuera de 18 a 98, notas de voz y lo claramente fuera de alcance. Marca la inyección de instrucciones sin bloquear. Quita cédula, teléfono y dirección exacta antes de `graph.invoke` | Nada |
 | Router (#10) | `puente/graph.py` | Elige la ruta: oferta, perfil, consulta o evento de la empresa | Nada |
 | Mercado (#5, #43) | `puente/agents/mercado.py`, `puente/rules/discriminacion.py` | Bloquea por límite de edad (art. 2 de la Ley 11 de 2005) o por exigencia de sexo (art. 1) y alerta lo demás, siempre con la frase literal. Acepta el salario y el horario solo si están en el texto. Normaliza las habilidades a la taxonomía y une duplicados por similitud | Extrae los campos de la oferta en salida estructurada |
 | Perfil (#6, #44) | `puente/agents/perfil.py` | Valida el formulario fijo. Descarta toda habilidad sin frase literal del joven o fuera de la taxonomía. Quita datos personales antes del prompt | Lee el CV o las 5 respuestas y propone habilidades con su frase |

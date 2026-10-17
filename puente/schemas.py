@@ -164,7 +164,7 @@ class Perfil(BaseModel):
     id: str
     nombre: str = Field(description="Nombre ficticio; nunca datos reales")
     genero: str | None = None
-    edad: int = Field(ge=18, le=29, description="Menores fuera de la demo (#15)")
+    edad: int = Field(ge=18, le=98, description="Menores fuera de la demo (#15); sin tope de 29 desde #299")
     corregimiento: str
     horario_libre: list[Horario] = Field(default_factory=list)
     horario_clases: list[Horario] = Field(default_factory=list)

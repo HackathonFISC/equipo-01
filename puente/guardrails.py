@@ -38,7 +38,7 @@ AGENTE = "guardrails"
 
 MAX_BYTES_ARCHIVO = 5 * 1024 * 1024
 MAX_CARACTERES_TEXTO = 10_000
-EDAD_MIN, EDAD_MAX = 18, 29
+EDAD_MIN, EDAD_MAX = 18, 98  # menos de 99 (#299); antes 29
 EXTENSIONES_PERMITIDAS = {".pdf": "pdf", ".jpg": "jpg", ".jpeg": "jpg", ".png": "png"}
 # Primeros bytes de cada formato: evita que un ejecutable renombrado a .pdf pase.
 FIRMAS_ARCHIVO = {

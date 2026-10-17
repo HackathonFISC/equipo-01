@@ -64,7 +64,7 @@ def test_perfil_valido():
     assert perfil.horario_clases == []
 
 
-@pytest.mark.parametrize("edad", [150, 14, 16, 17, 30, -1])
+@pytest.mark.parametrize("edad", [150, 14, 16, 17, 99, -1])  # #299: 30 ya es válida
 def test_rechaza_edad_fuera_de_rango(edad):
     with pytest.raises(ValidationError):
         _perfil(edad=edad)

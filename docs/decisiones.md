@@ -59,6 +59,13 @@ Hora límite de entrega: **13:00 del 17 de octubre** (hora 0 = 13:00; registrado
 - **Consecuencias:** nada de esto entra en la ruta de la demo de H12 ni se fusiona después de las 11:30; toda vista nueva va en archivos y rutas nuevas; lo que no esté fusionado se declara fuera de alcance en la tabla de cobertura del README. Los entregables obligatorios (#15, #16, #129, #17) van primero.
 - **Quién:** @Cornelio-Guerra
 
+## 2026-10-17 10:55 · Edad del perfil: de 18 a 98 años (sin el tope de 29)
+
+- **Decisión:** `Perfil.edad` en `puente/schemas.py` y `EDAD_MAX` en `puente/guardrails.py` pasan de 29 a 98 (menos de 99). El mínimo sigue en 18 (#299).
+- **Contexto:** pedido de @Cornelio-Guerra en la prueba en vivo del chatbot de WhatsApp (#160). Cambia el contrato congelado, por eso va en su propio issue y con todos los usos en el mismo PR: formularios del tablero y de `/joven`, el chatbot y las pruebas.
+- **Consecuencias:** el público de Puente sigue siendo la juventud (README, Problema); solo se quita el tope técnico. Los prompts y las grabaciones no cambian, porque el 29 no aparecía en ellos.
+- **Quién:** @Cornelio-Guerra (Claude Code)
+
 ## Plantilla
 
 ## AAAA-MM-DD · Título

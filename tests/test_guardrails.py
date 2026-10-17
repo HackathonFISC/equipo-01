@@ -168,13 +168,13 @@ def test_texto_vacio_o_solo_espacios():
     assert not validar_texto("   \n\t ").ok
 
 
-@pytest.mark.parametrize("edad", [18, 20, 29, 20.0])
+@pytest.mark.parametrize("edad", [18, 20, 29, 30, 65, 98, 20.0])  # #299: sin tope de 29, menos de 99
 def test_edad_valida(edad):
     assert validar_rangos(edad=edad).ok
 
 
 @pytest.mark.parametrize(
-    "edad", [15, 16, 17, 14, 30, -1, 200, 20.5, True, "20", float("nan")]
+    "edad", [15, 16, 17, 14, 99, -1, 200, 20.5, True, "20", float("nan")]
 )
 def test_edad_invalida(edad):
     assert not validar_rangos(edad=edad).ok
@@ -192,7 +192,7 @@ def test_edad_16_se_rechaza_sin_llamar_al_llm():
     )
     assert llm.llamadas == 0
     assert salida["guardrails"]["ok"] is False
-    assert "18–29" in salida["guardrails"]["motivos"][0]
+    assert "18–98" in salida["guardrails"]["motivos"][0]
 
 
 @pytest.mark.parametrize("salario", [0, -100, float("nan"), float("inf"), "600", False])
@@ -349,7 +349,7 @@ def test_entrada_completa_valida_cada_parte():
 
 
 def test_rango_invalido_detiene_el_flujo():
-    salida = nodo_guardrails({"entrada": {"texto": "Busco trabajo", "edad": 35}})
+    salida = nodo_guardrails({"entrada": {"texto": "Busco trabajo", "edad": 99}})
     assert salida["guardrails"]["ok"] is False
     assert "edad" in salida["errores"][0]
 
