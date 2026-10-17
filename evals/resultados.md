@@ -1,6 +1,6 @@
 # Resultados de los evals de Puente
 
-Generado por `uv run python -m evals.run` el 2026-10-16 19:27 (hora de Panamá, UTC-5). No lo edites a mano: se regenera en cada corrida.
+Generado por `uv run python -m evals.run` el 2026-10-16 19:32 (hora de Panamá, UTC-5). No lo edites a mano: se regenera en cada corrida.
 
 Estados: 15 ok · 0 fallo · 0 pendiente · 9 omitido (de 24 casos).
 

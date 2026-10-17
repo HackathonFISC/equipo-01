@@ -887,11 +887,8 @@ def test_perfil_descarta_evidencia_inventada_y_quita_pii_antes_del_llm(casos):
     assert run.comparar("perfil_sin_cv", esperado, {"texto_fuente": fuente, **observado})
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="Bug de #6: quitar_pii deja pasar 'Calle 5ta' y 'Barrio Ficticio' al prompt del LLM. XPASS cuando se corrija.",
-)
 def test_perfil_04_no_filtra_la_direccion_al_llm(casos):
+    # Regresión de #63: quitar_pii dejaba pasar 'Calle 5ta' y 'Barrio Ficticio' al prompt (corregido en db930ae).
     caso = _caso(casos, "PER-04")
     llm = _llm_de_perfil(("limpieza", "Limpio casas y oficinas los sábados"))
     observado = run.ejecutores_por_defecto(casos["taxonomia"], llm=llm)["perfil_sin_cv"](caso)
