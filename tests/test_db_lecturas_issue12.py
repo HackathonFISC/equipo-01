@@ -195,3 +195,20 @@ def test_motivos_de_descarte_sin_mapa_conserva_el_motivo_por_pareja():
                   ofertas_descartadas={})
     assert db.motivos_de_descarte(cupo) == [("o1", "Sin vacante asignada por límite de cupo k=3")]
     assert db.motivos_de_descarte(_match(viable=True, motivo_descarte=None, ofertas_descartadas={})) == []
+
+
+def test_metricas_lee_perfiles_y_ofertas_guardados(conn):
+    """El tablero obtiene las métricas de #47 desde SQLite, con los matches del estado."""
+    db.guardar_perfil(conn, _perfil())
+    db.guardar_oferta(conn, _oferta("o1"))
+    db.guardar_oferta(conn, _oferta("of-tocumen"))
+    asignado = _match(
+        oferta_id="o1", viable=True,
+        ofertas_descartadas={"of-tocumen": "traslado 95 min > 60"},
+    )
+    resultado = db.metricas(conn, [asignado], {})
+    assert resultado["rotulo"] == "Ilustrativo, datos de la demo"
+    assert resultado["total_ofertas_descartadas_traslado_pasaje"] == 1
+    assert resultado["ofertas_descartadas_traslado_pasaje"][0]["oferta_id"] == "of-tocumen"
+    assert resultado["total_habilidades_informales_con_evidencia"] == 0  # la oferta no pide habilidades
+    assert db.metricas(conn, [], {})["total_ofertas_descartadas_traslado_pasaje"] == 0

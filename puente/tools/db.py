@@ -12,6 +12,7 @@ from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from puente.metricas import calcular_metricas
 from puente.schemas import SIN_OFERTA, Decision, Match, Oferta, Perfil
 
 PERFIL_LISTO = "perfil_listo"
@@ -418,3 +419,18 @@ def parejas_fijas(conn: sqlite3.Connection) -> list[tuple[str, str]]:
         sorted(ESTADOS_FIJOS),
     ).fetchall()
     return [(f[0], f[1]) for f in filas]
+
+
+# ---------------------------------------------------------------- métricas para el tablero (#47)
+
+
+def metricas(conn: sqlite3.Connection, matches: Iterable[Match | dict], traslados=None) -> dict:
+    """Métricas ilustrativas de #47 para el tablero, con los perfiles y ofertas guardados.
+
+    ``matches`` son los del estado del grafo (``estado["matches"]``); ``traslados`` es la tabla
+    de traslados que ya usa el Matching (None: sin comparaciones por ruta). Incluye las ofertas
+    bloqueadas para que el rótulo de cada descarte siga siendo verificable.
+    """
+    return calcular_metricas(
+        list(matches), listar_perfiles(conn), listar_ofertas(conn, no_bloqueadas=False), traslados
+    )

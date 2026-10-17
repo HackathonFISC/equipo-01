@@ -188,3 +188,41 @@ def test_traslado_negativo_se_trata_como_cero():
 def test_duracion_no_positiva_es_un_error():
     with pytest.raises(ValueError):
         elegir_franja(_oferta(), _perfil(), 0, duracion_min=0)
+
+
+def test_con_respaldo_devuelve_la_franja_normal_sin_aviso():
+    from puente.tools.agenda import elegir_franja_con_respaldo
+
+    perfil = _perfil(libre=[_h(SEMANA, "08:00", "12:00")])
+    assert elegir_franja_con_respaldo(_oferta(), perfil, 0, desde=LUNES_7) == (
+        datetime(2026, 10, 19, 8, 0, tzinfo=ZONA_PANAMA), "")
+
+
+def test_con_respaldo_usa_el_horario_libre_fuera_del_horario_laboral():
+    from puente.tools.agenda import elegir_franja_con_respaldo
+
+    perfil = _perfil(libre=[_h(SEMANA, "18:00", "21:00")], clases=[_h(SEMANA, "08:00", "12:00")])
+    assert elegir_franja(_oferta(), perfil, 60, desde=LUNES_7) is None
+    inicio, aviso = elegir_franja_con_respaldo(_oferta(), perfil, 60, desde=LUNES_7)
+    assert inicio == datetime(2026, 10, 19, 19, 0, tzinfo=ZONA_PANAMA)  # 18:00 de margen al inicio del bloque
+    assert "horario libre" in aviso
+
+
+def test_con_respaldo_sin_horario_libre_posible_evita_clases_y_traslado():
+    from puente.tools.agenda import elegir_franja_con_respaldo
+
+    # Libre de 1 h (no cabe nada) y clases de 08:00 a 12:00: la primera hora laboral válida es
+    # 13:00 (12:00 + 60 de traslado), nunca las 10:00 de la regla anterior.
+    perfil = _perfil(libre=[_h(SEMANA, "08:00", "09:00")], clases=[_h(SEMANA, "08:00", "12:00")])
+    inicio, aviso = elegir_franja_con_respaldo(_oferta(), perfil, 60, desde=LUNES_7)
+    assert inicio == datetime(2026, 10, 19, 13, 0, tzinfo=ZONA_PANAMA)
+    assert aviso
+
+
+def test_con_respaldo_sin_ninguna_hora_devuelve_none():
+    from puente.tools.agenda import elegir_franja_con_respaldo
+
+    perfil = _perfil(clases=[_h(["lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"],
+                                "00:00", "23:59")])
+    inicio, aviso = elegir_franja_con_respaldo(_oferta(), perfil, 0, desde=LUNES_7)
+    assert inicio is None and aviso

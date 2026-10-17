@@ -33,7 +33,7 @@ from pathlib import Path
 
 from puente.tools import db
 from puente.schemas import Decision, EstadoPostulacion, Match, Oferta, Perfil
-from puente.tools.agenda import elegir_franja
+from puente.tools.agenda import elegir_franja_con_respaldo
 from puente.tools.calendario import ZONA_PANAMA, generar_ics
 from puente.tools.pdf import (
     cegar,
@@ -266,8 +266,13 @@ def _texto_lista_corta(
     descartes de la persona. Solo dice qué habilidades de la oferta cubre.
     """
     lineas = []
-    if mensaje_orientador.strip():
-        lineas += [mensaje_orientador.strip(), ""]
+    saludo = mensaje_orientador.strip()
+    if saludo:
+        # El texto libre del orientador también sale hacia la empresa: puede traer la edad,
+        # el género o el corregimiento de alguien ("mujer de 20 años de Barrio Colón").
+        for _, perfil, _ in filas:
+            saludo = cegar(saludo, perfil)
+        lineas += [saludo, ""]
     lineas += [
         f"Lista corta para {oferta.puesto} en {oferta.empresa} ({oferta.corregimiento})",
         "Candidatos aprobados por el orientador. Datos de demostración (sintéticos).",
@@ -589,9 +594,17 @@ def _ejecutar_nodo(
     def elegir(match: Match) -> datetime:
         par = _par(match)
         traslado = dict(match.desglose).get("minutos_traslado", 0)
-        inicio = elegir_franja(ofertas[par[1]], perfiles[par[0]], traslado, desde=reloj())
+        inicio, aviso = elegir_franja_con_respaldo(ofertas[par[1]], perfiles[par[0]], traslado, desde=reloj())
+        if aviso:
+            # Sin franja que cumpla todo no se inventa una hora: la fecha queda por confirmar y
+            # nunca se propone una que cruce las clases del joven.
+            anotar(
+                f"{par[0]} -> {par[1]}",
+                "sin franja compatible: fecha por confirmar",
+                f"{aviso}" + (f". Fecha propuesta: {inicio.strftime('%Y-%m-%d %H:%M')}" if inicio else ""),
+            )
         if inicio is None:
-            inicio = inicio_entrevista_por_defecto(match)
+            raise ValueError(f"sin franja compatible: fecha por confirmar ({aviso})")
         inicios[par] = inicio
         return inicio
 

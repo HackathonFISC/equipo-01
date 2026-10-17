@@ -178,3 +178,46 @@ def test_la_evidencia_literal_y_la_explicacion_del_matching_no_filtran_datos(tmp
         assert dato.lower() not in mensaje.lower()
     assert "Yaritza Ficticia" in mensaje and "atiendo la fonda" in mensaje
     assert "Cubre lo que pide la oferta: atencion_cliente" in mensaje
+
+
+def test_el_mensaje_libre_del_orientador_tampoco_filtra_edad_genero_ni_corregimiento(tmp_path, monkeypatch):
+    from puente.agents.postulacion import postular
+    from puente.tools import db
+
+    perfil, oferta = _perfil(), _oferta()
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token-ficticio")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID_EMPRESA", "chat-empresa-ficticio")
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: pytest.fail("sin red en pruebas"))
+    recibidos = []
+
+    def enviar(token, chat_id, texto, adjuntos):
+        recibidos.append(texto)
+        return {"ok": True}
+
+    match = Match(
+        perfil_id=perfil.id, oferta_id=oferta.id, puntaje=0.9,
+        desglose={"cobertura": 1.0, "minutos_traslado": 35, "pasaje_diario": 1.5, "penalizacion": 0.0},
+        explicacion="Cubre atención al cliente",
+    )
+    conn = db.conectar(tmp_path / "puente.db")
+    try:
+        postular(
+            [match], {perfil.id: perfil}, {oferta.id: oferta},
+            aprobacion={
+                "orientador": "Orientadora Ficticia", "timestamp": "2026-10-20T09:30:00-05:00",
+                "aprobados": [{"perfil_id": perfil.id, "oferta_id": oferta.id}],
+            },
+            consentimientos=[{
+                "perfil_id": perfil.id, "oferta_id": oferta.id, "otorgado": True,
+                "medio": "orientador", "timestamp": "2026-10-20T09:30:00-05:00",
+            }],
+            mensaje_orientador="Les presento a Yaritza, mujer de 20 años de Barrio Colón",
+            conn=conn, outbox=tmp_path / "outbox", enviar=enviar,
+            inicio_entrevista=lambda m: INICIO,
+        )
+    finally:
+        conn.close()
+    (mensaje,) = recibidos
+    assert mensaje.startswith("Les presento a Yaritza, ")
+    for dato in ("Barrio Colón", "20 años", "mujer"):
+        assert dato not in mensaje

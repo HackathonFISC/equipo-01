@@ -448,3 +448,83 @@ def test_con_el_matching_real_el_descarte_llega_a_la_tabla_y_al_joven_sin_filtra
             in db.descartes(conn, perfil_id="yaritza")
     finally:
         conn.close()
+
+
+def test_el_mensaje_libre_del_orientador_sale_ciego_hacia_la_empresa(tmp_path):
+    caso = Caso(tmp_path)
+    caso.aprobar(
+        consentidos=["yaritza"],
+        mensaje="Les presento a Yaritza Ficticia, mujer de 20 años que vive en Barrio Colón.",
+    )
+    texto = caso.empresa.mensajes[0][2]
+    assert texto.startswith("Les presento a Yaritza Ficticia, ")
+    for dato in ("Barrio Colón", "20 años", "mujer"):
+        assert dato not in texto
+
+
+def _con_horarios(libre, clases):
+    """Estado extra con el horario libre y de clases dados para todos los perfiles (SINTÉTICOS).
+
+    Yaritza llega por ``entradas_perfil`` (el stub de Perfil la arma ahí) y Carlos ya viene en
+    ``perfiles``; se cambian los dos.
+    """
+    _, estado = cargar_caso()
+    cambio = {"horario_libre": libre, "horario_clases": clases}
+    return {
+        "perfiles": [p.model_copy(update=cambio) for p in estado["perfiles"]],
+        "entradas_perfil": [
+            {**e, **{k: [h.model_dump() for h in v] for k, v in cambio.items()}}
+            for e in estado["entradas_perfil"]
+        ],
+    }
+
+
+def test_sin_franja_normal_la_fecha_queda_por_confirmar_y_no_cae_sobre_las_clases(tmp_path):
+    """Libre de 18:00 a 21:00 y clases de 08:00 a 12:00: no hay hora laboral compatible.
+
+    Antes caía en 'mañana 10:00', en plena clase. Ahora se propone dentro del horario libre y
+    queda una Decision que dice que la fecha está por confirmar.
+    """
+    semana = ["lunes", "martes", "miercoles", "jueves", "viernes"]
+    perfiles = _con_horarios(
+        [Horario(dias=semana, hora_inicio="18:00", hora_fin="21:00")],
+        [Horario(dias=semana, hora_inicio="08:00", hora_fin="12:00")],
+    )
+    caso = Caso(tmp_path, estado_extra=perfiles)
+    caso.aprobar()
+
+    inicios = {}
+    for ruta in caso.outbox.glob("entrevista_*.ics"):
+        (evento,) = ics.Calendar(ruta.read_text(encoding="utf-8")).events
+        inicios[ruta.stem] = evento.begin.datetime.astimezone(PANAMA)
+    assert len(inicios) == 2
+    for inicio in inicios.values():
+        assert inicio > AHORA
+        assert inicio.weekday() < 5
+        # Dentro de su horario libre y lejos de las clases de la mañana.
+        assert inicio.hour >= 18 and (inicio.hour, inicio.minute) < (21, 0)
+    conn = caso.conexion()
+    try:
+        avisos = [t for t in db.trazas(conn, agente="postulacion")
+                  if t["salida_resumen"] == "sin franja compatible: fecha por confirmar"]
+        assert len(avisos) == 2
+        assert all("horario libre" in t["razon"] for t in avisos)
+    finally:
+        conn.close()
+    assert "por confirmar" in caso.empresa.mensajes[0][2]
+
+
+def test_si_ninguna_hora_cabe_fuera_de_las_clases_no_se_envia_y_queda_la_decision(tmp_path):
+    todo = Horario(dias=["lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"],
+                   hora_inicio="00:00", hora_fin="23:59")
+    caso = Caso(tmp_path, estado_extra=_con_horarios([], [todo]))
+    caso.aprobar()
+    assert caso.empresa.mensajes == []
+    assert any("sin franja compatible" in e for e in caso.valores["errores"])
+    conn = caso.conexion()
+    try:
+        assert db.embudo(conn)["enviado"] == 0
+        assert any("sin franja compatible: fecha por confirmar" in t["razon"] + t["salida_resumen"]
+                   for t in db.trazas(conn, agente="postulacion"))
+    finally:
+        conn.close()
