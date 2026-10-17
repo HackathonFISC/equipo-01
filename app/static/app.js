@@ -327,7 +327,7 @@ function renderizarKPIs() {
 function renderizarMetricasImpacto() {
   const panel = document.getElementById("panel-metricas-impacto");
   if (!panel) return;
-  const m = estadoActual.metricas_impacto || {};
+  const m = estadoActual.metricas || {};
   const inec = m.referencia_inec || {};
   const op = m.operativas_demo || {};
   const rotulo = m.rotulo || "Ilustrativo, datos de la demo";
