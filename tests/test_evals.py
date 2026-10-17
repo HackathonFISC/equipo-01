@@ -23,7 +23,7 @@ from evals.run import DependenciaPendiente, ResultadoCaso
 RAIZ = Path(__file__).resolve().parents[1]
 CONTEO_ESPERADO = {
     "extraccion_ofertas": 5,
-    "requisitos_discriminatorios": 6,
+    "requisitos_discriminatorios": 7,  # 6 del issue + DIS-07 («soltera, sin hijos»), seguimiento de #13
     "perfil_sin_cv": 4,
     "matching_factible": 3,
     "sesgo_contrafactual": 3,
@@ -82,7 +82,7 @@ def _yaml_minimo():
 # ---------------------------------------------------------------------------- casos.yaml
 def test_casos_yaml_completo(casos):
     ids = [c["id"] for c in casos["casos"]]
-    assert len(ids) == 24 == len(set(ids))
+    assert len(ids) == sum(CONTEO_ESPERADO.values()) == len(set(ids))
     conteo = {nombre: sum(1 for c in casos["casos"] if c["categoria"] == nombre) for nombre in casos["categorias"]}
     assert conteo == CONTEO_ESPERADO
     for caso in casos["casos"]:
@@ -433,6 +433,32 @@ def test_dependencia_pendiente(casos):
     assert tabla.count("\n") >= 7  # encabezado, separador y 6 categorías
 
 
+def _fila(tabla, categoria):
+    return next(f for f in tabla.splitlines() if f.startswith(f"| {categoria} |"))
+
+
+def test_categoria_medida_a_medias_dice_parcial_y_no_si(casos):
+    """Una categoría con casos ok y otros omitidos o pendientes no está aprobada: dice «parcial», no «sí»."""
+    dis = [c["id"] for c in casos["casos"] if c["categoria"] == "requisitos_discriminatorios"]
+    resultados = [ResultadoCaso(dis[0], "requisitos_discriminatorios", "ok", 1, 1, {}, "cumple lo esperado")]
+    resultados += [ResultadoCaso(i, "requisitos_discriminatorios", "pendiente", 0, 0, None, "pendiente (#5)") for i in dis[1:]]
+    fila = _fila(run.tabla(resultados, casos), "requisitos_discriminatorios")
+    assert fila.endswith("| parcial |") and "| 1/1 | 100 % |" in fila
+
+    con_fallo = [ResultadoCaso(dis[0], "requisitos_discriminatorios", "fallo", 0, 1, {}, "difiere")] + resultados[1:]
+    assert _fila(run.tabla(con_fallo, casos), "requisitos_discriminatorios").endswith("| no (parcial) |")
+
+    completos = [ResultadoCaso(i, "requisitos_discriminatorios", "ok", 1, 1, {}, "cumple lo esperado") for i in dis]
+    assert _fila(run.tabla(completos, casos), "requisitos_discriminatorios").endswith("| sí |")
+
+
+def test_categoria_con_llm_omitido_en_parte_dice_parcial(casos):
+    ext = [c["id"] for c in casos["casos"] if c["categoria"] == "extraccion_ofertas"]
+    resultados = [ResultadoCaso(ext[0], "extraccion_ofertas", "ok", 3, 3, {}, "cumple lo esperado")]
+    resultados += [ResultadoCaso(i, "extraccion_ofertas", "omitido", 0, 0, None, "omitido (sin grabación)") for i in ext[1:]]
+    assert _fila(run.tabla(resultados, casos), "extraccion_ofertas").endswith("| parcial |")
+
+
 def test_resolver_deja_pendiente_si_falta_el_modulo_o_la_funcion():
     with pytest.raises(DependenciaPendiente) as sin_modulo:
         run._resolver(("puente.modulo_que_no_existe", "f", 7))
@@ -587,7 +613,7 @@ def test_registro_de_fallos_y_casos_intactos(tmp_path, casos, monkeypatch, capsy
     salida = tmp_path / "resultados.md"
     assert run.main(["--casos", str(copia), "--salida", str(salida), "--sin-llm"]) == 0
     assert copia.read_bytes() == antes  # el runner nunca reescribe casos.yaml
-    assert len(run.cargar_casos(copia)["casos"]) == 24  # y ningún caso se borra
+    assert len(run.cargar_casos(copia)["casos"]) == sum(CONTEO_ESPERADO.values())  # y ningún caso se borra
 
     texto = salida.read_text(encoding="utf-8")
     registro = texto[texto.index("## Registro de fallos"):]
