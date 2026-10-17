@@ -45,10 +45,16 @@ def _perfil(id_: str, edad: int = 20) -> dict:
     }
 
 
+_CARGAR_DOTENV = cargar._cargar_dotenv
+
+
 @pytest.fixture(autouse=True)
 def _sin_modo_grabar(monkeypatch):
-    """Con LLM_MODO=grabar la carga relee todo; las pruebas no deben depender del entorno."""
+    """Con LLM_MODO=grabar la carga relee todo; las pruebas no deben depender del entorno ni de un .env real."""
     monkeypatch.delenv("LLM_MODO", raising=False)
+    monkeypatch.delenv("PUENTE_MODELO_LLM", raising=False)
+    monkeypatch.delenv("LLM_PROVEEDOR", raising=False)
+    monkeypatch.setattr(cargar, "_cargar_dotenv", lambda: None)
 
 
 @pytest.fixture
@@ -113,6 +119,44 @@ def test_segunda_corrida_deja_los_mismos_conteos_y_no_llama_al_llm(conn, carpeta
     assert extractor.llamadas == 0 and resumen.llamadas_llm == 0 and resumen.desde_cargas == 4
     assert perfiles.perfiles_nuevos == 0
     assert _conteos(conn) == antes
+
+
+def test_otro_modelo_o_extractor_vuelve_a_pedir_la_extraccion(conn, carpetas, monkeypatch):
+    monkeypatch.setenv("PUENTE_MODELO_LLM", "modelo-a")
+    _cargar(conn, carpetas, ExtractorFalso())
+
+    monkeypatch.setenv("PUENTE_MODELO_LLM", "modelo-b")
+    extractor = ExtractorFalso()
+    resumen, _ = _cargar(conn, carpetas, extractor)
+    assert extractor.llamadas == 4 and resumen.desde_cargas == 0
+
+    otro = ExtractorFalso()
+    resumen, _ = _cargar(conn, carpetas, otro)
+    assert otro.llamadas == 0 and resumen.desde_cargas == 4
+
+    def extractor_nuevo(entrada):  # p. ej. Mercado pasa de extractor_gemini a extractor_claude
+        return ExtractorFalso()(entrada)
+
+    resumen, _ = _cargar(conn, carpetas, extractor_nuevo)
+    assert resumen.llamadas_llm == 4 and resumen.desde_cargas == 0
+
+
+def test_base_sin_columna_version_se_migra_y_vuelve_a_extraer(conn, carpetas):
+    _cargar(conn, carpetas, ExtractorFalso())
+    conn.executescript(
+        "ALTER TABLE cargas RENAME TO cargas_previas;"
+        "CREATE TABLE cargas (archivo TEXT PRIMARY KEY, sha256 TEXT NOT NULL,"
+        " extraccion_json TEXT NOT NULL, timestamp TEXT NOT NULL);"
+        "INSERT INTO cargas SELECT archivo, sha256, extraccion_json, timestamp FROM cargas_previas;"
+        "DROP TABLE cargas_previas;"
+    )
+
+    extractor = ExtractorFalso()
+    resumen, _ = _cargar(conn, carpetas, extractor)
+
+    assert extractor.llamadas == 4 and not resumen.errores
+    assert "version" in {c[1] for c in conn.execute("PRAGMA table_info(cargas)")}
+    assert _puestos(conn) == ["Ayudante de cocina", "Cajera", "Vendedor"]
 
 
 def test_extraccion_fallida_se_reintenta_en_la_siguiente_corrida(conn, carpetas):
@@ -301,6 +345,32 @@ def test_main_imprime_conteos_y_devuelve_1_si_hay_errores(carpetas, tmp_path, mo
     (perfiles / "menor.json").write_text(json.dumps(_perfil("menor", edad=17)), encoding="utf-8")
     assert cargar.main(argumentos) == 1
     assert "menor.json" in capsys.readouterr().out
+
+
+def test_main_carga_el_env_antes_de_extraer(carpetas, tmp_path, monkeypatch):
+    import dotenv
+
+    llamadas = []
+
+    def load_dotenv_falso(*args, **kwargs):
+        llamadas.append(kwargs)
+        monkeypatch.setenv("PUENTE_MODELO_LLM", "modelo-del-env")
+
+    vistos = []
+
+    def extractor_que_mira_el_entorno():
+        vistos.append(cargar.os.getenv("PUENTE_MODELO_LLM"))
+        return ExtractorFalso()
+
+    monkeypatch.setattr(cargar, "_cargar_dotenv", _CARGAR_DOTENV)
+    monkeypatch.setattr(dotenv, "load_dotenv", load_dotenv_falso)
+    monkeypatch.setattr(cargar, "_extractor_por_defecto", extractor_que_mira_el_entorno)
+    monkeypatch.setenv("PUENTE_TAXONOMIA", str(FIXTURES / "taxonomia_mini.csv"))
+    ofertas, perfiles = carpetas
+
+    assert cargar.main(["--ofertas", str(ofertas), "--perfiles", str(perfiles), "--db", str(tmp_path / "p.db")]) == 0
+    assert llamadas == [{"override": False}]
+    assert vistos == ["modelo-del-env"]
 
 
 # ---------------------------------------------------------------- lecturas de db (#46)
