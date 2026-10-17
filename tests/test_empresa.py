@@ -482,6 +482,45 @@ def test_las_habilidades_de_publicar_no_van_fijas_en_el_codigo(entorno) -> None:
     assert "Elige al menos una habilidad" in html
 
 
+def test_pasos_6_y_7_del_video_los_chips_de_yaritza_sobreviven_al_rechazo_y_al_reinicio(entorno) -> None:
+    """Paso 6 (aprobar tras «Reiniciar demo») y paso 7 (la empresa rechaza): los archivos siguen en la tarjeta.
+
+    Lo comprueba en tres lugares: /api/estado, el estado guardado en SQLite y el estado que se reconstruye
+    cuando el servidor arranca de nuevo (#227).
+    """
+    cliente, _, tmp_path = entorno
+    assert cliente.post("/api/reset").status_code == 200
+    estado = srv.ESTADO_GLOBAL  # el reinicio deja un estado nuevo, con sus propios códigos
+    _aprobar(cliente, YARITZA, VISTA_ALEGRE)
+
+    def archivos(publico: dict) -> list[str]:
+        post = next(p for p in publico["postulaciones"] if p["perfil_id"] == YARITZA and p["oferta_id"] == VISTA_ALEGRE)
+        return list(post.get("archivos_generados") or [])
+
+    def completos(nombres: list[str]) -> bool:
+        return (
+            any(n.startswith("cv_") for n in nombres)
+            and any(n.startswith("carta_") for n in nombres)
+            and any(n.endswith(".ics") for n in nombres)
+            and any(n.startswith("mensaje_") for n in nombres)
+        )
+
+    antes = archivos(cliente.get("/api/estado").json())
+    assert completos(antes), antes
+
+    [candidato] = _vacante(_lista(cliente, estado, PROGRESO), VISTA_ALEGRE)["candidatos"]
+    r = _accion(cliente, estado, PROGRESO, accion="rechazar", oferta_id=VISTA_ALEGRE, ref=candidato["ref"],
+                nota="Buscamos experiencia en inventario formal")
+    assert r.status_code == 200, r.text
+
+    despues = cliente.get("/api/estado").json()
+    assert archivos(despues) == antes  # la empresa rechazó, pero los archivos que ya salieron siguen en la tarjeta
+    guardado = srv._cargar_estado_tablero_db(tmp_path / "empresa.db")
+    assert guardado is not None and archivos(guardado) == antes  # y en lo que se guardó en SQLite
+    reconstruido = srv.obtener_datos_iniciales_demo(db_path=tmp_path / "empresa.db")
+    assert archivos(reconstruido) == antes  # y cuando el servidor arranca otra vez
+
+
 # ---------------------------------------------------------------- #258: el .ics por encabezado y lo que Puente ya sabe proponer
 
 

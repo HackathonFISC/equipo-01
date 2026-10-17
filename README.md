@@ -130,10 +130,10 @@ Los siete agentes mínimos que sugiere el documento del reto y dónde están en 
 - **Vista por rol y panel de operación (#168).** La cabecera del tablero tiene un selector de rol: «Orientador (Admin)», «Vista Aplicante» (`/joven`) y «Vista Empresa» (`/empresa/lista-corta`, y `/empresa` para publicar vacantes). El desplegable «Umbrales del solver editables y panel de operación (Admin)» hace dos cosas:
   - recalcula con otros topes (`POST /api/orientador/umbrales`), por ejemplo 95 min de traslado, con lo que Tocumen deja de quedar fuera para Yaritza, y deja una `Decision` firmada;
   - muestra el uso del LLM por agente y el estado de los canales (`GET /api/admin/operacion`).
-- **Ofertas y CV por archivo (#170).** En el tablero, «Subir oferta (PDF o foto con cámara)» y «Subir CV (PDF o foto con cámara)» (`POST /api/ofertas/archivo` y `POST /api/perfiles/archivo`).
+- **Ofertas y CV por archivo (#170).** En el tablero, «Subir oferta (PDF o foto con cámara)» y «Subir CV (PDF)» (`POST /api/ofertas/archivo` y `POST /api/perfiles/archivo`).
   - Los guardrails de tamaño (5 MB) y de tipo se aplican antes de leer el archivo, y el audio se rechaza.
   - La cédula y el teléfono se quitan antes del LLM.
-  - Sin red solo funcionan los archivos de prueba con grabación: `tests/fixtures/volante_sintetico.jpg` y `tests/fixtures/cv_sintetico.pdf`.
+  - Sin red solo funcionan los archivos de prueba, con grabaciones escritas a mano (#236): `tests/fixtures/volante_sintetico.jpg` y `tests/fixtures/cv_sintetico.pdf`.
 - **Demo pública de solo lectura (#161).** `vercel.json` publica el tablero con `PUENTE_DEMO_PUBLICA=1` y `LLM_MODO=reproducir`. Toda acción que no sea GET responde 403 y el estado es efímero. **No es la demo en vivo** (#169), que corre en local. Para verlo en local: `PUENTE_DEMO_PUBLICA=1 uv run python -m app.server`.
 
 ## Arquitectura de agentes
