@@ -135,6 +135,16 @@ _ESTADO_CIVIL = re.compile(
 # unido" o "Estados Unidos" no es un dato de la persona. Se conserva el verbo.
 _UNIDO = re.compile(r"\b(soy|es|est[aá]|estoy|vive|vivo|civil\s*:?)\s+unid[oa]\b", re.IGNORECASE)
 _EN_PAREJA = re.compile(r"\b(vivo|vive|estoy|est[aá]|estado civil\s*:?)\s+en pareja\b", re.IGNORECASE)
+# Pareja e hijos (#148): "su esposo me apoya", "unida con su pareja", "tengo 2 hijos", "mamá de dos
+# niñas". "mi mamá" o "la fonda de mi mamá" no se tocan: solo cuenta con hijos o pareja detrás.
+_CANTIDAD = r"(?:\d+|un[oa]?|dos|tres|cuatro|cinco)"
+_FAMILIA = re.compile(
+    r"\bunid[oa]\s+(?:con|a)\s+(?:mi|su)\s+(?:pareja|esposo|esposa|marido|novio|novia)\b"
+    r"|\b(?:mi|su)\s+(?:esposo|esposa|marido|pareja|novio|novia)\b"
+    rf"|\b(?:tengo|tiene)\s+{_CANTIDAD}\s+(?:hij|niñ|nen)[oa]s?\b"
+    rf"|\b(?:mam[aá]|madre|pap[aá]|padre)\s+de\s+{_CANTIDAD}\s+(?:hij|niñ|nen)[oa]s?\b",
+    re.IGNORECASE,
+)
 _EMBARAZO = re.compile(r"\b(?:embarazad[oa]s?|embarazos?|encinta|gestante)\b", re.IGNORECASE)
 # Edad en palabras, de 18 a 29 (la demo es con jóvenes de 18 a 29), solo seguida de "años" o
 # después de "edad": "dos años de experiencia" no es una edad y no se toca.
@@ -146,16 +156,19 @@ _EDAD_EN_PALABRAS = re.compile(
     rf"\bedad\s*(?:de|:)?\s*{_EDAD_PALABRAS}\b(?:\s*a[nñ]os)?|\b{_EDAD_PALABRAS}\s+a[nñ]os\b",
     re.IGNORECASE,
 )
-# Año o fecha de nacimiento: "nacida en 2006", "nació el 3 de mayo de 2006", "año de nacimiento: 2006".
+# Año o fecha de nacimiento: "nacida en 2006", "nació el 3 de mayo de 2006", "nacida el 20/11/2006",
+# "año de nacimiento: 2006". Con etiqueta se ciega siempre, sin mirar la edad del perfil (#148).
+_FECHA_NUM = r"(?:\d{1,2}[/.-]\d{1,2}[/.-](?:19|20)?\d{2}|(?:19|20)\d{2}[/.-]\d{1,2}[/.-]\d{1,2})(?!\d)"
 _NACIMIENTO = re.compile(
     r"\bnac(?:id[oa]s?|i[oó]|í)\s+(?:en|el)\s+(?:el\s+)?(?:a[nñ]o\s+)?"
-    r"(?:(?:\d{1,2}\s+de\s+)?[a-záéíóú]+\s+del?\s+)?(?:19|20)\d{2}\b"
+    rf"(?:{_FECHA_NUM}|(?:(?:\d{{1,2}}\s+de\s+)?[a-záéíóú]+\s+del?\s+)?(?:19|20)\d{{2}}\b)"
     r"|\b(?:a[nñ]o|fecha)\s+de\s+nacimiento\b(?:\s*(?::|es|fue)?\s*"
     r"(?:(?:\d{1,2}\s+de\s+)?[a-záéíóú]+\s+del?\s+(?:19|20)\d{2}\b|\d[\d/.-]*\d))?",
     re.IGNORECASE,
 )
-# Una fecha numérica sin etiqueta solo se trata como nacimiento si corresponde a
-# la edad declarada del perfil. Así se conservan fechas de experiencia laboral.
+# Una fecha numérica sin etiqueta solo se trata como nacimiento si corresponde a la edad declarada
+# del perfil, con ±1 año porque la edad del formulario no siempre cuadra al día. Así se conservan
+# las fechas de experiencia laboral, que son recientes.
 _FECHA_NUMERICA = re.compile(
     r"(?<!\d)(?:\d{1,2}[/-]\d{1,2}[/-](?:19|20)\d{2}|(?:19|20)\d{2}[/-]\d{1,2}[/-]\d{1,2})(?!\d)"
 )
@@ -205,7 +218,7 @@ def cegar(texto: str, perfil: Perfil, *, del_orientador: bool = False, hoy: date
         texto = re.sub(patron, "[dato omitido]", texto, flags=re.IGNORECASE)
     texto = _UNIDO.sub(lambda m: f"{m.group(1)} [dato omitido]", texto)
     texto = _EN_PAREJA.sub(lambda m: f"{m.group(1)} [dato omitido]", texto)
-    terminos = [_ESTADO_CIVIL, _EMBARAZO, _EDAD_EN_PALABRAS, _NACIMIENTO, _TERMINOS_GENERO]
+    terminos = [_NACIMIENTO, _FAMILIA, _ESTADO_CIVIL, _EMBARAZO, _EDAD_EN_PALABRAS, _TERMINOS_GENERO]
     if del_orientador:
         terminos.append(_TERMINOS_SEXO_COLOQUIALES)
     for patron in terminos:
@@ -225,7 +238,7 @@ def cegar(texto: str, perfil: Perfil, *, del_orientador: bool = False, hoy: date
             edad_en_fecha = fecha_actual.year - nacimiento.year - (
                 (fecha_actual.month, fecha_actual.day) < (nacimiento.month, nacimiento.day)
             )
-            return "[dato omitido]" if edad_en_fecha == perfil.edad else coincidencia.group()
+            return "[dato omitido]" if abs(edad_en_fecha - perfil.edad) <= 1 else coincidencia.group()
 
         texto = _FECHA_NUMERICA.sub(ocultar_fecha, texto)
     return texto
