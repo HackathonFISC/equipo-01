@@ -306,7 +306,7 @@ def _texto_lista_corta(
         # Sin corregimiento: si coincide con el del joven, revelaría dónde vive (#123).
         f"Lista corta para {oferta.puesto} en {oferta.empresa}",
         "Candidatos aprobados por el orientador. Datos de demostración (sintéticos).",
-        "Cada candidato va con su CV ciego y su carta de presentación en PDF.",
+        "Cada candidato va con su CV y su carta de presentación en PDF, sin datos sensibles (#123).",
         f"Las fechas de entrevista de los .ics adjuntos son propuestas. {AVISO_FECHA}.",
         "",
     ]
