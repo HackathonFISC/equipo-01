@@ -56,7 +56,7 @@ Los siete agentes mínimos que sugiere el documento del reto y dónde están en 
 
 | Agente sugerido | En Puente | Issues | Estado |
 |---|---|---|---|
-| 1. Inteligencia de mercado: normalizar ofertas a una taxonomía, detectar requisitos, extraer tendencias | Mercado: extracción con Claude, habilidades normalizadas a la taxonomía enlazada a ESCO, reglas de la Ley 11 de 2005 en código, duplicados por similitud; el Redactor propone una versión legal de una oferta bloqueada | #5, #43, #157 | Completo, salvo tendencias |
+| 1. Inteligencia de mercado: normalizar ofertas a una taxonomía, detectar requisitos, extraer tendencias | Mercado: extracción con Claude, habilidades normalizadas a la taxonomía enlazada a ESCO, reglas de la Ley 11 de 2005 en código, duplicados por similitud; el Redactor propone una versión legal de una oferta bloqueada | #5, #43, #157, #198 | Completo; tendencias en curso (#198) |
 | 2. Perfil: leer el CV y entrevistar para descubrir habilidades no declaradas | Perfil: CV o entrevista de 5 preguntas, cada habilidad con su frase literal de evidencia; vista `/joven`; la tirilla de matrícula da el horario de clases | #6, #44, #52, #164, #166 | Completo, con preguntas fijas |
 | 3. Matching: asignación con capacidades y restricciones de transporte, horario y salario | Solver OR-Tools CP-SAT con restricciones duras y hasta 3 candidatos por vacante | #4, #48 | Completo |
 | 4. Ruta de formación: plan de cursos con cupos, horarios, costo y transporte | Formación: set cover voraz (no óptimo) sobre cursos del INADEH con cupo, horario, costo y traslado | #14, #53 | Completo; cupos y horarios son datos de prueba |
@@ -64,10 +64,9 @@ Los siete agentes mínimos que sugiere el documento del reto y dónde están en 
 | 6. Entrevista simulada con retroalimentación | No se construyó | — | Fuera de alcance |
 | 7. Auditor: medir sesgo por nombre, género o corregimiento y bloquear ofertas discriminatorias | Auditor v2 con contrafactuales y línea base; el bloqueo lo hacen las reglas de Mercado | #8, #50, #5 | Completo |
 
-**Fuera de alcance, y por qué.**
+**Fuera de alcance, y por qué.** La entrevista simulada daría como resultado la opinión de un LLM sobre una conversación, y no hay forma de verificarla en código en 24 horas. Priorizamos lo que sí se puede verificar: que nada salga sin aprobación y consentimiento.
 
-- **Entrevista simulada.** Su resultado sería la opinión de un LLM sobre una conversación, y no hay forma de verificarla en código en 24 horas. Priorizamos lo que sí se puede verificar: que nada salga sin aprobación y consentimiento.
-- **Tendencias del mercado.** Con 20 ofertas de muestra, cualquier tendencia sería anecdótica. Mercado se limita a dejar cada oferta limpia, legal y comparable.
+**En curso.** Las tendencias del mercado se están implementando en #198, en `puente/metricas.py`.
 
 ## Arquitectura de agentes
 
