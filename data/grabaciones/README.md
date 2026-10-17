@@ -55,6 +55,12 @@ Si la respuesta vino del proveedor de respaldo tras un rechazo, se guarda bajo l
 Cambiar el modelo, el proveedor, una letra del prompt, el esquema o un byte de un archivo da otro hash: hay que
 volver a grabar. Para calcularlo a mano: `puente.llm.clave_grabacion(...)`.
 
+**Guardia de CI para Yaritza (#132):** antes de fusionar cambios en `data/taxonomia.csv`,
+los prompts de Perfil o Mercado, o `tests/fixtures/caso_yaritza.json`, vuelve a grabar las
+respuestas afectadas con `LLM_MODO=grabar` y ejecuta
+`uv run pytest -q tests/test_grabacion_yaritza.py`. La prueba calcula el hash del prompt
+real de Perfil y falla con «falta la grabación …» cuando la demo ya no puede reproducirse.
+
 ## Ofertas de la carga inicial (#46)
 
 Las 20 ofertas de `data/ofertas/` tienen grabaciones de Claude Opus 5.5 validadas con

@@ -150,6 +150,8 @@ Si `gh` no te funciona, haz los mismos pasos desde la web de GitHub. Nunca lleve
 
 Haz: leer este archivo, el issue, su "Depende de" y `puente/schemas.py` antes de escribir código · usar `uv run` para todo · tests en `tests/` para solver, reglas, guardrails y herramientas · caso de eval cuando el issue lo pide · fila de bitácora con `scripts/bitacora.sh` después de cada bloque de trabajo y antes de cada commit · comentario de traspaso al cerrar la sesión · respuestas guardadas en JSON para el modo sin conexión de la demo.
 
+Si cambias `data/taxonomia.csv`, los prompts de Perfil o Mercado, o `tests/fixtures/caso_yaritza.json`, vuelve a grabar las respuestas afectadas con `LLM_MODO=grabar` y corre `tests/test_grabacion_yaritza.py`. El hash del prompt cambia aunque solo se edite una palabra; sin la grabación nueva la demo sin clave falla.
+
 No hagas: tocar archivos fuera del alcance del issue sin comentarlo · cambiar `puente/schemas.py` sin issue nuevo · llamar al LLM desde `puente/solver/` o `puente/rules/` · instalar dependencias sin anotarlas en el PR y en `pyproject.toml` · usar datos reales de personas · pegar claves · push a `main` · force-push · cerrar o reasignar issues ajenos · borrar casos de eval · enviar mensajes reales por Telegram fuera del chat de demo · tareas de más de 2 horas sin dividirlas en el issue.
 
 ## 10. Línea de tiempo y congelamiento
