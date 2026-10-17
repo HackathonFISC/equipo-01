@@ -147,6 +147,7 @@ class MiddlewareSinCache(BaseHTTPMiddleware):
 
 
 from app import joven_fase2  # Vista del joven, fase 2 (#166): la lógica vive en app/joven_fase2.py
+from app import mensajes as mensajes_empresa  # Mensajes del joven a la empresa (#289): la lógica vive en app/mensajes.py
 
 RUTA_APP = Path(__file__).resolve().parent
 RUTA_STATIC = RUTA_APP / "static"
@@ -4292,10 +4293,12 @@ app = Starlette(
         Route("/api/joven/{perfil_id}/tirilla", joven_fase2.endpoint_tirilla, methods=["POST"]),
         Route("/api/joven/{perfil_id}/tirilla/confirmar", joven_fase2.endpoint_confirmar_tirilla, methods=["POST"]),
         Route("/api/joven/{perfil_id}/postulaciones", joven_fase2.endpoint_postulaciones, methods=["GET"]),
+        Route("/api/joven/{perfil_id}/mensaje", mensajes_empresa.endpoint_enviar, methods=["POST"]),
         # Lista corta ciega de la empresa (#167)
         Route("/empresa/lista-corta", empresa.endpoint_pagina, methods=["GET"]),
         Route("/api/empresa/{empresa_id}/lista-corta", empresa.endpoint_lista, methods=["GET"]),
         Route("/api/empresa/{empresa_id}/responder", empresa.endpoint_responder, methods=["POST"]),
+        Route("/api/empresa/{empresa_id}/mensajes", mensajes_empresa.endpoint_lista, methods=["GET"]),
         Route("/api/empresa/{empresa_id}/ics/{oferta_id}/{ref}", empresa.endpoint_ics, methods=["GET"]),
         Mount("/static", app=StaticFiles(directory=str(RUTA_STATIC)), name="static"),
     ],

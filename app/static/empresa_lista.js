@@ -156,6 +156,34 @@ function pintar(datos) {
   vaciar($("vacantes"), vacantes.length ? vacantes : el("p", { class: "vacio", text: "No hay vacantes de tu empresa en Puente." }));
 }
 
+// ---------- Mensajes de los candidatos (#289) ----------
+
+// «Nuevo mensaje de Candidato N»: el mismo alias de la lista corta, con el texto que el servidor ya limpió y cegó.
+function pintarMensajes(datos) {
+  const mensajes = (datos && datos.mensajes) || [];
+  $("mensajes").hidden = mensajes.length === 0;
+  vaciar(
+    $("lista-mensajes"),
+    mensajes.map((m) =>
+      el(
+        "article",
+        { class: "candidato mensaje", "data-ref": m.ref },
+        el("header", { class: "candidato-cabecera" }, el("h4", { text: `Nuevo mensaje de ${m.alias}` }), etiqueta(m.puesto, "info")),
+        el("p", { class: "mensaje-texto", text: m.texto }),
+      ),
+    ),
+  );
+}
+
+async function cargarMensajes() {
+  try {
+    pintarMensajes(await api(rutaEmpresa("mensajes")));
+  } catch (err) {
+    if (err.status === 401) fallo(err);
+    else $("mensajes").hidden = true;
+  }
+}
+
 async function descargarIcs(v, c) {
   let respuesta;
   try {
@@ -427,6 +455,7 @@ function fallo(err) {
 async function responder(cuerpo, exito) {
   try {
     pintar(await api(rutaEmpresa("responder"), cuerpo));
+    await cargarMensajes();
     mostrarAviso(exito);
   } catch (err) {
     fallo(err);
@@ -437,6 +466,7 @@ async function cargar(boton) {
   const tarea = async () => {
     try {
       pintar(await api(rutaEmpresa("lista-corta")));
+      await cargarMensajes();
     } catch (err) {
       fallo(err);
     }
