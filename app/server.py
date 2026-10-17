@@ -1894,7 +1894,7 @@ def cargar_escenario_cobertura_turnos(estado: dict[str, Any]) -> dict[str, Any]:
                     "hora_fin": "18:00",
                 }
             ],
-            "salario_minimo": 600.0,
+            "salario_minimo": 300.0,
             "presupuesto_pasaje_diario": 2.50,
             "habilidades": [
                 {
@@ -1931,7 +1931,7 @@ def cargar_escenario_cobertura_turnos(estado: dict[str, Any]) -> dict[str, Any]:
                     "hora_fin": "11:45",
                 }
             ],
-            "salario_minimo": 600.0,
+            "salario_minimo": 300.0,
             "presupuesto_pasaje_diario": 2.50,
             "habilidades": [
                 {
@@ -2027,36 +2027,119 @@ def aprobar_cobertura_turnos(
             )
         seg["consentimiento_joven"] = True
 
+    # Construir modelos desde estado para invocar al agente de postulación real (#165)
+    modelos_perfiles, _, modelos_ofertas, _ = _construir_modelos_desde_estado(estado)
+    perfiles_map = {p.id: p for p in modelos_perfiles}
+    ofertas_map = {o.id: o for o in modelos_ofertas}
+
+    for p_raw in estado.get("perfiles", []):
+        if p_raw.get("id") in (pid_m, pid_t) and p_raw.get("id") not in perfiles_map:
+            perfiles_map[p_raw["id"]] = Perfil.model_validate(p_raw)
+    for o_raw in estado.get("ofertas", []):
+        if o_raw.get("id") == req.oferta_id and o_raw.get("id") not in ofertas_map:
+            ofertas_map[o_raw["id"]] = Oferta.model_validate(o_raw)
+
+    def _desglose_segmento(seg_info: dict[str, Any]) -> dict[str, Any]:
+        d = dict(seg_info.get("desglose") or {})
+        d.setdefault("cobertura", 1.0)
+        d.setdefault("minutos_traslado", 0)
+        d.setdefault("pasaje_diario", 0.0)
+        d.setdefault("penalizacion", 0)
+        return d
+
+    matches_turnos = [
+        Match(
+            perfil_id=pid_m,
+            oferta_id=req.oferta_id,
+            puntaje=seg_m.get("puntaje", 80),
+            desglose=_desglose_segmento(seg_m),
+            brechas=list(seg_m.get("brechas") or []),
+            explicacion=f"Cobertura por turnos ({seg_m['inicio']}-{seg_m['fin']}) aprobada por {req.orientador}",
+        ),
+        Match(
+            perfil_id=pid_t,
+            oferta_id=req.oferta_id,
+            puntaje=seg_t.get("puntaje", 80),
+            desglose=_desglose_segmento(seg_t),
+            brechas=list(seg_t.get("brechas") or []),
+            explicacion=f"Cobertura por turnos ({seg_t['inicio']}-{seg_t['fin']}) aprobada por {req.orientador}",
+        ),
+    ]
+
+    aprobacion = {
+        "orientador": req.orientador,
+        "timestamp": ahora,
+        "aprobados": [
+            {"perfil_id": pid_m, "oferta_id": req.oferta_id},
+            {"perfil_id": pid_t, "oferta_id": req.oferta_id},
+        ],
+    }
+
+    previos = _consentimientos_combinados(estado)
+    consentimientos = consentimientos_para(
+        [(pid_m, req.oferta_id), (pid_t, req.oferta_id)],
+        previos,
+        ahora,
+    )
+    RUTA_OUTBOX.mkdir(parents=True, exist_ok=True)
     conn = _conectar_db_estado(estado)
     try:
-        for seg in (seg_m, seg_t):
-            pid = seg["perfil_id"]
-            post_existente = _buscar_postulacion(estado, pid, req.oferta_id)
-            if post_existente is None:
-                post_db_id = db.crear_postulacion(conn, pid, req.oferta_id, db.ENVIADO)
-                estado.setdefault("postulaciones", []).append(
-                    {
-                        "id": f"POST-{pid}-{req.oferta_id}",
-                        "db_id": post_db_id,
-                        "perfil_id": pid,
-                        "nombre_perfil": seg.get("nombre_perfil", pid),
-                        "oferta_id": req.oferta_id,
-                        "puesto": f"{cob.get('puesto', req.oferta_id)} · Turno {seg['inicio']}-{seg['fin']}",
-                        "empresa": cob.get("empresa", ""),
-                        "puntaje": seg.get("puntaje", 0),
-                        "estado": EstadoPostulacion.ENVIADO.value,
-                        "comentario_orientador": f"Cobertura por turnos ({seg['inicio']}-{seg['fin']}) aprobada por {req.orientador}",
-                        "mensaje_empresa": cob.get("explicacion", ""),
-                        "consentimiento_joven": True,
-                        "archivos_generados": [],
-                    }
-                )
-            else:
-                db.actualizar_estado(conn, int(post_existente["db_id"]), db.ENVIADO)
-                post_existente["estado"] = EstadoPostulacion.ENVIADO.value
-                post_existente["consentimiento_joven"] = True
+        res_post = postular(
+            matches_turnos,
+            perfiles_map,
+            ofertas_map,
+            aprobacion=aprobacion,
+            conn=conn,
+            outbox=RUTA_OUTBOX,
+            consentimientos=consentimientos,
+            mensaje_orientador=f"Propuesta de cobertura compartida por turnos ({seg_m['inicio']}-{seg_m['fin']} y {seg_t['inicio']}-{seg_t['fin']}) aprobada por {req.orientador}.",
+        )
+    except ValueError as error:
+        raise ErrorValidacionTablero(f"No se envió la cobertura por turnos a la empresa: {error}") from error
     finally:
         conn.close()
+
+    for d_post in res_post.decisiones:
+        d_ser = _serializar_decision(d_post)
+        if d_ser not in estado["decisiones"]:
+            estado["decisiones"].append(d_ser)
+
+    archivos_nombres = [arch.name for arch in res_post.archivos]
+
+    for idx, seg in enumerate((seg_m, seg_t)):
+        pid = seg["perfil_id"]
+        archivos_perfil = [
+            arch.name for arch in res_post.archivos
+            if pid in arch.name or req.oferta_id in arch.name
+        ] or archivos_nombres
+
+        post_existente = _buscar_postulacion(estado, pid, req.oferta_id)
+        db_id = res_post.postulaciones[idx] if idx < len(res_post.postulaciones) else None
+        if post_existente is None:
+            estado.setdefault("postulaciones", []).append(
+                {
+                    "id": f"POST-{pid}-{req.oferta_id}",
+                    "db_id": db_id,
+                    "perfil_id": pid,
+                    "nombre_perfil": seg.get("nombre_perfil", pid),
+                    "oferta_id": req.oferta_id,
+                    "puesto": f"{cob.get('puesto', req.oferta_id)} · Turno {seg['inicio']}-{seg['fin']}",
+                    "empresa": cob.get("empresa", ""),
+                    "puntaje": seg.get("puntaje", 0),
+                    "estado": EstadoPostulacion.ENVIADO.value,
+                    "comentario_orientador": f"Cobertura por turnos ({seg['inicio']}-{seg['fin']}) aprobada por {req.orientador}",
+                    "mensaje_empresa": cob.get("explicacion", ""),
+                    "consentimiento_joven": True,
+                    "archivos_generados": archivos_perfil,
+                }
+            )
+        else:
+            if db_id is not None:
+                post_existente["db_id"] = db_id
+            post_existente["estado"] = EstadoPostulacion.ENVIADO.value
+            post_existente["consentimiento_joven"] = True
+            post_existente["comentario_orientador"] = f"Cobertura por turnos ({seg['inicio']}-{seg['fin']}) aprobada por {req.orientador}"
+            post_existente["archivos_generados"] = archivos_perfil
 
     _registrar_decision_db(
         estado,
@@ -2267,6 +2350,9 @@ async def endpoint_reset(request: Request) -> JSONResponse:
 
 
 async def endpoint_cobertura_turnos_demo(request: Request) -> JSONResponse:
+    _, err_resp = await _leer_json_validado(request)
+    if err_resp is not None:
+        return err_resp
     cargar_escenario_cobertura_turnos(ESTADO_GLOBAL)
     anunciar_codigos_joven(ESTADO_GLOBAL)
     return await endpoint_estado(request)
