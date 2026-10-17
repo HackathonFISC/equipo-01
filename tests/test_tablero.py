@@ -1048,3 +1048,69 @@ def test_editar_no_guarda_pii_de_la_nota_ni_del_mensaje(tmp_path: Path, monkeypa
 
     asyncio.run(_ejecutar())
 
+
+def test_cargar_desde_data_no_deja_pasar_pii_de_los_archivos(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Un perfil o un anuncio de data/ con cédula y teléfono entra limpio al tablero y a la base (#188)."""
+    import json as _json
+
+    import app.server as srv
+    from puente.agents import mercado
+    from puente.schemas import Oferta
+
+    datos = tmp_path / "data"
+    (datos / "perfiles").mkdir(parents=True)
+    (datos / "ofertas").mkdir()
+    perfil = {
+        "id": "P99", "nombre": "Ana Ficticia", "edad": 22, "corregimiento": "Arraiján",
+        "horario_libre": [{"dias": ["lunes", "martes"], "hora_inicio": "08:00", "hora_fin": "17:00"}],
+        "salario_minimo": 500, "presupuesto_pasaje_diario": 3.0,
+        "experiencia_texto": "Mi cédula es 8-123-4567; vivo en Calle 5ta casa 12, Arraiján.",
+        "habilidades": [{"skill_id": "atencion_cliente", "evidencia": "atiendo clientes, llamen al 6123-4567"}],
+    }
+    (datos / "perfiles" / "con_pii.json").write_text(_json.dumps(perfil, ensure_ascii=False), encoding="utf-8")
+    (datos / "ofertas" / "ZZ01.txt").write_text(
+        "Puesto: Cajera. Interesados llamar al 6123-4567. Entrevistas en Edificio Ficticio, piso 2.", encoding="utf-8"
+    )
+    monkeypatch.setattr(srv, "RUTA_DATA", datos)
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path / "outbox")
+
+    vistos: list[str] = []
+
+    def mercado_falso(entradas, **_):  # sin grabación para este texto: se mira qué le llega a Mercado
+        texto = entradas[0]["texto"]
+        vistos.append(texto)
+        oferta = Oferta(id="of-zz01", puesto="Cajera", empresa="Empresa de prueba", corregimiento="Arraiján",
+                        requisitos_texto=texto, fuente=entradas[0]["fuente"])
+        return mercado.Resultado(ofertas=[oferta], decisiones=[], errores=[])
+
+    monkeypatch.setattr(srv.mercado, "procesar_ofertas", mercado_falso)
+    crudos = ("8-123-4567", "6123-4567", "Calle 5ta")
+
+    async def _ejecutar() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            assert (await client.post("/api/reset")).status_code == 200
+            r = await client.post("/api/cargar-data", json={"tipo": "perfil", "item_id": "data/perfiles/con_pii.json"})
+            assert r.status_code == 200, r.text
+            r = await client.post("/api/cargar-data", json={"tipo": "oferta", "item_id": "data/ofertas/ZZ01.txt"})
+            assert r.status_code == 200, r.text
+            estado = (await client.get("/api/estado")).json()
+
+        publico = _json.dumps(estado, ensure_ascii=False)
+        for dato in crudos:
+            assert dato not in publico, dato
+            assert all(dato not in t for t in vistos), dato  # tampoco le llega a Mercado (ni al LLM)
+        cargado = next(p for p in estado["perfiles"] if p["id"] == "PERFIL-DATA-P99")
+        assert cargado["corregimiento"] == "Arraiján"
+        assert "[TELEFONO]" in cargado["habilidades"][0]["evidencia"]
+        assert "Edificio Ficticio" in vistos[0]  # la dirección de la empresa se queda
+
+        conn = db.conectar(srv.ESTADO_GLOBAL["_db_path"])
+        try:
+            guardado = " ".join(" ".join(str(c) for c in tuple(f)) for f in conn.execute("SELECT * FROM decisiones"))
+        finally:
+            conn.close()
+        for dato in crudos:
+            assert dato not in guardado, dato
+
+    asyncio.run(_ejecutar())

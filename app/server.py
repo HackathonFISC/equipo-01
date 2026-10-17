@@ -2544,7 +2544,8 @@ def _rechazo_guardrails(estado: dict[str, Any], datos: dict[str, Any]) -> str | 
 def _cargar_oferta_desde_archivo(estado: dict[str, Any], ruta: Path) -> dict[str, Any]:
     """Lee un anuncio de data/ofertas con el agente Mercado (puente.llm; en reproducir, las grabaciones de #139)."""
     rel = f"data/ofertas/{ruta.name}"
-    texto = ruta.read_text(encoding="utf-8")
+    # Sin cédula ni teléfono antes de Mercado y del tablero; la dirección de la empresa se queda (#95, #188).
+    texto = limpiar_entrada({"ofertas": ruta.read_text(encoding="utf-8")})["ofertas"]
     rechazo = _rechazo_guardrails(estado, {"texto": texto})
     if rechazo:
         raise ErrorValidacionTablero(rechazo)
@@ -2581,7 +2582,9 @@ def _cargar_perfil_desde_archivo(estado: dict[str, Any], ruta: Path) -> dict[str
     """Suma al tablero un perfil sintético de data/perfiles tal como está en el archivo (#188)."""
     rel = f"data/perfiles/{ruta.name}"
     try:
-        perfil = Perfil.model_validate(json.loads(ruta.read_text(encoding="utf-8")))
+        # Todo texto del archivo (nombre, evidencias) sin cédula, teléfono ni dirección exacta, como cualquier
+        # otra entrada; el corregimiento se conserva (#188).
+        perfil = Perfil.model_validate(limpiar_entrada(json.loads(ruta.read_text(encoding="utf-8"))))
     except ValueError as exc:
         raise ErrorValidacionTablero(f"{rel} no es un perfil válido: {exc}") from exc
     perfil = perfil.model_copy(update={"id": f"PERFIL-DATA-{perfil.id}"})
