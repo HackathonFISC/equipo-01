@@ -185,10 +185,16 @@ def _es_minimo_legal(frase: str) -> bool:
 
 
 def _es_experiencia(plegado: str, m: re.Match[str]) -> bool:
-    """"Mínimo 20 años de experiencia", "experiencia: desde 20 años" o "experiencia mínima de 20 años
-    en adelante" cuentan experiencia, no edad."""
+    """"Mínimo 20 años de experiencia", "experiencia: desde 20 años" o "experiencia comprobable de 20
+    años en adelante" cuentan experiencia, no edad.
+
+    Entre "experiencia" y el número se admite un solo calificativo (laboral, mínima, previa o un
+    adjetivo en -ble, -ado/-ada o -ivo/-iva). Una lista abierta dejaría pasar un límite de edad real
+    como "experiencia y desde 25 años" o "experiencia como cajera desde 25 años".
+    """
     antes, despues = plegado[max(0, m.start() - 40) : m.start()], plegado[m.end() : m.end() + 20]
-    previa = r"experiencia(?:\s+(?:laboral|minima|previa))?\s*:?\s*(?:de\s*)?$"
+    calificativo = r"(?:laboral|minima|previa|\w+(?:ble|ad[oa]|iv[oa]))"
+    previa = rf"experiencia(?:\s+{calificativo})?\s*:?\s*(?:de\s*)?$"
     return re.match(r"\s*(?:de\s+)?experiencia", despues) is not None or re.search(previa, antes) is not None
 
 

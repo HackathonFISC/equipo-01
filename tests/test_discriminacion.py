@@ -279,10 +279,27 @@ def test_edad_minima_legal_de_18_no_bloquea(texto):
         "Experiencia de 20 años en adelante",
         "Experiencia mínima de 20 años en adelante",
         "Experiencia laboral: 20 años en adelante",
+        "Experiencia comprobable desde 20 años",
+        "Experiencia deseable de 30 años en adelante",
+        "Experiencia demostrada de 20 años en adelante",
+        "Experiencia relacionada desde 20 años",
     ],
 )
 def test_numeros_que_no_son_edad_no_bloquean(texto):
     assert revisar_texto(texto) == []
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Buscamos experiencia y desde 25 años",
+        "Experiencia como cajera desde 25 años",
+        "Sin experiencia, desde 25 años",
+        "Experiencia en ventas. Edad: 26 años en adelante",
+    ],
+)
+def test_experiencia_cerca_de_un_limite_de_edad_no_lo_tapa(texto):
+    assert esta_bloqueada(revisar_texto(texto))
 
 
 @pytest.mark.parametrize(
