@@ -21,3 +21,5 @@ jobs:
 
       - name: Correr pruebas
         run: uv run pytest -q
+        env:
+          LLM_MODO: reproducir

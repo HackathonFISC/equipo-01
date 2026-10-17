@@ -1,5 +1,5 @@
 {
-  "_nota": "Casos sintéticos para el agente Perfil (#6). respuesta_llm es la salida guardada del LLM, también sirve para el modo sin conexión de la demo; incluye a propósito habilidades inventadas o fuera de la taxonomía que el código debe descartar.",
+  "_nota": "Casos sintéticos para el agente Perfil (#6, #44). entrada es un elemento de entradas_perfil: datos del formulario fijo más las respuestas a PREGUNTAS_ENTREVISTA (o el CV). respuesta_llm es la salida guardada del LLM, también sirve para el modo sin conexión (--reproducir); incluye a propósito habilidades inventadas, fuera de la taxonomía y datos de formulario que el código debe descartar o ignorar.",
   "casos": [
     {
       "nombre": "yaritza_fonda_sin_cv",
@@ -7,30 +7,67 @@
         "id": "yaritza",
         "nombre": "Yaritza Ficticia",
         "genero": "F",
+        "edad": 20,
+        "corregimiento": "La Chorrera",
+        "horario_clases": [
+          {
+            "dias": [
+              "lunes",
+              "martes",
+              "miercoles",
+              "jueves",
+              "viernes"
+            ],
+            "hora_inicio": "18:00",
+            "hora_fin": "22:00"
+          }
+        ],
+        "salario_minimo": 400,
         "presupuesto_pasaje_diario": 3.0,
         "respuestas": [
-          "Tengo 20 años y vivo en La Chorrera. Mi celular es 6123-4567.",
-          "Estudio de noche, de lunes a viernes de 6 a 10 de la noche. En el día ayudo en la fonda.",
           "Atiendo la fonda de mi mamá todas las mañanas. Atiendo a los clientes y les tomo el pedido, cobro y doy el vuelto, y anoto lo que se va acabando para comprar el surtido del día siguiente.",
+          "No he tenido otro trabajo. Si quieren algo de la fonda me escriben al 6123-4567.",
           "No he hecho voluntariado.",
-          "Sé usar el celular y ayudo a cocinar el almuerzo. Necesito ganar al menos 400 al mes."
+          "Sé usar el celular y ayudo a cocinar el almuerzo.",
+          "Mis hermanos me piden ayuda con las tareas de la escuela."
         ]
       },
       "respuesta_llm": {
         "habilidades": [
-          {"skill_id": "atencion_cliente", "evidencia": "Atiendo a los clientes y les tomo el pedido"},
-          {"skill_id": "manejo_caja", "evidencia": "cobro y doy el vuelto"},
-          {"skill_id": "inventario", "evidencia": "anoto lo que se va acabando para comprar el surtido"},
-          {"skill_id": "cocina", "evidencia": "ayudo a cocinar el almuerzo"},
-          {"skill_id": "ventas", "evidencia": "vendí más de 100 platos al día"},
-          {"skill_id": "liderazgo", "evidencia": "Atiendo la fonda de mi mamá"}
+          {
+            "skill_id": "atencion_cliente",
+            "evidencia": "Atiendo a los clientes y les tomo el pedido"
+          },
+          {
+            "skill_id": "manejo_caja",
+            "evidencia": "cobro y doy el vuelto"
+          },
+          {
+            "skill_id": "inventario",
+            "evidencia": "anoto lo que se va acabando para comprar el surtido"
+          },
+          {
+            "skill_id": "cocina",
+            "evidencia": "ayudo a cocinar el almuerzo"
+          },
+          {
+            "skill_id": "ventas",
+            "evidencia": "vendí más de 100 platos al día"
+          },
+          {
+            "skill_id": "liderazgo",
+            "evidencia": "Atiendo la fonda de mi mamá"
+          }
         ],
-        "edad": 20,
-        "corregimiento": "La Chorrera",
-        "salario_minimo": 400,
-        "horario_clases": [{"dias": ["lunes", "martes", "miercoles", "jueves", "viernes"], "hora_inicio": "18:00", "hora_fin": "22:00"}]
+        "edad": 25,
+        "salario_minimo": 900
       },
-      "habilidades_esperadas": ["atencion_cliente", "manejo_caja", "inventario", "cocina"]
+      "habilidades_esperadas": [
+        "atencion_cliente",
+        "manejo_caja",
+        "inventario",
+        "cocina"
+      ]
     },
     {
       "nombre": "carlos_cv_supermercado",
@@ -43,17 +80,29 @@
       },
       "respuesta_llm": {
         "habilidades": [
-          {"skill_id": "manejo_caja", "evidencia": "manejo de caja registradora y cuadre de caja al cierre del turno"},
-          {"skill_id": "atencion_cliente", "evidencia": "Atención al cliente en horas pico."},
-          {"skill_id": "excel", "evidencia": "Excel básico para planillas de turnos"},
-          {"skill_id": "inventario", "evidencia": "controlaba el inventario de la tienda"}
-        ],
-        "edad": 23,
-        "corregimiento": "Barrio Colón",
-        "salario_minimo": null,
-        "horario_clases": []
+          {
+            "skill_id": "manejo_caja",
+            "evidencia": "manejo de caja registradora y cuadre de caja al cierre del turno"
+          },
+          {
+            "skill_id": "atencion_cliente",
+            "evidencia": "Atención al cliente en horas pico."
+          },
+          {
+            "skill_id": "excel",
+            "evidencia": "Excel básico para planillas de turnos"
+          },
+          {
+            "skill_id": "inventario",
+            "evidencia": "controlaba el inventario de la tienda"
+          }
+        ]
       },
-      "habilidades_esperadas": ["manejo_caja", "atencion_cliente", "excel"]
+      "habilidades_esperadas": [
+        "manejo_caja",
+        "atencion_cliente",
+        "excel"
+      ]
     },
     {
       "nombre": "maria_voluntariado",
@@ -61,27 +110,41 @@
         "id": "maria",
         "nombre": "María Ficticia",
         "genero": "F",
+        "edad": 18,
+        "corregimiento": "Vista Alegre",
+        "salario_minimo": 500,
         "respuestas": [
-          "Tengo 18 años, vivo en Vista Alegre.",
-          "Terminé el colegio y ahora no estudio.",
           "No he trabajado en negocios.",
+          "Nunca he tenido trabajo.",
           "En la iglesia ayudo a organizar los bazares y las kermeses, y coordino con otros jóvenes quién lleva cada cosa.",
-          "Sé algo de inglés del colegio. Quisiera ganar 500."
+          "Sé algo de inglés del colegio.",
+          "Me gusta ayudar a mi abuela con sus mandados."
         ]
       },
       "respuesta_llm": {
         "habilidades": [
-          {"skill_id": "Organizar eventos", "evidencia": "ayudo a organizar los bazares y las kermeses"},
-          {"skill_id": "trabajo_equipo", "evidencia": "coordino con otros jóvenes quién lleva cada cosa"},
-          {"skill_id": "ingles_basico", "evidencia": "inglés"},
-          {"skill_id": "excel", "evidencia": "manejo Excel avanzado"}
-        ],
-        "edad": 18,
-        "corregimiento": "Vista Alegre",
-        "salario_minimo": 500,
-        "horario_clases": []
+          {
+            "skill_id": "Organizar eventos",
+            "evidencia": "ayudo a organizar los bazares y las kermeses"
+          },
+          {
+            "skill_id": "trabajo_equipo",
+            "evidencia": "coordino con otros jóvenes quién lleva cada cosa"
+          },
+          {
+            "skill_id": "ingles_basico",
+            "evidencia": "inglés"
+          },
+          {
+            "skill_id": "excel",
+            "evidencia": "manejo Excel avanzado"
+          }
+        ]
       },
-      "habilidades_esperadas": ["organizacion_eventos", "trabajo_equipo"]
+      "habilidades_esperadas": [
+        "organizacion_eventos",
+        "trabajo_equipo"
+      ]
     },
     {
       "nombre": "kevin_sin_experiencia",
@@ -89,23 +152,40 @@
         "id": "kevin",
         "nombre": "Kevin Ficticio",
         "genero": "M",
+        "edad": 18,
+        "corregimiento": "Tocumen",
+        "horario_clases": [
+          {
+            "dias": [
+              "lunes",
+              "martes",
+              "miercoles",
+              "jueves",
+              "viernes"
+            ],
+            "hora_inicio": "07:00",
+            "hora_fin": "12:00"
+          }
+        ],
         "respuestas": [
-          "17 años, Tocumen.",
-          "Estoy en el colegio por la mañana.",
           "No.",
           "No.",
+          "No.",
+          "No sé mucho.",
           "Nada todavía."
         ]
       },
       "respuesta_llm": {
         "habilidades": [
-          {"skill_id": "trabajo_equipo", "evidencia": "siempre trabajo bien en grupo"},
-          {"skill_id": "excel", "evidencia": "No."}
-        ],
-        "edad": 17,
-        "corregimiento": "Tocumen",
-        "salario_minimo": null,
-        "horario_clases": [{"dias": ["lunes"], "hora_inicio": "7:00", "hora_fin": "12:00"}]
+          {
+            "skill_id": "trabajo_equipo",
+            "evidencia": "siempre trabajo bien en grupo"
+          },
+          {
+            "skill_id": "excel",
+            "evidencia": "No."
+          }
+        ]
       },
       "habilidades_esperadas": []
     }

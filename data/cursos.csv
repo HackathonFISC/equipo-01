@@ -1,0 +1,10 @@
+id,curso,area,horas,corregimiento,horario,cupos,costo,skill_ids
+INADEH-CHO-01,Hoja de Cálculo Básica (Excel Aplicado),Tecnologías de la Información,40,La Chorrera,Lunes a Viernes 08:00-12:00,20,0.0,excel_basico|excel|registro_datos|ofimatica_basica
+INADEH-ARR-02,Operaciones de Caja Comercial y Atención al Cliente,Gestión Empresarial,50,Arraiján,Lunes a Viernes 08:00-13:00,18,0.0,manejo_caja|atencion_cliente|facturacion
+INADEH-CHO-03,Auxiliar de Almacén Bodega e Inventario,Logística y Transporte,60,La Chorrera,Lunes a Viernes 13:00-17:00,15,0.0,inventario|despacho_mercancia|recepcion_mercancia|reposicion_productos|control_calidad
+INADEH-TOC-04,Excel y Gestión Administrativa Documental (Sede Tocumen),Gestión Empresarial,40,Tocumen,Lunes a Viernes 08:00-12:00,25,0.0,excel_basico|excel|facturacion|archivo_documentos
+INADEH-CHO-NOCHE-05,Hoja de Cálculo Nocturno (Sede La Chorrera),Tecnologías de la Información,40,La Chorrera,Lunes a Viernes 18:30-21:30,20,0.0,excel_basico|excel
+INADEH-CHO-SINCUPO-06,Excel Intensivo Matutino (Cupo Agotado),Tecnologías de la Información,30,La Chorrera,Lunes a Viernes 08:00-11:00,0,0.0,excel_basico|excel
+INADEH-SM-07,Atención al Cliente y Ventas en Mostrador,Gestión Empresarial,45,San Miguelito,Lunes a Viernes 08:00-12:30,22,0.0,atencion_cliente|ventas_mostrador|ventas|comunicacion_efectiva|trabajo_equipo
+INADEH-CAL-08,Manipulación Higiénica de Alimentos y Cocina Básica,Gastronomía y Turismo,50,Calidonia,Lunes a Viernes 08:00-12:00,16,0.0,cocina|limpieza|trabajo_equipo
+INADEH-BV-09,Inglés Básico para Atención Comercial,Idiomas,60,Bella Vista,Lunes a Viernes 13:00-17:00,20,0.0,ingles_basico|atencion_cliente

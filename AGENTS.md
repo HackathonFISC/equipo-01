@@ -39,7 +39,7 @@ Vocabulario. **Agente de desarrollo**: la IA que programa contigo. **Agente del 
 ```
 entrada → guardrails (#9) → router por tipo
    oferta  → Mercado (#5)  ─┐
-   perfil  → Perfil  (#6)  ─┴→ Matching (#4) → Auditor (#8) ──sesgo──→ Matching
+   perfil  → Perfil  (#6)  ─┴→ Matching (#4) → Auditor (#8, #50) ──sesgo──→ Perfil / orientador
                                       ↓ ok
                               Formación (#14, opcional)
                                       ↓
@@ -62,7 +62,7 @@ Cada nodo escribe una `Decision` en la tabla `decisiones` vía `puente/tools/db.
 | `puente/agents/mercado.py`, `puente/rules/{discriminacion,taxonomia}.py` | #5 | Extracción estructurada, reglas regex de la Ley 11 de 2005, dedup por hash |
 | `puente/agents/perfil.py` | #6 | CV o entrevista de 5 preguntas, habilidades con evidencia literal, PII fuera del LLM |
 | `puente/tools/{db,pdf,telegram,calendario}.py`, `puente/agents/postulacion.py` | #7 | Acciones reales, solo tras aprobación |
-| `puente/agents/auditor.py` | #8 | Contrafactuales de nombre y género, arista de regreso a Matching |
+| `puente/agents/auditor.py` | #8, #50 | Contrafactuales de nombre, género y corregimiento, línea base y retorno a Perfil / orientador |
 | `puente/guardrails.py` | #9 | Tamaños, rangos, inyección, fuera de alcance |
 | `puente/graph.py` completo | #10 | Router, `interrupt()`, checkpointer, trazas |
 | `app/streamlit_app.py` | #11 | Tablero del orientador: lista corta, bloqueadas, trazas, embudo, Auditor |
@@ -154,20 +154,8 @@ No hagas: tocar archivos fuera del alcance del issue sin comentarlo · cambiar `
 
 ## 10. Línea de tiempo y congelamiento
 
-Propuesta; el tablero manda.
-
-| Horas | Issues | Nota |
-|---|---|---|
-| 0 a 1 | #1 | Esqueleto; los demás leen issues y preparan datos de juguete |
-| 1 a 3 | #2, #3, #4 (con datos de juguete) | Contratos primero |
-| 3 a 8 | #5, #6, #9, #7, #4 → #8 | Agentes y herramientas en paralelo |
-| 8 a 12 | #10, #12, #11 | Integración y tablero; **demo MVP en la hora 12** |
-| 12 a 16 | #13, bugs | Evals, correcciones, primer ensayo |
-| 16 a 20 | #15, #14 si hay tiempo | Documentación, stretch |
-| 21 | #16 | Grabar el video aunque falten detalles |
-| 22:30 | Freeze | Solo `fix` y `docs`; los `stretch` abiertos se cierran como fuera de alcance |
-| 23:00 | #17 | Ensayo final en clon limpio, modo sin conexión listo |
-| 23:30 | #17 | Solo @jesus12ga crea y empuja `final-24h`; después nadie hace push |
+El horario único de las 24 horas y los cortes de alcance están en el [issue #41](https://github.com/HackathonFISC/equipo-01/issues/41).
+Sus decisiones están copiadas en [`docs/decisiones.md`](docs/decisiones.md).
 
 ## 11. Comandos rápidos
 

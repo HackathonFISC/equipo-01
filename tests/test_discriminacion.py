@@ -1,13 +1,20 @@
-"""Reglas de discriminación (#5): regex sobre el texto original, sin LLM."""
+"""Reglas de discriminación (#5, #43): regex sobre el texto original, sin LLM."""
 
 import pytest
 
 from puente.rules.discriminacion import (
     BUENA_PRESENCIA,
+    CLASE_SOCIAL,
+    DISCAPACIDAD,
     EDAD,
     ESTADO_CIVIL,
     FOTO,
+    IDEAS_POLITICAS,
+    NACIMIENTO,
+    RAZA,
+    RELIGION,
     SEXO,
+    SEXO_IMPLICITO,
     esta_bloqueada,
     revisar_texto,
 )
@@ -23,9 +30,9 @@ def _reglas(texto):
 def test_criterio_del_issue_edad_bloquea_y_presencia_alerta():
     hallazgos = revisar_texto("Se busca cajera: buena presencia, 18 a 25 años.")
     assert esta_bloqueada(hallazgos)
-    assert [(h.regla, h.bloquea) for h in hallazgos] == [(BUENA_PRESENCIA, False), (EDAD, True)]
-    assert hallazgos[1].frase == "18 a 25 años"
-    assert "art. 2" in hallazgos[1].como_texto()
+    assert [(h.regla, h.bloquea) for h in hallazgos] == [(SEXO_IMPLICITO, False), (BUENA_PRESENCIA, False), (EDAD, True)]
+    assert hallazgos[2].frase == "18 a 25 años"
+    assert "art. 2" in hallazgos[2].como_texto()
 
 
 @pytest.mark.parametrize(
@@ -88,7 +95,7 @@ def test_alertas_no_bloquean(texto, regla, frase):
         "Turno de 14 a 22 horas",
         "Salario de 600 a 800 balboas",
         "Edad: indiferente. Ambos sexos.",
-        "Se busca cajera con manejo de caja",
+        "Se busca cajero(a) con manejo de caja",
         "Atención de clientes con buena actitud",
     ],
 )
@@ -131,3 +138,174 @@ def test_cargar_taxonomia():
 )
 def test_normalizar_habilidad(texto, esperado):
     assert normalizar_habilidad(texto, cargar_taxonomia(TAXONOMIA_MINI)) == esperado
+
+
+# ---------------------------------------------------------------- #43: sexo implícito y demás causales del art. 1
+
+
+@pytest.mark.parametrize(
+    "texto, frase",
+    [
+        ("Solo damas", "Solo damas"),
+        ("Señorita para recepción, turno de mañana", "Señorita"),
+        ("Requisitos: masculino, licencia de conducir", "masculino"),
+        ("Bachiller, femenino, disponibilidad inmediata", "femenino"),
+    ],
+)
+def test_sexo_implicito_bloquea(texto, frase):
+    hallazgos = revisar_texto(texto)
+    assert esta_bloqueada(hallazgos)
+    assert (SEXO, frase) in _reglas(texto)
+    assert "art. 1" in hallazgos[0].como_texto()
+
+
+@pytest.mark.parametrize(
+    "texto, frase",
+    [
+        ("Se busca cajera con manejo de caja", "cajera"),
+        ("Vendedora para tienda de ropa en Albrook", "Vendedora"),
+        ("Necesitamos meseras para fin de semana", "meseras"),
+        ("Niñera con experiencia", "Niñera"),
+    ],
+)
+def test_puesto_solo_en_femenino_alerta_sin_bloquear(texto, frase):
+    hallazgos = revisar_texto(texto)
+    assert not esta_bloqueada(hallazgos)
+    assert _reglas(texto) == [(SEXO_IMPLICITO, frase)]
+    texto_alerta = hallazgos[0].como_texto()
+    assert texto_alerta.startswith("alerta · sexo_implicito") and "art. 1" in texto_alerta
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Se busca cajero(a) para minisúper",
+        "Se busca cajera(o) para minisúper",
+        "Vendedor/a con experiencia",
+        "Cajera/o para turno nocturno",
+        "Solicitamos mesero o mesera",
+        "Meseras y meseros para eventos",
+        "Sexo: masculino o femenino",
+        "Género: femenino/masculino",
+        "Se aceptan personas con discapacidad",
+        "Empresa inclusiva: igualdad de oportunidades",
+    ],
+)
+def test_sexo_implicito_sin_falsos_positivos(texto):
+    assert revisar_texto(texto) == []
+
+
+@pytest.mark.parametrize(
+    "texto, regla, frase",
+    [
+        ("Preferiblemente de tez clara", RAZA, "tez clara"),
+        ("Indicar raza en la hoja de vida", RAZA, "raza"),
+        ("Panameño de nacimiento", NACIMIENTO, "Panameño de nacimiento"),
+        ("Sin discapacidad ni impedimentos", DISCAPACIDAD, "Sin discapacidad"),
+        ("No se aceptan personas con discapacidad", DISCAPACIDAD, "No se aceptan personas con discapacidad"),
+        ("Persona de buena familia", CLASE_SOCIAL, "de buena familia"),
+        ("Nivel socioeconómico medio alto", CLASE_SOCIAL, "Nivel socioeconómico"),
+        ("Católico practicante", RELIGION, "Católico"),
+        ("Indicar religión", RELIGION, "religión"),
+        ("Afiliado al PRD", IDEAS_POLITICAS, "Afiliado al PRD"),
+        ("Afinidad con nuestras ideas políticas", IDEAS_POLITICAS, "ideas políticas"),
+    ],
+)
+def test_demas_causales_del_art_1_alertan_citando_el_articulo(texto, regla, frase):
+    hallazgos = revisar_texto(texto)
+    assert not esta_bloqueada(hallazgos)
+    assert _reglas(texto) == [(regla, frase)]
+    assert hallazgos[0].como_texto().startswith(f"alerta · {regla}")
+    assert "Ley 11 de 2005 art. 1" in hallazgos[0].como_texto()
+
+
+# ---------------------------------------------------------------- #73: edad mínima mayor de 18 y más puestos en femenino
+
+
+def test_ofertas_reales_ct40_bloquea_por_edad_minima_y_ct03_alerta_por_operaria():
+    ct40 = revisar_texto("Edad: A partir de 26 años")
+    assert esta_bloqueada(ct40)
+    assert [(h.regla, h.frase) for h in ct40] == [(EDAD, "Edad: A partir de 26 años")]
+    assert ct40[0].como_texto().startswith("bloqueo · edad") and "Ley 11 de 2005 art. 2" in ct40[0].como_texto()
+
+    ct03 = revisar_texto("Puesto: Operaria de Limpieza")
+    assert not esta_bloqueada(ct03)
+    assert [(h.regla, h.frase) for h in ct03] == [(SEXO_IMPLICITO, "Operaria")]
+    assert ct03[0].como_texto().startswith("alerta · sexo_implicito")
+
+
+@pytest.mark.parametrize(
+    "texto, frase",
+    [
+        ("Requisitos: desde 25 años, bachiller", "desde 25 años"),
+        ("Mínimo 26 años", "Mínimo 26 años"),
+        ("Edad mínima: 30", "Edad mínima: 30"),
+        ("A partir de los 26 años", "A partir de los 26 años"),
+        ("Personas de 26 años en adelante", "26 años en adelante"),
+    ],
+)
+def test_edad_minima_mayor_de_18_bloquea(texto, frase):
+    hallazgos = revisar_texto(texto)
+    assert esta_bloqueada(hallazgos)
+    assert _reglas(texto) == [(EDAD, frase)]
+    assert "art. 2" in hallazgos[0].como_texto()
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Mayor de 18",
+        "A partir de 18 años",
+        "18 años en adelante",
+        "Edad: 18 años en adelante",
+        "Edad: desde 18 años",
+    ],
+)
+def test_edad_minima_legal_de_18_no_bloquea(texto):
+    assert revisar_texto(texto) == []
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Inicio a partir de 2026",
+        "Entrada a partir de las 8",
+        "Bono desde 25 dólares",
+        "Mínimo 26 horas semanales",
+        "2 años de experiencia",
+        "Mayor de 18, turno nocturno",
+        "Mínimo 20 años de experiencia",
+        "Experiencia: desde 20 años",
+    ],
+)
+def test_numeros_que_no_son_edad_no_bloquean(texto):
+    assert revisar_texto(texto) == []
+
+
+@pytest.mark.parametrize(
+    "texto, frase",
+    [
+        ("Operaria de producción", "Operaria"),
+        ("Empacadora para supermercado", "Empacadora"),
+        ("Despachadora de combustible", "Despachadora"),
+        ("Mesera para restaurante", "Mesera"),
+    ],
+)
+def test_mas_puestos_en_femenino_alertan(texto, frase):
+    hallazgos = revisar_texto(texto)
+    assert not esta_bloqueada(hallazgos)
+    assert _reglas(texto) == [(SEXO_IMPLICITO, frase)]
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Recepcionista bilingüe",
+        "Se busca cajero(a)",
+        "Operario(a) de producción",
+        "Operaria/o de limpieza",
+        "Solicitamos mesero o mesera",
+    ],
+)
+def test_puestos_neutros_o_en_ambos_generos_no_alertan(texto):
+    assert revisar_texto(texto) == []

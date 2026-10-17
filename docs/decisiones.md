@@ -23,6 +23,35 @@ Una entrada por decisión que cambie stack, arquitectura, alcance o forma de tra
 - **Consecuencias:** El tablero se ejecuta con `uv run uvicorn app.server:app --port 8000`, expone endpoints JSON validados con Pydantic (`415`/`422`), invoca directamente los módulos reales de `puente` (`schemas`, `matching`, `auditor`, `formacion`, `postulacion`) y se prueba de punta a punta con `httpx` en `tests/test_tablero.py`.
 - **Quién:** @Migue0714
 
+## Decisiones del 16 de octubre (issue #41)
+
+Copiadas del [issue #41](https://github.com/HackathonFISC/equipo-01/issues/41), que tiene además el horario único de las 24 horas.
+
+- Modelo: **Claude Opus 5.5** (`claude-opus-5-5`), con el crédito de US$100 del equipo, detrás de `puente/llm.py` (#45); Gemini 4 Argon queda de respaldo opcional. La variable es `PUENTE_MODELO_LLM`, la que ya leen los PRs #35 y #36. @Cornelio-Guerra crea y reparte las claves por privado.
+- Entradas del grafo: `ofertas_crudas` y `entradas_perfil` (las que ya leen los PRs #35 y #36; #37), más `tipo_entrada` para el router.
+- Aprobación: el orientador aprueba la lista corta de cada vacante afectada, que es lo que se envía a la empresa, y confirma el consentimiento de cada joven. El Matching usa todos los perfiles y ofertas de `puente.db` (#46), y las parejas ya enviadas quedan fijas.
+- `puente/agents/matching.py` es de @Migue0714 y la explicación es la plantilla determinística, sin LLM (#48).
+- "Editar" en la aprobación cambia el texto del mensaje a la empresa y la nota del orientador; no recalcula.
+- Cupos y horarios de los cursos del INADEH: datos de prueba, rotulados como tales.
+- Ofertas duplicadas: pares de prueba con variación realista; se unen por similitud, no por hash exacto.
+- Los minutos de traslado filtran (según el máximo del joven) y desempatan, pero no ponen a competir a unos jóvenes contra otros.
+- Empresas con nombres de prueba en datos, tablero y video.
+- Demo con jóvenes de 18 a 29 años; el joven consiente antes de que su CV llegue a una empresa; la empresa recibe un CV ciego.
+- Formación deja de ser stretch: es el tercer lado del mercado (#53).
+- El helper de estado se llama `agregar_decision()` (#42); `db.registrar_decision()` (PR #34) es el que escribe en SQLite.
+
+### Cortes de alcance
+
+- H4: si #42 o los datos mínimos no están, la demo usa 8 corregimientos y 12 ofertas.
+- H6: #5 solo con texto (sin imagen ni PDF) y #6 solo con entrevista (sin CV).
+- H8: si el Auditor (#8, con el tope de #50 fase 1) no está integrado al grafo, se muestra su reporte actual, corrido aparte sobre la lista corta de Yaritza y guardado en un archivo.
+- H10: si el tablero no está conectado al grafo, la demo de H12 se hace por terminal.
+- Ningún stretch antes de H12.
+
+### Cierre
+
+Congelar funciones a las 08:00 del 17 de octubre (H20), congelar código a las 10:30 (H22:30) y tag `final-24h` a las 11:00 (H23), nunca después de las 11:30. La hora 0 está sin confirmar y se planificó con la más temprana (12:00).
+
 ## Plantilla
 
 ## AAAA-MM-DD · Título

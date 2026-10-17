@@ -5,6 +5,7 @@ description = "Sistema agéntico de inserción laboral juvenil — Hackathon FIS
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "anthropic>=1.15.0",
     "fpdf2",
     "ics",
     "langchain-google-genai",
@@ -13,6 +14,7 @@ dependencies = [
     "langsmith",
     "ortools",
     "pydantic",
+    "pypdf>=6.21.0",
     "python-dotenv",
     "pyyaml",
     "starlette",

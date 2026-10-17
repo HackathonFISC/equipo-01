@@ -1,13 +1,18 @@
-"""Validación de entradas, detección de inyección y fuera de alcance. Issue #9.
+"""Validación de entradas, detección de inyección, fuera de alcance y limpieza de PII. Issues #9 y #56.
 
 Todo es determinístico, sin LLM: se corre antes de gastar una sola llamada al modelo.
 
 - Archivos: solo pdf, jpg o png de hasta 5 MB. El tamaño se revisa antes que nada, así
-  un archivo de 50 MB se rechaza sin leer su contenido ni llamar al LLM.
+  un archivo de 50 MB se rechaza sin leer su contenido ni llamar al LLM. Las notas de voz
+  (.ogg, .mp3, .m4a, .wav) se rechazan con un mensaje propio hasta que exista #55.
 - Texto: hasta 10,000 caracteres y no vacío.
-- Rangos: edad entre 15 y 29, salario mayor que 0.
+- Rangos: edad entre 18 y 29 (los menores quedan fuera de la demo), salario mayor que 0.
 - Inyección: se marca y el texto sigue como dato; nunca se ejecuta como instrucción.
+  Las palabras clave solo marcan: la defensa real es estructural (salida estructurada,
+  validación con Pydantic y decisiones en código).
 - Fuera de alcance: respuesta fija y registro. Si hay duda, se deja pasar y se marca.
+- PII: `limpiar_entrada` quita cédula, teléfono y dirección exacta antes de `graph.invoke`,
+  para que el dato crudo no llegue al checkpointer, a `decisiones`, al LLM ni a LangSmith.
 
 Cada verificación devuelve un `ResultadoGuardrail` con su `Decision`, y `nodo_guardrails`
 junta todas en la clave `decisiones` del estado.
@@ -16,19 +21,21 @@ junta todas en la clave `decisiones` del estado.
 from __future__ import annotations
 
 import math
+import os
 import re
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from puente.agents.perfil import quitar_pii
 from puente.schemas import Decision, EstadoPuente
 
 AGENTE = "guardrails"
 
 MAX_BYTES_ARCHIVO = 5 * 1024 * 1024
 MAX_CARACTERES_TEXTO = 10_000
-EDAD_MIN, EDAD_MAX = 15, 29
+EDAD_MIN, EDAD_MAX = 18, 29
 EXTENSIONES_PERMITIDAS = {".pdf": "pdf", ".jpg": "jpg", ".jpeg": "jpg", ".png": "png"}
 # Primeros bytes de cada formato: evita que un ejecutable renombrado a .pdf pase.
 FIRMAS_ARCHIVO = {
@@ -37,7 +44,15 @@ FIRMAS_ARCHIVO = {
     "jpg": (b"\xff\xd8\xff",),
 }
 
+# Notas de voz: se rechazan con un mensaje claro hasta que #55 las transcriba.
+EXTENSIONES_AUDIO = {".ogg", ".mp3", ".m4a", ".wav"}
+MENSAJE_AUDIO = "Todavía no aceptamos notas de voz; escribe tu mensaje o sube un pdf, jpg o png."
+
 RESPUESTA_FUERA_DE_ALCANCE = "Solo atiendo empleo y formación."
+
+# Rutas de archivo: se dejan intactas para no romper la lectura; el texto que sale de ellas
+# lo limpia el agente que lo extrae (Perfil quita la PII antes del LLM).
+CLAVES_SIN_LIMPIAR = frozenset({"cv_ruta", "ruta"})
 
 # Las reglas se aplican sobre el texto normalizado: minúsculas, sin acentos, espacios simples.
 REGLAS_INYECCION: dict[str, re.Pattern[str]] = {
@@ -191,6 +206,11 @@ def validar_archivo(
 ) -> ResultadoGuardrail:
     """Acepta pdf, jpg o png de hasta 5 MB. Mira el tamaño declarado antes de tocar el contenido."""
     entrada = f"archivo {nombre!r} de {tamano_bytes} bytes"
+    extension = Path(nombre).suffix.lower()
+    if extension in EXTENSIONES_AUDIO:
+        return _decidir(
+            False, MENSAJE_AUDIO, entrada, "rechazado", respuesta=MENSAJE_AUDIO
+        )
     if tamano_bytes > MAX_BYTES_ARCHIVO:
         mb = tamano_bytes / (1024 * 1024)
         return _decidir(
@@ -201,7 +221,6 @@ def validar_archivo(
         )
     if tamano_bytes <= 0:
         return _decidir(False, "archivo vacío", entrada, "rechazado")
-    extension = Path(nombre).suffix.lower()
     tipo = EXTENSIONES_PERMITIDAS.get(extension)
     if tipo is None:
         return _decidir(
@@ -250,7 +269,7 @@ def _es_numero(valor: Any) -> bool:
 
 
 def validar_rangos(edad: Any = None, salario: Any = None) -> ResultadoGuardrail:
-    """Edad entera entre 15 y 29 y salario mayor que 0. Los valores ausentes no se validan."""
+    """Edad entera entre 18 y 29 y salario mayor que 0. Los valores ausentes no se validan."""
     entrada = f"edad={edad!r}, salario={salario!r}"
     problemas = []
     if edad is not None and not (
@@ -354,11 +373,40 @@ def evaluar_entrada(entrada: dict[str, Any]) -> list[ResultadoGuardrail]:
     return resultados
 
 
+def limpiar_entrada(valor: Any) -> Any:
+    """Copia de `valor` con cédula, teléfono y dirección exacta quitados de cada texto.
+
+    Recorre dicts, listas y tuplas; los bytes, números y objetos se dejan igual, y las claves
+    de `CLAVES_SIN_LIMPIAR` (rutas) también. El grafo (#10) la llama sobre el estado inicial
+    antes de `graph.invoke`, así el dato crudo nunca se guarda en el checkpoint.
+    """
+    if isinstance(valor, str):
+        return quitar_pii(valor)
+    if isinstance(valor, dict):
+        return {
+            k: v if k in CLAVES_SIN_LIMPIAR else limpiar_entrada(v)
+            for k, v in valor.items()
+        }
+    if isinstance(valor, (list, tuple)):
+        return type(valor)(limpiar_entrada(v) for v in valor)
+    return valor
+
+
+def ocultar_trazas_langsmith() -> None:
+    """Pide a LangSmith que no guarde entradas ni salidas de las trazas. Respeta un valor
+    ya puesto en `.env` o en el entorno."""
+    os.environ.setdefault("LANGSMITH_HIDE_INPUTS", "true")
+    os.environ.setdefault("LANGSMITH_HIDE_OUTPUTS", "true")
+
+
 def nodo_guardrails(estado: EstadoPuente) -> dict:
     """Nodo del grafo. Lee `estado["entrada"]` y devuelve las listas completas de `decisiones`
     y `errores`, más `guardrails` con el veredicto para el router:
-    {"ok", "marcas", "motivos", "respuesta"}. Un rechazo deja una línea "guardrails: ..." en errores."""
-    entrada = estado.get("entrada") or {}  # type: ignore[call-overload]
+    {"ok", "marcas", "motivos", "respuesta"}. Un rechazo deja una línea "guardrails: ..." en errores.
+
+    Vuelve a limpiar la entrada por si el grafo no lo hizo: los resúmenes de `decisiones`
+    nunca llevan PII."""
+    entrada = limpiar_entrada(estado.get("entrada") or {})  # type: ignore[call-overload]
     resultados = evaluar_entrada(entrada)
     rechazos = [r for r in resultados if not r.ok]
     respuesta = next((r.respuesta for r in resultados if r.respuesta), None)
