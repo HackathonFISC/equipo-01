@@ -1,30 +1,47 @@
-"""SQLite: perfiles, ofertas, postulaciones (embudo) y decisiones. Issues #7 y #12.
+"""SQLite: perfiles, ofertas, postulaciones (embudo), decisiones y descartes. Issues #7 y #12.
 
 Las transiciones del embudo viven aquí, en código: el LLM nunca decide el estado de una
 postulación. Cada cambio de estado deja una fila en ``postulaciones_historial``.
 """
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
+from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from puente.schemas import Decision, Oferta, Perfil
+from puente.metricas import calcular_metricas
+from puente.schemas import SIN_OFERTA, Decision, Match, Oferta, Perfil
 
 PERFIL_LISTO = "perfil_listo"
 PRESELECCIONADO = "preseleccionado"
 APROBADO = "aprobado"
+CONSENTIDO = "consentido"
 ENVIADO = "enviado"
 ENTREVISTA = "entrevista"
 CONTRATADO = "contratado"
 NO_SELECCIONADO = "no_seleccionado"
 
+# Orden del embudo, igual al de EstadoPostulacion en puente/schemas.py
+ESTADOS: tuple[str, ...] = (
+    PERFIL_LISTO,
+    PRESELECCIONADO,
+    APROBADO,
+    CONSENTIDO,
+    ENVIADO,
+    ENTREVISTA,
+    CONTRATADO,
+    NO_SELECCIONADO,
+)
+
 # estado actual -> estados a los que puede pasar
 TRANSICIONES: dict[str, frozenset[str]] = {
     PERFIL_LISTO: frozenset({PRESELECCIONADO}),
     PRESELECCIONADO: frozenset({APROBADO, NO_SELECCIONADO}),
-    APROBADO: frozenset({ENVIADO}),
+    APROBADO: frozenset({CONSENTIDO}),
+    CONSENTIDO: frozenset({ENVIADO}),
     ENVIADO: frozenset({ENTREVISTA, NO_SELECCIONADO}),
     ENTREVISTA: frozenset({CONTRATADO, NO_SELECCIONADO}),
     CONTRATADO: frozenset(),
@@ -65,6 +82,24 @@ CREATE TABLE IF NOT EXISTS decisiones (
     salida_resumen TEXT NOT NULL,
     razon TEXT NOT NULL,
     timestamp TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS descartes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    perfil_id TEXT,
+    oferta_id TEXT NOT NULL,
+    motivo TEXT NOT NULL,
+    origen TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    UNIQUE (perfil_id, oferta_id, motivo)
+);
+CREATE TABLE IF NOT EXISTS entrevistas (
+    perfil_id TEXT NOT NULL,
+    oferta_id TEXT NOT NULL,
+    empresa TEXT NOT NULL,
+    inicio TEXT NOT NULL,
+    fin TEXT NOT NULL,
+    traslado_min REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (perfil_id, oferta_id)
 );
 """
 
@@ -171,28 +206,221 @@ def cambiar_estado(conn: sqlite3.Connection, postulacion_id: int, nuevo, motivo:
         )
 
 
+def _marca(decision) -> str | None:
+    """Timestamp de una Decision como texto; None si no trae."""
+    marca = _campo(decision, "timestamp", None)
+    if hasattr(marca, "isoformat"):
+        marca = marca.isoformat(timespec="seconds")
+    return str(marca) if marca else None
+
+
+def _tupla_decision(decision) -> tuple[str, str, str, str, str | None]:
+    return (
+        str(_campo(decision, "agente", "")),
+        str(_campo(decision, "entrada_resumen", "")),
+        str(_campo(decision, "salida_resumen", "")),
+        str(_campo(decision, "razon", "")),
+        _marca(decision),
+    )
+
+
 def registrar_decision(conn: sqlite3.Connection, decision: Decision | dict) -> int:
     """Guarda una Decision (modelo o dict) en la tabla decisiones y devuelve su id.
 
     Los nodos del grafo guardan las decisiones como dict con ``timestamp`` en texto ISO;
     aquí se aceptan ambas formas y el timestamp puede ser datetime o str.
     """
-    marca = _campo(decision, "timestamp", None)
-    if hasattr(marca, "isoformat"):
-        marca = marca.isoformat(timespec="seconds")
+    agente, entrada, salida, razon, marca = _tupla_decision(decision)
     with conn:
         cur = conn.execute(
             "INSERT INTO decisiones (agente, entrada_resumen, salida_resumen, razon, timestamp) "
             "VALUES (?, ?, ?, ?, ?)",
-            (
-                str(_campo(decision, "agente", "")),
-                str(_campo(decision, "entrada_resumen", "")),
-                str(_campo(decision, "salida_resumen", "")),
-                str(_campo(decision, "razon", "")),
-                str(marca) if marca else datetime.now(timezone.utc).isoformat(),
-            ),
+            (agente, entrada, salida, razon, marca or datetime.now(timezone.utc).isoformat()),
         )
     return int(cur.lastrowid)
+
+
+def volcar_decisiones(conn: sqlite3.Connection, decisiones: Iterable[Decision | dict]) -> int:
+    """Copia a la tabla decisiones las que aún no están y devuelve cuántas insertó.
+
+    Es idempotente: una Decision ya guardada con la misma tupla (agente, entrada_resumen,
+    salida_resumen, razon, timestamp) no se repite. Así el tablero puede volcar el estado
+    completo después de cada invoke sin duplicar lo que Postulación ya registró.
+    """
+    insertadas = 0
+    for decision in decisiones or []:
+        tupla = _tupla_decision(decision)
+        if tupla[4] is not None:
+            existe = conn.execute(
+                "SELECT 1 FROM decisiones WHERE agente = ? AND entrada_resumen = ? "
+                "AND salida_resumen = ? AND razon = ? AND timestamp = ? LIMIT 1",
+                tupla,
+            ).fetchone()
+            if existe:
+                continue
+        registrar_decision(conn, decision)
+        insertadas += 1
+    return insertadas
+
+
+def motivos_de_descarte(match: Match | dict) -> list[tuple[str, str]]:
+    """(oferta_id, motivo) de lo que el Matching descartó en este match.
+
+    Entiende las dos formas del desglose: el motivo por pareja (``motivo_descarte`` o
+    ``viable == False``) y el mapa ``ofertas_descartadas`` {oferta_id: motivo} que deja el
+    solver real (asignacion.py) en los perfiles asignados y en los que quedaron sin vacante.
+    Si el match no es viable y trae el mapa, se usa solo el mapa: el ``motivo_descarte``
+    combinado ("Sin vacante viable (o1: ...; o2: ...)") repite lo mismo y no pertenece a una
+    sola oferta. Los matches sin oferta (``SIN_OFERTA``) no aportan su propio motivo.
+    """
+    desglose = _campo(match, "desglose", None) or {}
+    if not isinstance(desglose, dict):
+        return []
+    resultado: list[tuple[str, str]] = []
+    mapa = desglose.get("ofertas_descartadas") or {}
+    if isinstance(mapa, dict):
+        resultado += [(str(oid), str(mot)) for oid, mot in mapa.items() if oid and mot]
+    if resultado and desglose.get("viable") is False:
+        return resultado
+    oferta_id = str(_campo(match, "oferta_id", "") or "")
+    if oferta_id and oferta_id != SIN_OFERTA:
+        motivo = desglose.get("motivo_descarte")
+        if not motivo and desglose.get("viable") is False:
+            motivo = "no viable"
+        if motivo and (oferta_id, str(motivo)) not in resultado:
+            resultado.append((oferta_id, str(motivo)))
+    return resultado
+
+
+def registrar_descartes(conn: sqlite3.Connection, matches: Iterable[Match | dict]) -> int:
+    """Guarda las ofertas que el Matching descartó, con su motivo, y devuelve cuántas son nuevas.
+
+    Cuenta como descarte lo que dice ``motivos_de_descarte``: el mapa
+    ``desglose["ofertas_descartadas"]`` del solver, o el ``motivo_descarte`` (o
+    ``viable == False``, motivo "no viable") de la pareja. Los matches sin oferta
+    (``SIN_OFERTA``) no guardan motivo propio. INSERT OR IGNORE: es idempotente.
+    """
+    nuevos = 0
+    ahora = _ahora()
+    for match in matches or []:
+        perfil_id = _campo(match, "perfil_id", None)
+        for oferta_id, motivo in motivos_de_descarte(match):
+            with conn:
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO descartes (perfil_id, oferta_id, motivo, origen, timestamp) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (perfil_id, oferta_id, motivo, "matching", ahora),
+                )
+            nuevos += max(cur.rowcount, 0)
+    return nuevos
+
+
+def volcar_estado(conn: sqlite3.Connection, estado: dict) -> dict[str, int]:
+    """Vuelca a SQLite las decisiones y los descartes del estado del grafo.
+
+    El tablero la llama después de cada invoke, incluido rechazar, que no pasa por
+    Postulación. Devuelve cuántas filas nuevas dejó de cada tipo.
+    """
+    return {
+        "decisiones": volcar_decisiones(conn, estado.get("decisiones") or []),
+        "descartes": registrar_descartes(conn, estado.get("matches") or []),
+    }
+
+
+def embudo(conn: sqlite3.Connection) -> dict[str, int]:
+    """Cuántas postulaciones hay en cada estado, en el orden del embudo y con ceros."""
+    cuentas = {estado: 0 for estado in ESTADOS}
+    for fila in conn.execute("SELECT estado, COUNT(*) AS n FROM postulaciones GROUP BY estado"):
+        cuentas[fila["estado"]] = cuentas.get(fila["estado"], 0) + fila["n"]
+    return cuentas
+
+
+def trazas(
+    conn: sqlite3.Connection, *, agente: str | None = None, limite: int | None = None
+) -> list[dict]:
+    """Filas de la tabla decisiones por id ascendente; con ``limite``, las últimas N."""
+    where, params = "", []
+    if agente is not None:
+        where, params = " WHERE agente = ?", [agente]
+    columnas = "id, agente, entrada_resumen, salida_resumen, razon, timestamp"
+    if limite is None:
+        consulta = f"SELECT {columnas} FROM decisiones{where} ORDER BY id"
+    else:
+        consulta = (
+            f"SELECT * FROM (SELECT {columnas} FROM decisiones{where} ORDER BY id DESC LIMIT ?) "
+            "ORDER BY id"
+        )
+        params.append(max(int(limite), 0))
+    return [dict(f) for f in conn.execute(consulta, params)]
+
+
+def guardar_entrevista(
+    conn: sqlite3.Connection, perfil_id: str, oferta_id: str, empresa: str,
+    inicio: datetime, fin: datetime, traslado_min: float = 0,
+) -> None:
+    """Guarda la entrevista propuesta de la pareja (una por pareja; la última manda)."""
+    conn.execute(
+        "INSERT OR REPLACE INTO entrevistas (perfil_id, oferta_id, empresa, inicio, fin, traslado_min) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (perfil_id, oferta_id, empresa, inicio.isoformat(), fin.isoformat(), float(traslado_min or 0)),
+    )
+    conn.commit()
+
+
+def entrevistas_ocupadas(
+    conn: sqlite3.Connection, *, empresa: str | None = None, perfil_id: str | None = None,
+    salvo: tuple[str, str] | None = None,
+) -> list[tuple[datetime, datetime]]:
+    """Intervalos ya ocupados por otras aprobaciones u otras ofertas.
+
+    Con ``empresa``: las entrevistas (inicio, fin) que esa empresa ya tiene, en cualquiera de
+    sus ofertas. Con ``perfil_id``: las ventanas del joven, con su traslado de ida y vuelta.
+    ``salvo`` excluye la pareja (perfil_id, oferta_id) que se está agendando.
+    """
+    filas = conn.execute(
+        "SELECT perfil_id, oferta_id, inicio, fin, traslado_min FROM entrevistas "
+        "WHERE (? IS NULL OR empresa = ?) AND (? IS NULL OR perfil_id = ?)",
+        (empresa, empresa, perfil_id, perfil_id),
+    ).fetchall()
+    ocupadas = []
+    for f in filas:
+        if salvo is not None and (f["perfil_id"], f["oferta_id"]) == tuple(salvo):
+            continue
+        inicio, fin = datetime.fromisoformat(f["inicio"]), datetime.fromisoformat(f["fin"])
+        if perfil_id is not None:
+            margen = timedelta(minutes=f["traslado_min"])
+            inicio, fin = inicio - margen, fin + margen
+        ocupadas.append((inicio, fin))
+    return ocupadas
+
+
+def descartes(conn: sqlite3.Connection, *, perfil_id: str | None = None) -> list[dict]:
+    """Ofertas descartadas con su motivo, para el tablero.
+
+    Trae los descartes del Matching (tabla descartes; con ``perfil_id``, solo los de esa
+    persona) y, siempre, las ofertas bloqueadas por la ley (``perfil_id`` None, origen
+    "oferta_bloqueada", motivo = alertas unidas con "; "), porque no dependen de ninguna persona.
+    """
+    consulta, params = "SELECT perfil_id, oferta_id, motivo, origen FROM descartes", []
+    if perfil_id is not None:
+        consulta += " WHERE perfil_id = ?"
+        params.append(perfil_id)
+    resultado = [dict(f) for f in conn.execute(consulta + " ORDER BY id", params)]
+    for fila in conn.execute("SELECT id, datos_json FROM ofertas ORDER BY rowid"):
+        try:
+            datos = json.loads(fila["datos_json"])
+        except (TypeError, ValueError):
+            continue
+        if datos.get("bloqueada"):
+            resultado.append(
+                {
+                    "perfil_id": None,
+                    "oferta_id": fila["id"],
+                    "motivo": "; ".join(datos.get("alertas") or []),
+                    "origen": "oferta_bloqueada",
+                }
+            )
+    return resultado
 
 
 def obtener_postulacion(conn: sqlite3.Connection, postulacion_id: int) -> dict:
@@ -240,3 +468,18 @@ def parejas_fijas(conn: sqlite3.Connection) -> list[tuple[str, str]]:
         sorted(ESTADOS_FIJOS),
     ).fetchall()
     return [(f[0], f[1]) for f in filas]
+
+
+# ---------------------------------------------------------------- métricas para el tablero (#47)
+
+
+def metricas(conn: sqlite3.Connection, matches: Iterable[Match | dict], traslados=None) -> dict:
+    """Métricas ilustrativas de #47 para el tablero, con los perfiles y ofertas guardados.
+
+    ``matches`` son los del estado del grafo (``estado["matches"]``); ``traslados`` es la tabla
+    de traslados que ya usa el Matching (None: sin comparaciones por ruta). Incluye las ofertas
+    bloqueadas para que el rótulo de cada descarte siga siendo verificable.
+    """
+    return calcular_metricas(
+        list(matches), listar_perfiles(conn), listar_ofertas(conn, no_bloqueadas=False), traslados
+    )

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from fpdf import FPDF
 
-from puente.schemas import HabilidadPerfil, Oferta, Perfil
+from puente.schemas import HabilidadPerfil, Horario, Oferta, Perfil
 
 # Cédulas panameñas: 8-123-4567, 08 123 4567 (provincias 1 a 13), PE-1-234, E-8-12345.
 # La provincia numérica se limita a 1-13 y no se lee dentro de una fecha u hora ("20-10-2026",
@@ -92,11 +92,146 @@ def _nombre_seguro(valor: str) -> str:
     return re.sub(r"[^\w-]", "_", str(valor))
 
 
+_ETIQUETA_DIAS = {
+    "lunes": "lunes", "martes": "martes", "miercoles": "miércoles", "jueves": "jueves",
+    "viernes": "viernes", "sabado": "sábado", "domingo": "domingo",
+}
+_ORDEN_DIAS = tuple(_ETIQUETA_DIAS)
+
+
+def formatear_horario(h: Horario) -> str:
+    """Texto legible de un bloque semanal: "lunes a viernes, 08:00-12:00"."""
+    dias = [d for d in _ORDEN_DIAS if d in h.dias] + [d for d in h.dias if d not in _ORDEN_DIAS]
+    indices = [_ORDEN_DIAS.index(d) for d in dias if d in _ORDEN_DIAS]
+    consecutivos = (
+        len(dias) == len(indices) and len(dias) >= 3
+        and indices == list(range(indices[0], indices[0] + len(indices)))
+    )
+    nombres = [_ETIQUETA_DIAS.get(d, d) for d in dias]
+    if consecutivos:
+        texto_dias = f"{nombres[0]} a {nombres[-1]}"
+    elif len(nombres) > 1:
+        texto_dias = ", ".join(nombres[:-1]) + f" y {nombres[-1]}"
+    else:
+        texto_dias = nombres[0]
+    return f"{texto_dias}, {h.hora_inicio}-{h.hora_fin}"
+
+
+_ACENTOS = {"a": "aáàäâ", "e": "eéèëê", "i": "iíìïî", "o": "oóòöô", "u": "uúùüû", "n": "nñ"}
+_TERMINOS_GENERO = re.compile(
+    r"\b(?:femenin[oa]s?|masculin[oa]s?|mujer(?:es)?|hombres?|var[oó]n(?:es)?|g[eé]nero)\b",
+    re.IGNORECASE,
+)
+# Estado civil. "madre soltera" sale entera; "madre" o "mamá" sola no ("la fonda de mi mamá").
+_ESTADO_CIVIL = re.compile(
+    r"\b(?:madre|padre|mam[aá]|pap[aá])\s+solter[oa]s?\b"
+    r"|\b(?:solter|casad|divorciad|viud)[oa]s?\b"
+    r"|\buni[oó]n\s+(?:libre|de\s+hecho)\b",
+    re.IGNORECASE,
+)
+# "unido/a" solo cuando dice el estado civil ("está unida", "estado civil: unido"): en "equipo
+# unido" o "Estados Unidos" no es un dato de la persona. Se conserva el verbo.
+_UNIDO = re.compile(r"\b(soy|es|est[aá]|estoy|vive|vivo|civil\s*:?)\s+unid[oa]\b", re.IGNORECASE)
+_EMBARAZO = re.compile(r"\b(?:embarazad[oa]s?|embarazos?|encinta|gestante)\b", re.IGNORECASE)
+# Edad en palabras, de 18 a 29 (la demo es con jóvenes de 18 a 29), solo seguida de "años" o
+# después de "edad": "dos años de experiencia" no es una edad y no se toca.
+_EDAD_PALABRAS = (
+    r"(?:die(?:ci|z\s+y\s+)(?:ocho|nueve)|veinte"
+    r"|veinti(?:[uú]n|uno|d[oó]s|tr[eé]s|cuatro|cinco|s[eé]is|siete|ocho|nueve))"
+)
+_EDAD_EN_PALABRAS = re.compile(
+    rf"\bedad\s*(?:de|:)?\s*{_EDAD_PALABRAS}\b(?:\s*a[nñ]os)?|\b{_EDAD_PALABRAS}\s+a[nñ]os\b",
+    re.IGNORECASE,
+)
+# Año o fecha de nacimiento: "nacida en 2006", "nació el 3 de mayo de 2006", "año de nacimiento: 2006".
+_NACIMIENTO = re.compile(
+    r"\bnac(?:id[oa]s?|i[oó]|í)\s+(?:en|el)\s+(?:el\s+)?(?:a[nñ]o\s+)?"
+    r"(?:(?:\d{1,2}\s+de\s+)?[a-záéíóú]+\s+del?\s+)?(?:19|20)\d{2}\b"
+    r"|\b(?:a[nñ]o|fecha)\s+de\s+nacimiento\b(?:\s*(?::|es|fue)?\s*"
+    r"(?:(?:\d{1,2}\s+de\s+)?[a-záéíóú]+\s+del?\s+(?:19|20)\d{2}\b|\d[\d/.-]*\d))?",
+    re.IGNORECASE,
+)
+# Sexo dicho de forma coloquial. Solo en el mensaje del orientador: en la evidencia literal del
+# joven "chica" suele ser otra cosa ("manejo la caja chica de la fonda").
+_TERMINOS_SEXO_COLOQUIALES = re.compile(
+    r"\b(?:chic[oa]s?|muchach[oa]s?|se[nñ]oritas?)\b", re.IGNORECASE
+)
+
+
+def _patron_literal(texto: str) -> str:
+    """Patrón que encuentra ``texto`` sin importar mayúsculas ni tildes (Colón = colon)."""
+    piezas = []
+    for c in texto.strip():
+        base = c.lower()
+        for plano, variantes in _ACENTOS.items():
+            if base in variantes:
+                piezas.append(f"[{variantes}{variantes.upper()}]")
+                break
+        else:
+            piezas.append(re.escape(c))
+    return "".join(piezas)
+
+
+def cegar(texto: str, perfil: Perfil, *, del_orientador: bool = False) -> str:
+    """Quita de un texto que va a la empresa lo que identifica al joven por lo que no es su trabajo.
+
+    Reemplaza por "[dato omitido]" el corregimiento del perfil, su edad ("20 años", "edad 20"),
+    la edad en palabras de 18 a 29 ("veinte años"), el año de nacimiento ("nacida en 2006"), el
+    estado civil ("soltera", "madre soltera", "está unida"), el embarazo y los términos de
+    género. Se aplica a cada línea que sale hacia la empresa (CV y mensaje): la evidencia es
+    literal y puede traer "tengo 20 años y vivo en La Chorrera".
+
+    La edad en cifras sigue siendo solo la exacta del perfil, para no borrar "2 años de
+    experiencia" ni "trabajé 3 años". ``del_orientador=True`` es para el texto libre del
+    orientador: quita además "chica", "muchacha" y parecidos, que en la evidencia del joven
+    suelen ser otra cosa ("la caja chica").
+    """
+    patrones = []
+    if str(perfil.corregimiento or "").strip():
+        patrones.append(rf"(?<!\w){_patron_literal(perfil.corregimiento)}(?!\w)")
+    if perfil.edad is not None:
+        patrones.append(rf"\bedad\s*(?:de|:)?\s*{perfil.edad}\b(?:\s*a[nñ]os)?")
+        patrones.append(rf"\b{perfil.edad}\s*a[nñ]os\b")
+    for patron in patrones:
+        texto = re.sub(patron, "[dato omitido]", texto, flags=re.IGNORECASE)
+    texto = _UNIDO.sub(lambda m: f"{m.group(1)} [dato omitido]", texto)
+    terminos = [_ESTADO_CIVIL, _EMBARAZO, _EDAD_EN_PALABRAS, _NACIMIENTO, _TERMINOS_GENERO]
+    if del_orientador:
+        terminos.append(_TERMINOS_SEXO_COLOQUIALES)
+    for patron in terminos:
+        texto = patron.sub("[dato omitido]", texto)
+    return texto
+
+
+def contenido_cv(perfil: Perfil, oferta: Oferta) -> list[str]:
+    """Líneas del CV ciego para la empresa (issue #12).
+
+    Lleva nombre, puesto, habilidades con evidencia y disponibilidad. Nunca corregimiento,
+    edad, género, foto ni estado civil: la empresa decide por lo que la persona sabe hacer.
+    """
+    lineas = [perfil.nombre, f"Postula a: {oferta.puesto} en {oferta.empresa}", "Habilidades"]
+    # Todo lo que sale del perfil pasa por cegar(): la evidencia es literal y puede traer la edad
+    # o el lugar donde vive la persona.
+    habilidades = habilidades_para_cv(perfil, oferta)
+    if habilidades:
+        for h in habilidades:
+            lineas.append(skill_id_de(h))
+            lineas.append(cegar(f"Evidencia: {evidencia_de(h).strip()}", perfil))
+    else:
+        lineas.append("Sin habilidades con evidencia registrada.")
+    if perfil.horario_libre:
+        disponibilidad = "; ".join(formatear_horario(h) for h in perfil.horario_libre)
+    else:
+        disponibilidad = "por confirmar"
+    lineas.append(f"Disponibilidad: {disponibilidad}")
+    return lineas
+
+
 def generar_cv(perfil: Perfil, oferta: Oferta, destino_dir: Path) -> Path:
     """Escribe ``cv_<perfil_id>_<oferta_id>.pdf`` en ``destino_dir`` y devuelve la ruta.
 
-    El CV lleva nombre ficticio, corregimiento (nunca dirección exacta), el puesto al que
-    se postula y las habilidades que tienen evidencia. No incluye cédula ni teléfono.
+    CV ciego: nombre ficticio, puesto al que se postula, habilidades con evidencia y
+    disponibilidad. Sin corregimiento, edad, género, cédula ni teléfono.
     """
     destino_dir = Path(destino_dir)
     destino_dir.mkdir(parents=True, exist_ok=True)
@@ -110,20 +245,20 @@ def generar_cv(perfil: Perfil, oferta: Oferta, destino_dir: Path) -> Path:
         pdf.set_font("Helvetica", estilo, tamano)
         pdf.multi_cell(0, alto, a_latin1(limpiar_pii(texto)), new_x="LMARGIN", new_y="NEXT")
 
-    linea(perfil.nombre, estilo="B", tamano=18, alto=10)
-    linea(f"{perfil.corregimiento}, Panamá")
+    contenido = contenido_cv(perfil, oferta)
+    linea(contenido[0], estilo="B", tamano=18, alto=10)
     pdf.ln(3)
-    linea(f"Postula a: {oferta.puesto} en {oferta.empresa}", estilo="B", tamano=12)
+    linea(contenido[1], estilo="B", tamano=12)
     pdf.ln(3)
-    linea("Habilidades", estilo="B", tamano=13, alto=8)
-    habilidades = habilidades_para_cv(perfil, oferta)
-    if habilidades:
-        for h in habilidades:
-            linea(skill_id_de(h), estilo="B")
-            linea(f"Evidencia: {evidencia_de(h).strip()}")
+    linea(contenido[2], estilo="B", tamano=13, alto=8)
+    for texto in contenido[3:-1]:
+        if texto.startswith("Evidencia: ") or texto.startswith("Sin habilidades"):
+            linea(texto)
             pdf.ln(1)
-    else:
-        linea("Sin habilidades con evidencia registrada.")
+        else:
+            linea(texto, estilo="B")
+    pdf.ln(2)
+    linea(contenido[-1], estilo="B")
     pdf.ln(4)
     linea(
         "CV generado por Puente a partir de lo que la persona contó; "

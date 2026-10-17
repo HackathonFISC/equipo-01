@@ -10,6 +10,7 @@ import io
 import json
 import sqlite3
 import sys
+import urllib.request
 from datetime import datetime
 
 import pytest
@@ -28,6 +29,7 @@ from puente.graph import (
 )
 from puente.guardrails import RESPUESTA_FUERA_DE_ALCANCE
 from puente.schemas import EstadoPostulacion, agregar_decision
+from puente.tools import telegram
 
 CAJERO = "of-cajero-vista-alegre"
 COCINA = "of-ayudante-cocina-chorrera"
@@ -440,7 +442,9 @@ def test_demo_por_consola_interactiva(tmp_path):
         escribir=lineas.append,
     )
     assert "Flujo terminado." in "\n".join(lineas)
-    assert _agentes(final).count("postulacion") == 1
+    # Postulación real (#12): solo sale Carlos, el único con consentimiento; la cocina rechazada no se postula
+    assert final["postulaciones"] == {f"carlos:{CAJERO}": EstadoPostulacion.ENVIADO}
+    assert "postulacion" in _agentes(final)
 
 
 def test_demo_por_consola_con_salida_cp1252(tmp_path, monkeypatch):
@@ -733,7 +737,8 @@ def test_fase2_auditor_real_con_sesgo_de_lectura_vuelve_a_perfil_una_vez(ruta_cp
 
 def test_fase2_cada_agente_es_un_nodo_con_nombre_para_langsmith():
     nodos = set(construir_grafo().get_graph().nodes)
-    assert {"guardrails", "router", "mercado", "perfil", "matching", "auditor", "formacion", "aprobacion", "postulacion"} <= nodos
+    esperados = {"guardrails", "router", "mercado", "perfil", "matching", "auditor", "formacion", "aprobacion", "postulacion"}
+    assert esperados | {"evento_empresa", "avisos"} <= nodos
     config = config_caso("yaritza")
     assert config["run_name"] == "puente:yaritza" and config["metadata"]["thread_id"] == "yaritza"
 
@@ -747,3 +752,114 @@ def test_fase2_demo_con_llm_claude_usa_llm_puente(tmp_path, monkeypatch, capsys,
     salida = capsys.readouterr().out
     assert "LLM claude" in salida and "Flujo terminado." in salida
     assert len(llm.prompts) == 1  # la entrevista de Yaritza pasó por llm_puente, no por la respuesta grabada
+
+
+# ---------------------------------------------------------------- Fase 2: Postulación real (#12)
+
+TELEGRAM_FALSO = {
+    "TELEGRAM_BOT_TOKEN": "token-ficticio",
+    "TELEGRAM_CHAT_ID_EMPRESA": "chat-empresa-ficticio",
+    "TELEGRAM_CHATS_JOVENES": "yaritza=chat-joven-ficticio",  # un chat por joven (#84)
+}
+
+
+@pytest.fixture
+def sin_red(monkeypatch):
+    """Registra cualquier salida a la red por urllib (el transporte real de Telegram) y la hace fallar."""
+    llamadas = []
+
+    def urlopen(peticion, *args, **kwargs):
+        llamadas.append(getattr(peticion, "full_url", peticion))
+        raise AssertionError("no debe haber red en las pruebas")
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    return llamadas
+
+
+@pytest.fixture
+def telegram_en_el_entorno(monkeypatch):
+    """Como si el `.env` de quien corre las pruebas trajera token y chats de Telegram."""
+    for variable, valor in TELEGRAM_FALSO.items():
+        monkeypatch.setenv(variable, valor)
+
+
+def _archivos(carpeta):
+    return sorted(p.name for p in carpeta.iterdir()) if carpeta.is_dir() else []
+
+
+def test_fase2_aprobar_con_postulacion_real_deja_cv_ics_y_enviado(tmp_path, monkeypatch, caso):
+    """El nodo `postulacion` del grafo es el de #84 y sus rutas salen de PUENTE_DB y PUENTE_OUTBOX."""
+    monkeypatch.setenv("PUENTE_DB", str(tmp_path / "puente.db"))
+    monkeypatch.setenv("PUENTE_OUTBOX", str(tmp_path / "outbox"))
+    thread, estado = caso
+    grafo = _grafo_real(tmp_path / "cp.db", llm_perfil=_llm_yaritza(estado))
+    config = _arrancar(grafo, estado, thread)
+    solicitud = aprobacion_pendiente(grafo, config)
+    candidatos = [c["perfil_id"] for c in solicitud["candidatos"]]
+    assert solicitud["oferta_id"] == CAJERO and "yaritza" in candidatos
+
+    final = _responder(grafo, config, **_aprobar(solicitud))
+
+    assert {pid: final["postulaciones"][f"{pid}:{CAJERO}"] for pid in candidatos} == dict.fromkeys(
+        candidatos, EstadoPostulacion.ENVIADO
+    )
+    archivos = _archivos(tmp_path / "outbox")
+    for pid in candidatos:
+        assert f"cv_{pid}_{CAJERO}.pdf" in archivos and f"entrevista_{pid}_{CAJERO}.ics" in archivos
+    assert sum(a.startswith("mensaje_") for a in archivos) == 1  # la lista corta, a la empresa
+    assert sum(a.startswith("joven_") for a in archivos) == len(candidatos)  # un mensaje a cada joven
+    assert (tmp_path / "outbox" / f"cv_yaritza_{CAJERO}.pdf").read_bytes().startswith(b"%PDF")
+    with sqlite3.connect(tmp_path / "puente.db") as conexion:
+        filas = conexion.execute("SELECT perfil_id, estado FROM postulaciones WHERE oferta_id = ?", (CAJERO,)).fetchall()
+    assert sorted(filas) == sorted((pid, "enviado") for pid in candidatos)
+    assert final["errores"] == []
+    assert aprobacion_pendiente(grafo, config)["oferta_id"] == COCINA
+
+
+def test_fase2_con_telegram_en_el_entorno_el_grafo_no_sale_a_la_red(tmp_path, caso, sin_red, telegram_en_el_entorno):
+    """Por defecto el grafo usa el transporte `sin_telegram`: todo queda en outbox/ aunque haya token y chats."""
+    thread, estado = caso
+    grafo = _grafo_real(tmp_path / "cp.db", llm_perfil=_llm_yaritza(estado), outbox=tmp_path / "outbox")
+    config = _arrancar(grafo, estado, thread)
+    final = _responder(grafo, config, **_aprobar(aprobacion_pendiente(grafo, config)))
+
+    assert sin_red == []
+    assert final["postulaciones"][f"yaritza:{CAJERO}"] == EstadoPostulacion.ENVIADO
+    [mensaje] = (tmp_path / "outbox").glob("mensaje_*.txt")
+    assert "TelegramApagado" in mensaje.read_text(encoding="utf-8")
+    canales = [d.salida_resumen for d in final["decisiones"] if d.salida_resumen.startswith("canal ")]
+    assert canales and all(c.startswith("canal outbox, ok=True") for c in canales)
+
+
+def test_demo_sin_telegram_por_defecto_y_dice_donde_quedaron_los_archivos(
+    tmp_path, monkeypatch, capsys, sin_red, telegram_en_el_entorno
+):
+    monkeypatch.setenv("PUENTE_DB", str(tmp_path / "puente.db"))
+    monkeypatch.setenv("PUENTE_OUTBOX", str(tmp_path / "outbox"))
+    g.main(["--checkpoints", str(tmp_path / "cp.db"), "--thread", "uno", "--auto", "aprobar,aprobar"])
+    salida = capsys.readouterr().out
+
+    assert sin_red == []
+    assert "Telegram apagado" in salida
+    assert str((tmp_path / "puente.db").resolve()) in salida and str((tmp_path / "outbox").resolve()) in salida
+    for nombre in (f"cv_yaritza_{CAJERO}.pdf", f"entrevista_yaritza_{CAJERO}.ics", f"cv_yaritza_{COCINA}.pdf"):
+        assert f"   - {nombre}" in salida
+    assert "mensaje_" in salida and "joven_" in salida
+
+    # Otra corrida sobre la misma base: las parejas ya están enviadas, no se repite nada y la demo lo explica
+    g.main(["--checkpoints", str(tmp_path / "cp.db"), "--thread", "dos", "--auto", "aprobar,aprobar"])
+    salida = capsys.readouterr().out
+    assert "sin archivos nuevos" in salida and "usa otra PUENTE_DB" in salida
+
+
+def test_demo_con_telegram_envia_solo_si_se_pide(tmp_path, monkeypatch, capsys, sin_red, telegram_en_el_entorno):
+    """`--telegram` deja que puente.tools.telegram use su transporte real (aquí un doble, sin red)."""
+    chats = []
+    monkeypatch.setattr(telegram, "enviar_por_telegram", lambda token, chat, texto, adjuntos: chats.append(chat) or {"ok": True})
+    g.main(["--checkpoints", str(tmp_path / "cp.db"), "--auto", "aprobar", "--telegram"])
+    salida = capsys.readouterr().out
+
+    assert "Telegram activado" in salida
+    assert chats.count("chat-empresa-ficticio") == 1 and "chat-joven-ficticio" in chats
+    assert sin_red == []
+
