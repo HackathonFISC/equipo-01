@@ -30,7 +30,8 @@ from starlette.staticfiles import StaticFiles
 
 from puente.agents.auditor import nodo_auditor
 from puente.agents.formacion import nodo_formacion
-from puente.agents.postulacion import consentimiento_otorgado, consentimientos_para, postular
+from puente.agents.postulacion import agendar_entrevistas, consentimiento_otorgado, consentimientos_para, postular
+from puente.tools.calendario import ZONA_PANAMA
 from puente.graph import (
     aprobacion_pendiente,
     checkpointer_sqlite,
@@ -616,9 +617,16 @@ def _compilar_grafo_tablero(
             return {}
         perfiles_map = {p.id: p for p in modelos_perfiles}
         ofertas_map = {o.id: o for o in modelos_ofertas}
+        matches_aprob = [m for m in matches_aprob if m.perfil_id in perfiles_map and m.oferta_id in ofertas_map]
         RUTA_OUTBOX.mkdir(parents=True, exist_ok=True)
         conn = _conectar_db_estado(estado)
         try:
+            # Cada candidato en su propia franja, con la agenda del nodo de Postulación (#186).
+            matches_aprob, inicios, _avisos = agendar_entrevistas(
+                matches_aprob, perfiles_map, ofertas_map, conn, desde=datetime.now(ZONA_PANAMA)
+            )
+            if not matches_aprob:
+                return {}
             res = postular(
                 matches_aprob,
                 perfiles_map,
@@ -627,6 +635,9 @@ def _compilar_grafo_tablero(
                 conn=conn,
                 outbox=RUTA_OUTBOX,
                 consentimientos=consentimientos,
+                # El mensaje que editó el orientador llega a la empresa, cegado (#187).
+                mensaje_orientador=str(aprobacion.get("mensaje") or ""),
+                inicio_entrevista=lambda m: inicios[(m.perfil_id, m.oferta_id)],
             )
         finally:
             conn.close()
@@ -1455,6 +1466,14 @@ def procesar_accion_orientador(
             RUTA_OUTBOX.mkdir(parents=True, exist_ok=True)
             conn = _conectar_db_estado(estado)
             try:
+                if req.perfil_id not in perfiles_map or req.oferta_id not in ofertas_map:
+                    raise ValueError(f"falta el perfil {req.perfil_id} o la oferta {req.oferta_id}")
+                # Misma agenda que el nodo: no cruza otras entrevistas de la empresa ni del joven (#186).
+                con_fecha, inicios, avisos = agendar_entrevistas(
+                    [m_schema], perfiles_map, ofertas_map, conn, desde=datetime.now(ZONA_PANAMA)
+                )
+                if not con_fecha:
+                    raise ValueError(f"sin franja compatible ({avisos[0][1] if avisos else 'sin hora posible'})")
                 res_post = postular(
                     [m_schema],
                     perfiles_map,
@@ -1467,6 +1486,9 @@ def procesar_accion_orientador(
                     conn=conn,
                     outbox=RUTA_OUTBOX,
                     consentimientos=consentimientos,
+                    # El mensaje que editó el orientador llega a la empresa, cegado (#187).
+                    mensaje_orientador=req.mensaje_empresa or post_activo.get("mensaje_empresa") or "",
+                    inicio_entrevista=lambda m: inicios[(m.perfil_id, m.oferta_id)],
                 )
             except ValueError as error:
                 # Sin consentimiento, oferta bloqueada o datos incompletos: error claro, nunca un 500.
