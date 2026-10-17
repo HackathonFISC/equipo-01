@@ -54,6 +54,7 @@ from puente.schemas import (
     Oferta,
     Perfil,
 )
+from puente.solver.turnos import proponer_cobertura
 from puente.tools import db
 
 # Vista del joven (#52): imports en un grupo propio para no tocar los del tablero (#49/#99).
@@ -186,6 +187,23 @@ class SimularSesgoRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     activar: bool
+
+
+class AprobarCoberturaTurnosRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    oferta_id: str = Field(min_length=1, max_length=80)
+    consentimiento_manana: bool | None = None
+    consentimiento_tarde: bool | None = None
+    orientador: str = Field(default="Orientadora Ana Gómez", min_length=2, max_length=120)
+
+    @field_validator("oferta_id")
+    @classmethod
+    def _validar_id_seguro(cls, valor: str) -> str:
+        limpio = valor.strip()
+        if not PATRON_ID_SEGURO.fullmatch(limpio):
+            raise ValueError(f"ID inválido '{valor}': solo se permiten caracteres [A-Za-z0-9_-]")
+        return limpio
 
 
 def _slug_seguro(texto: str, prefijo: str = "ITEM") -> str:
@@ -829,6 +847,27 @@ def recalcular_pipeline_tablero(
     estado["descartados"] = list(descartados_map.values())
     estado["auditoria"] = salida_grafo.get("auditoria") or {}
 
+    # Cobertura por turnos (#165): solo para ofertas activas sin candidato individual de turno completo
+    ofertas_con_match_individual = {m["oferta_id"] for m in matches_ui}
+    ofertas_sin_match = [
+        o for o in modelos_ofertas if o.id not in ofertas_con_match_individual and not o.bloqueada
+    ]
+    coberturas_objs = proponer_cobertura(
+        ofertas_sin_match,
+        modelos_perfiles,
+        config=estado.get("config_solver"),
+        excluidos=excluidos_actuales,
+    )
+    coberturas_ui: list[dict[str, Any]] = []
+    for cob in coberturas_objs:
+        cob_dict = cob.model_dump()
+        for seg in cob_dict.get("segmentos", []):
+            seg["consentimiento_joven"] = _consentimiento_vigente(
+                estado, seg["perfil_id"], cob_dict["oferta_id"]
+            )
+        coberturas_ui.append(cob_dict)
+    estado["coberturas_turnos"] = coberturas_ui
+
     # Registrar las decisiones de los nodos centrales en puente.tools.db en orden cronológico real (#124)
     if registrar_trazas:
         decisiones_nodos = [
@@ -836,11 +875,31 @@ def recalcular_pipeline_tablero(
             for d in (salida_grafo.get("decisiones") or [])
             if _serializar_decision(d).get("agente") in ("matching", "formacion", "auditor")
         ]
+        if coberturas_ui:
+            resumen_cob = "; ".join(
+                f"{c['oferta_id']}: {c['segmentos'][0]['perfil_id']} ({c['segmentos'][0]['inicio']}-{c['segmentos'][0]['fin']}) + "
+                f"{c['segmentos'][1]['perfil_id']} ({c['segmentos'][1]['inicio']}-{c['segmentos'][1]['fin']})"
+                for c in coberturas_ui
+            )
+            decisiones_nodos.append(
+                _serializar_decision(
+                    Decision(
+                        agente="cobertura_turnos",
+                        entrada_resumen=f"{len(ofertas_sin_match)} vacante(s) sin candidato de turno completo",
+                        salida_resumen=f"{len(coberturas_ui)} dupla(s) de cobertura por turnos: {resumen_cob}",
+                        razon=(
+                            "Cobertura por turnos determinística con CP-SAT (#165): ningún joven cubre la jornada "
+                            "completa sin cruzar con clases, pero la dupla complementaria cubre mañana y tarde."
+                        ),
+                        timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    )
+                )
+            )
         # Si ya había decisiones manuales previas (orientador, tablero, guardrails), conservarlas antes
         previas_manuales = [
             d
             for d in (estado.get("decisiones") or [])
-            if d.get("agente") not in ("matching", "formacion", "auditor")
+            if d.get("agente") not in ("matching", "formacion", "auditor", "cobertura_turnos")
         ]
 
         conn = _conectar_db_estado(estado)
@@ -1177,6 +1236,11 @@ def procesar_accion_orientador(
         orientador=orientador,
         consentimiento_joven=consentimiento_joven,
         consentidos=consentidos,
+    )
+    # Nota y mensaje son texto libre del orientador: sin cédula, teléfono ni dirección exacta antes de
+    # guardarlos en la explicación, la postulación o `decisiones`, en cualquier acción (#213).
+    req = req.model_copy(
+        update=limpiar_entrada({"nota_edicion": req.nota_edicion, "mensaje_empresa": req.mensaje_empresa})
     )
     ahora = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -1862,6 +1926,297 @@ def cargar_desde_catalogo_data(
     )
 
 
+def cargar_escenario_cobertura_turnos(estado: dict[str, Any]) -> dict[str, Any]:
+    """Carga la oferta de turno completo 08:00-17:00 en La Chorrera y dos estudiantes complementarios (#165)."""
+    ids_perfiles = {p["id"] for p in estado.get("perfiles", [])}
+    perfiles_turnos = [
+        {
+            "id": "PERFIL-SOFIA-MANANA",
+            "nombre": "Sofía (estudia tarde)",
+            "genero": "femenino",
+            "edad": 20,
+            "corregimiento": "La Chorrera",
+            "modalidad_ingreso": "datos de ejemplo (sintéticos) · turno matutino",
+            "horario_libre": "Lunes a Viernes 07:30-12:45 (clases 13:30-18:00)",
+            "horario_libre_bloques": [
+                {
+                    "dias": ["lunes", "martes", "miercoles", "jueves", "viernes"],
+                    "hora_inicio": "07:30",
+                    "hora_fin": "12:45",
+                }
+            ],
+            "horario_clases_bloques": [
+                {
+                    "dias": ["lunes", "martes", "miercoles", "jueves", "viernes"],
+                    "hora_inicio": "13:30",
+                    "hora_fin": "18:00",
+                }
+            ],
+            "salario_minimo": 300.0,
+            "presupuesto_pasaje_diario": 2.50,
+            "habilidades": [
+                {
+                    "skill_id": "facturacion",
+                    "nombre": "Facturación y cobro",
+                    "evidencia": "Emisión de facturas y recibos en librería familiar por las mañanas",
+                },
+                {
+                    "skill_id": "control_calidad",
+                    "nombre": "Control de calidad",
+                    "evidencia": "Revisión de mercancía recibida antes de abrir mostrador",
+                },
+            ],
+        },
+        {
+            "id": "PERFIL-MATEO-TARDE",
+            "nombre": "Mateo (estudia mañana)",
+            "genero": "masculino",
+            "edad": 21,
+            "corregimiento": "La Chorrera",
+            "modalidad_ingreso": "datos de ejemplo (sintéticos) · turno vespertino",
+            "horario_libre": "Lunes a Viernes 12:15-17:30 (clases 07:30-11:45)",
+            "horario_libre_bloques": [
+                {
+                    "dias": ["lunes", "martes", "miercoles", "jueves", "viernes"],
+                    "hora_inicio": "12:15",
+                    "hora_fin": "17:30",
+                }
+            ],
+            "horario_clases_bloques": [
+                {
+                    "dias": ["lunes", "martes", "miercoles", "jueves", "viernes"],
+                    "hora_inicio": "07:30",
+                    "hora_fin": "11:45",
+                }
+            ],
+            "salario_minimo": 300.0,
+            "presupuesto_pasaje_diario": 2.50,
+            "habilidades": [
+                {
+                    "skill_id": "control_calidad",
+                    "nombre": "Control de calidad",
+                    "evidencia": "Verificación de lotes y fechas de vencimiento en abarrotería por las tardes",
+                },
+                {
+                    "skill_id": "facturacion",
+                    "nombre": "Facturación y cobro",
+                    "evidencia": "Cierre de facturación vespertina en negocio barrial",
+                },
+            ],
+        },
+    ]
+    for p_nuevo in perfiles_turnos:
+        if p_nuevo["id"] not in ids_perfiles:
+            estado["perfiles"].append(p_nuevo)
+
+    ids_ofertas = {o["id"] for o in estado.get("ofertas", [])}
+    if "OF-CHORRERA-TURNO-01" not in ids_ofertas:
+        estado["ofertas"].append(
+            {
+                "id": "OF-CHORRERA-TURNO-01",
+                "puesto": "Auxiliar de Facturación y Control de Calidad (Jornada Completa)",
+                "empresa": "Farmacia Oeste S.A. (Empresa de Prueba)",
+                "corregimiento": "La Chorrera",
+                "salario_mensual": 650.0,
+                "horario": "Lunes a Viernes 08:00-17:00",
+                "habilidades": ["facturacion", "control_calidad"],
+                "requisitos_texto": "Jornada completa de 08:00 a 17:00 en La Chorrera para facturación y control de calidad.",
+                "fuente": "datos de ejemplo (sintéticos)",
+                "bloqueada": False,
+                "alertas": [],
+            }
+        )
+    return recalcular_pipeline_tablero(estado, registrar_trazas=True)
+
+
+def aprobar_cobertura_turnos(
+    estado: dict[str, Any],
+    *,
+    oferta_id: str,
+    consentimiento_manana: bool | None = None,
+    consentimiento_tarde: bool | None = None,
+    orientador: str = "Orientadora Ana Gómez",
+) -> dict[str, Any]:
+    """Aprueba una propuesta de cobertura por turnos creando las dos postulaciones con consentimiento de cada joven (#165)."""
+    req = AprobarCoberturaTurnosRequest(
+        oferta_id=oferta_id,
+        consentimiento_manana=consentimiento_manana,
+        consentimiento_tarde=consentimiento_tarde,
+        orientador=orientador,
+    )
+    coberturas = estado.get("coberturas_turnos") or []
+    cob = next((c for c in coberturas if c.get("oferta_id") == req.oferta_id), None)
+    if cob is None or len(cob.get("segmentos", [])) < 2:
+        raise ErrorValidacionTablero(
+            f"No existe propuesta de cobertura por turnos para la oferta '{req.oferta_id}'."
+        )
+    seg_m, seg_t = cob["segmentos"][0], cob["segmentos"][1]
+    pid_m, pid_t = seg_m["perfil_id"], seg_t["perfil_id"]
+
+    if _consentimiento_rechazado_por_joven(estado, pid_m, req.oferta_id) or _consentimiento_rechazado_por_joven(
+        estado, pid_t, req.oferta_id
+    ):
+        raise ErrorValidacionTablero(
+            "Uno de los jóvenes indicó que no acepta enviar su CV a esta vacante; la cobertura no se puede aprobar."
+        )
+
+    ok_m = req.consentimiento_manana is True or (
+        req.consentimiento_manana is None and _consentimiento_vigente(estado, pid_m, req.oferta_id)
+    )
+    ok_t = req.consentimiento_tarde is True or (
+        req.consentimiento_tarde is None and _consentimiento_vigente(estado, pid_t, req.oferta_id)
+    )
+    if not ok_m or not ok_t:
+        raise ErrorValidacionTablero(
+            "Se requiere confirmar el consentimiento explícito de ambos jóvenes (mañana y tarde) antes de aprobar la cobertura por turnos (#165)."
+        )
+
+    ahora = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for pid, seg in ((pid_m, seg_m), (pid_t, seg_t)):
+        if not _consentimiento_vigente(estado, pid, req.oferta_id):
+            estado.setdefault("consentimientos", []).append(
+                {
+                    "perfil_id": pid,
+                    "oferta_id": req.oferta_id,
+                    "otorgado": True,
+                    "medio": "orientador_tablero",
+                    "timestamp": ahora,
+                }
+            )
+        seg["consentimiento_joven"] = True
+
+    # Construir modelos desde estado para invocar al agente de postulación real (#165)
+    modelos_perfiles, _, modelos_ofertas, _ = _construir_modelos_desde_estado(estado)
+    perfiles_map = {p.id: p for p in modelos_perfiles}
+    ofertas_map = {o.id: o for o in modelos_ofertas}
+
+    for p_raw in estado.get("perfiles", []):
+        if p_raw.get("id") in (pid_m, pid_t) and p_raw.get("id") not in perfiles_map:
+            perfiles_map[p_raw["id"]] = Perfil.model_validate(p_raw)
+    for o_raw in estado.get("ofertas", []):
+        if o_raw.get("id") == req.oferta_id and o_raw.get("id") not in ofertas_map:
+            ofertas_map[o_raw["id"]] = Oferta.model_validate(o_raw)
+
+    def _desglose_segmento(seg_info: dict[str, Any]) -> dict[str, Any]:
+        d = dict(seg_info.get("desglose") or {})
+        d.setdefault("cobertura", 1.0)
+        d.setdefault("minutos_traslado", 0)
+        d.setdefault("pasaje_diario", 0.0)
+        d.setdefault("penalizacion", 0)
+        return d
+
+    matches_turnos = [
+        Match(
+            perfil_id=pid_m,
+            oferta_id=req.oferta_id,
+            puntaje=seg_m.get("puntaje", 80),
+            desglose=_desglose_segmento(seg_m),
+            brechas=list(seg_m.get("brechas") or []),
+            explicacion=f"Cobertura por turnos ({seg_m['inicio']}-{seg_m['fin']}) aprobada por {req.orientador}",
+        ),
+        Match(
+            perfil_id=pid_t,
+            oferta_id=req.oferta_id,
+            puntaje=seg_t.get("puntaje", 80),
+            desglose=_desglose_segmento(seg_t),
+            brechas=list(seg_t.get("brechas") or []),
+            explicacion=f"Cobertura por turnos ({seg_t['inicio']}-{seg_t['fin']}) aprobada por {req.orientador}",
+        ),
+    ]
+
+    aprobacion = {
+        "orientador": req.orientador,
+        "timestamp": ahora,
+        "aprobados": [
+            {"perfil_id": pid_m, "oferta_id": req.oferta_id},
+            {"perfil_id": pid_t, "oferta_id": req.oferta_id},
+        ],
+    }
+
+    previos = _consentimientos_combinados(estado)
+    consentimientos = consentimientos_para(
+        [(pid_m, req.oferta_id), (pid_t, req.oferta_id)],
+        previos,
+        ahora,
+    )
+    RUTA_OUTBOX.mkdir(parents=True, exist_ok=True)
+    conn = _conectar_db_estado(estado)
+    try:
+        res_post = postular(
+            matches_turnos,
+            perfiles_map,
+            ofertas_map,
+            aprobacion=aprobacion,
+            conn=conn,
+            outbox=RUTA_OUTBOX,
+            consentimientos=consentimientos,
+            mensaje_orientador=f"Propuesta de cobertura compartida por turnos ({seg_m['inicio']}-{seg_m['fin']} y {seg_t['inicio']}-{seg_t['fin']}) aprobada por {req.orientador}.",
+        )
+    except ValueError as error:
+        raise ErrorValidacionTablero(f"No se envió la cobertura por turnos a la empresa: {error}") from error
+    finally:
+        conn.close()
+
+    for d_post in res_post.decisiones:
+        d_ser = _serializar_decision(d_post)
+        if d_ser not in estado["decisiones"]:
+            estado["decisiones"].append(d_ser)
+
+    archivos_nombres = [arch.name for arch in res_post.archivos]
+
+    for idx, seg in enumerate((seg_m, seg_t)):
+        pid = seg["perfil_id"]
+        archivos_perfil = [
+            arch.name for arch in res_post.archivos
+            if pid in arch.name or req.oferta_id in arch.name
+        ] or archivos_nombres
+
+        post_existente = _buscar_postulacion(estado, pid, req.oferta_id)
+        db_id = res_post.postulaciones[idx] if idx < len(res_post.postulaciones) else None
+        if post_existente is None:
+            estado.setdefault("postulaciones", []).append(
+                {
+                    "id": f"POST-{pid}-{req.oferta_id}",
+                    "db_id": db_id,
+                    "perfil_id": pid,
+                    "nombre_perfil": seg.get("nombre_perfil", pid),
+                    "oferta_id": req.oferta_id,
+                    "puesto": f"{cob.get('puesto', req.oferta_id)} · Turno {seg['inicio']}-{seg['fin']}",
+                    "empresa": cob.get("empresa", ""),
+                    "puntaje": seg.get("puntaje", 0),
+                    "estado": EstadoPostulacion.ENVIADO.value,
+                    "comentario_orientador": f"Cobertura por turnos ({seg['inicio']}-{seg['fin']}) aprobada por {req.orientador}",
+                    "mensaje_empresa": cob.get("explicacion", ""),
+                    "consentimiento_joven": True,
+                    "archivos_generados": archivos_perfil,
+                }
+            )
+        else:
+            if db_id is not None:
+                post_existente["db_id"] = db_id
+            post_existente["estado"] = EstadoPostulacion.ENVIADO.value
+            post_existente["consentimiento_joven"] = True
+            post_existente["comentario_orientador"] = f"Cobertura por turnos ({seg['inicio']}-{seg['fin']}) aprobada por {req.orientador}"
+            post_existente["archivos_generados"] = archivos_perfil
+
+    _registrar_decision_db(
+        estado,
+        Decision(
+            agente="orientador",
+            entrada_resumen=f"cobertura_turnos -> {req.oferta_id} ({pid_m} + {pid_t})",
+            salida_resumen=(
+                f"Cobertura por turnos aprobada por {req.orientador}: "
+                f"{pid_m} ({seg_m['inicio']}-{seg_m['fin']}) y {pid_t} ({seg_t['inicio']}-{seg_t['fin']})"
+            ),
+            razon=cob.get("motivo", "Aprobación de cobertura por turnos con consentimiento de ambos jóvenes."),
+            timestamp=ahora,
+        ),
+    )
+    estado["metricas"] = _calcular_metricas_impacto(estado)
+    _guardar_estado_tablero_db(estado)
+    return estado
+
+
 def _rechazo_guardrails(estado: dict[str, Any], datos: dict[str, Any]) -> str | None:
     """Guardrails (#9) sobre lo que llega de un archivo de data/; deja sus Decisiones y devuelve el rechazo, si hay."""
     resultados = evaluar_entrada(datos)
@@ -2123,6 +2478,35 @@ async def endpoint_reset(request: Request) -> JSONResponse:
     anunciar_codigos_joven(ESTADO_GLOBAL)  # #52: códigos nuevos de /joven en la consola
     empresa.anunciar_codigos_empresa(ESTADO_GLOBAL)  # #167: y los de /empresa/lista-corta
     _guardar_estado_tablero_db(ESTADO_GLOBAL)
+    return await endpoint_estado(request)
+
+
+async def endpoint_cobertura_turnos_demo(request: Request) -> JSONResponse:
+    _, err_resp = await _leer_json_validado(request)
+    if err_resp is not None:
+        return err_resp
+    cargar_escenario_cobertura_turnos(ESTADO_GLOBAL)
+    anunciar_codigos_joven(ESTADO_GLOBAL)
+    return await endpoint_estado(request)
+
+
+async def endpoint_aprobar_cobertura_turnos(request: Request) -> JSONResponse:
+    datos, err_resp = await _leer_json_validado(request)
+    if err_resp is not None or datos is None:
+        return err_resp  # type: ignore[return-value]
+    try:
+        req = AprobarCoberturaTurnosRequest.model_validate(datos)
+        aprobar_cobertura_turnos(
+            ESTADO_GLOBAL,
+            oferta_id=req.oferta_id,
+            consentimiento_manana=req.consentimiento_manana,
+            consentimiento_tarde=req.consentimiento_tarde,
+            orientador=req.orientador,
+        )
+    except ValidationError as exc:
+        return JSONResponse({"detail": exc.errors(include_context=False)}, status_code=422)
+    except ErrorValidacionTablero as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
     return await endpoint_estado(request)
 
 
@@ -2756,6 +3140,8 @@ app = Starlette(
         Route("/api/cargar-data", endpoint_cargar_data, methods=["POST"]),
         Route("/api/auditor/simular-sesgo", endpoint_simular_sesgo, methods=["POST"]),
         Route("/api/reset", endpoint_reset, methods=["POST"]),
+        Route("/api/orientador/cobertura-turnos/demo", endpoint_cobertura_turnos_demo, methods=["POST"]),
+        Route("/api/orientador/cobertura-turnos/aprobar", endpoint_aprobar_cobertura_turnos, methods=["POST"]),
         # Vista del joven (#52)
         Route("/joven", endpoint_joven_pagina, methods=["GET"]),
         Route("/api/joven/formulario", endpoint_joven_formulario, methods=["GET"]),
