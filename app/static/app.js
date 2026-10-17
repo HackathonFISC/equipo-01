@@ -1149,12 +1149,52 @@ function completarFiltroDeTrazas(historial) {
   }
 }
 
+// Tablero de agentes (#315): una tarjeta por agente con cuántas decisiones tomó y la última; un clic filtra la línea
+// de tiempo. Los agentes del recorrido salen siempre, aunque todavía no tengan actividad.
+const AGENTES_DEL_RECORRIDO = ["guardrails", "mercado", "perfil", "matching", "auditor", "formacion", "orientador_humano", "postulacion"];
+
+function renderizarTableroAgentes(historial, filtro) {
+  const contenedor = document.getElementById("tablero-agentes");
+  if (!contenedor) return;
+  const porAgente = new Map(AGENTES_DEL_RECORRIDO.map((a) => [a, []]));
+  for (const d of historial) {
+    if (!d.agente) continue;
+    if (!porAgente.has(d.agente)) porAgente.set(d.agente, []);
+    porAgente.get(d.agente).push(d);
+  }
+  const otros = [...porAgente.keys()]
+    .filter((a) => !AGENTES_DEL_RECORRIDO.includes(a))
+    .sort((a, b) => porAgente.get(b).length - porAgente.get(a).length);
+  contenedor.innerHTML = [...AGENTES_DEL_RECORRIDO, ...otros]
+    .map((id) => {
+      const decisiones = porAgente.get(id);
+      const agente = AGENTES[id] || { nombre: id, icono: "activity" };
+      const ultima = decisiones[decisiones.length - 1];
+      const resumen = ultima ? String(ultima.salida_resumen || ultima.entrada_resumen || "") : "";
+      const corto = resumen.length > 110 ? `${resumen.slice(0, 107)}…` : resumen;
+      const activo = filtro === id;
+      const clases = `agente-card ag-${escaparHtml(id)}${activo ? " agente-card--activo" : ""}${decisiones.length ? "" : " agente-card--vacio"}`;
+      return `
+        <button type="button" class="${clases}" data-agente="${escaparHtml(id)}" aria-pressed="${activo}">
+          <span class="agente-card__cabeza">${icono(agente.icono)}<b>${escaparHtml(agente.nombre)}</b></span>
+          <span class="agente-card__n">${decisiones.length}<small>${decisiones.length === 1 ? "decisión" : "decisiones"}</small></span>
+          <span class="agente-card__ultima">${
+            ultima
+              ? `<time datetime="${escaparHtml(ultima.timestamp)}">${escaparHtml(hora(ultima.timestamp))}</time> ${escaparHtml(corto)}`
+              : "Sin actividad todavía"
+          }</span>
+        </button>`;
+    })
+    .join("");
+}
+
 function renderizarTrazas() {
   const filtroEl = document.getElementById("filtro-agente");
   // `trazas` es el historial completo; `decisiones` solo la corrida actual (respaldo si el servidor no lo manda).
   const historial = estadoActual.trazas || estadoActual.decisiones || [];
   completarFiltroDeTrazas(historial);
   const filtro = filtroEl.value;
+  renderizarTableroAgentes(historial, filtro);
   const decisiones = historial.filter((d) => filtro === "TODOS" || d.agente === filtro);
   const lista = document.getElementById("tabla-decisiones-body");
 
@@ -1429,6 +1469,21 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("toast-msg").addEventListener("click", (ev) => ev.currentTarget.classList.add("hidden"));
   document.getElementById("filtro-perfil").addEventListener("change", renderizarListaCorta);
   document.getElementById("filtro-agente").addEventListener("change", renderizarTrazas);
+  // Clic en una tarjeta del tablero de agentes: filtra por ese agente; otro clic en la misma vuelve a «Todos» (#315).
+  document.getElementById("tablero-agentes")?.addEventListener("click", (evento) => {
+    const tarjeta = evento.target.closest("[data-agente]");
+    if (!tarjeta) return;
+    const filtroEl = document.getElementById("filtro-agente");
+    const agente = tarjeta.dataset.agente;
+    if (![...filtroEl.options].some((o) => o.value === agente)) {
+      const opcion = document.createElement("option");
+      opcion.value = agente;
+      opcion.textContent = (AGENTES[agente] || { nombre: agente }).nombre;
+      filtroEl.appendChild(opcion);
+    }
+    filtroEl.value = filtroEl.value === agente ? "TODOS" : agente;
+    renderizarTrazas();
+  });
 
   // Delegación para los botones del orientador (data-* sin onclick inline)
   document.getElementById("contenedor-matches").addEventListener("click", async (ev) => {

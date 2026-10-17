@@ -58,3 +58,16 @@ def test_joven_y_empresa_salen_a_la_landing_y_no_al_tablero(monkeypatch, tmp_pat
     html = TestClient(srv.app).get(ruta).text
     assert 'href="/">Salir al inicio</a>' in html
     assert 'href="/orientador"' not in html
+
+
+def test_el_tablero_trae_el_tablero_de_agentes_y_no_el_bloque_inec(monkeypatch, tmp_path):
+    # #315: Trazas abre con una tarjeta por agente y ya no sale el bloque de contexto INEC debajo de los indicadores.
+    monkeypatch.setenv("PUENTE_DB", str(tmp_path / "trazas.db"))
+    monkeypatch.setenv("PUENTE_OUTBOX", str(tmp_path / "outbox"))
+    import app.server as srv
+
+    cliente = TestClient(srv.app)
+    html = cliente.get("/orientador").text
+    assert 'id="tablero-agentes"' in html
+    assert "panel-metricas-impacto" not in html
+    assert "function renderizarTableroAgentes" in cliente.get("/static/app.js").text
