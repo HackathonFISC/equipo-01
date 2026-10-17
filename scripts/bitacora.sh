@@ -31,7 +31,12 @@ fi
 [ -n "$QUIEN" ] || QUIEN="desconocido"
 
 limpiar() { printf '%s' "$1" | tr '\n' ' ' | sed 's/|/\//g'; }
-AHORA="$(date '+%Y-%m-%d %H:%M')"
+# Hora de Panamá aunque la máquina esté en otra zona: las sesiones en la nube corren en UTC y la fila quedaba
+# 5 horas adelantada (#130). Sin la base de zonas (algún Git Bash de Windows) America/Panama caería en UTC sin
+# avisar; entonces se usa el desfase fijo de Panamá, UTC-5 todo el año.
+ZONA="America/Panama"
+[ "$(TZ="$ZONA" date '+%z')" = "-0500" ] || ZONA="<-05>5"
+AHORA="$(TZ="$ZONA" date '+%Y-%m-%d %H:%M')"
 FILA="| $AHORA | $(limpiar "$QUIEN") | $(limpiar "$HERRAMIENTA") | #$N · $(limpiar "$PEDIDO") | $(limpiar "$MANO") |"
 
 # Normaliza el final del archivo (sin líneas en blanco al final) para que la fila quede dentro de la tabla.

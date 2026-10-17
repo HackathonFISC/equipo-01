@@ -37,19 +37,29 @@ Vocabulario. **Agente de desarrollo**: la IA que programa contigo. **Agente del 
 **Flujo del grafo** (`puente/graph.py`, issue #10):
 
 ```
-entrada → guardrails (#9) → router por tipo
-   oferta  → Mercado (#5)  ─┐
-   perfil  → Perfil  (#6)  ─┴→ Matching (#4) → Auditor (#8, #50) ──sesgo──→ Perfil / orientador
-                                      ↓ ok
-                              Formación (#14, opcional)
-                                      ↓
-                       interrupt(): tablero del orientador (#11)
-                aprobar · editar · quitar candidato · rechazar
-                                      ↓
-                        Postulación (#7, #12): SQLite, PDF, Telegram, .ics
+entrada → guardrails (#9) ──rechazo──→ fin
+              ↓ ok
+        router por tipo
+   oferta   → Mercado (#5) ─┬─todas bloqueadas─→ alerta_oferta → fin
+                            ↓
+   perfil   → Perfil (#6) ──┴→ Matching (#4) ──sin lista corta──→ sin_matches → fin
+                                   ↓
+                          Auditor (#8, #50) ──sesgo, un solo recálculo──→ Matching, o Perfil si viene de su lectura
+                                   ↓ ok, o tope alcanzado (el diff va al orientador)
+                             Formación (#14)
+                                   ↓
+                interrupt(): aprobación del orientador (#11)
+      aprobar · editar → Postulación (#7, #12): SQLite, CV ciego en PDF, .ics, Telegram u outbox/
+                         → siguiente vacante pendiente, o fin
+      quitar candidato → Matching (recalcula sin la pareja)
+      rechazar         → siguiente vacante pendiente, o fin
+   consulta → fuera de alcance en el MVP → fin
+   evento_empresa (#54; entra directo al router, sin guardrails): la empresa rechaza a un postulado o cubre la vacante
+            → avisos al joven (Telegram u outbox/) → Matching: reacomodo y nueva aprobación
+            si no aplica: queda en errores y vuelve a la aprobación pendiente
 ```
 
-Cada nodo escribe una `Decision` en la tabla `decisiones` vía `puente/tools/db.py`. Checkpointer SQLite. LangSmith por variables de entorno. Telegram sin token escribe en `outbox/` y no falla.
+Cada nodo deja una `Decision` en la lista `decisiones` del estado, que guarda el checkpointer SQLite (`checkpoints.db`, aparte de `puente.db`). A la tabla `decisiones` de `puente.db` (`puente/tools/db.py`) la terminal (`python -m puente.graph`) solo lleva las de Postulación; el tablero copia además las de Matching, Auditor y Formación y registra las suyas (orientador, consentimiento). LangSmith por variables de entorno. En la terminal Telegram está apagado salvo con `--telegram`; apagado o sin token, los envíos quedan en `outbox/` y no falla.
 
 **Mapa de módulos y su issue.**
 
@@ -65,7 +75,7 @@ Cada nodo escribe una `Decision` en la tabla `decisiones` vía `puente/tools/db.
 | `puente/agents/auditor.py` | #8, #50 | Contrafactuales de nombre, género y corregimiento, línea base y retorno a Perfil / orientador |
 | `puente/guardrails.py` | #9 | Tamaños, rangos, inyección, fuera de alcance |
 | `puente/graph.py` completo | #10 | Router, `interrupt()`, checkpointer, trazas |
-| `app/streamlit_app.py` | #11 | Tablero del orientador: lista corta, bloqueadas, trazas, embudo, Auditor |
+| `app/server.py` (Starlette) y `app/static/` | #11 | Tablero del orientador: lista corta, bloqueadas, trazas, embudo, Auditor. `uv run uvicorn app.server:app --port 8000`; reemplazó a `app/streamlit_app.py` (`docs/decisiones.md`) |
 | Nodo `postulacion` y lecturas en `db.py` | #12 | La aprobación dispara las acciones |
 | `evals/casos.yaml`, `evals/run.py`, `evals/resultados.md` | #13 | 24 casos en 6 categorías, resultado esperado escrito antes de correr |
 | `puente/agents/formacion.py` | #14 | Set cover voraz sobre `cursos.csv` (stretch) |
