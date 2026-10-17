@@ -50,7 +50,14 @@ Copiadas del [issue #41](https://github.com/HackathonFISC/equipo-01/issues/41), 
 
 ### Cierre
 
-Congelar funciones a las 08:00 del 17 de octubre (H20), congelar código a las 10:30 (H22:30) y tag `final-24h` a las 11:00 (H23), nunca después de las 11:30. La hora 0 fue a las 12:00 del 16 de octubre (confirmado por @jesus12ga).
+Hora límite de entrega: **13:00 del 17 de octubre** (hora 0 = 13:00; registrado por @Cornelio-Guerra a las 23:40; @jesus12ga había anotado 12:00 a las 19:26, pendiente de confirmación escrita de la organización). Para ser seguros con cualquiera de las dos horas: congelar funciones a las 09:00 (H20), congelar código a las 11:30 y tag `final-24h` a las 11:45, nunca después de las 12:00. La hora extra, si existe, es solo para documentación. Demo MVP de H12 a la 01:00; video a las 10:00.
+
+## 2026-10-16 23:50 · Plan después de la demo: ideas nuevas como `stretch`
+
+- **Decisión:** después de la demo de H12 y antes del congelamiento de código (11:30) se trabajan, en este orden y solo como `stretch`, el redactor de puente semántico (#157), la vista empresa (#167), la vista aplicante fase 2 (#166), la micro-misión con scorecard de evidencia (#158), el horario vivo desde la tirilla de matrícula (#164) y el chatbot de WhatsApp (#160); Miguel toma la cobertura por turnos (#165) y la vista admin con roles (#168) después del video; Jesús, la reserva tripartita con formación (#159) solo si la documentación (#15) va bien; Vercel (#161) queda como demo pública de solo lectura, nunca como ruta de la demo en vivo.
+- **Contexto:** ideas propuestas por Cornelio a las 23:30 (micro-misión, escrow de talento, redactor anti-sesgo, modo semestre y job-sharing, tres vistas, WhatsApp, Vercel). Se juzgaron contra la rúbrica y el tiempo restante; cada issue trae las mejoras: validación en código y no «por IA», cifras calculadas por el solver sobre el pool real, nombres sin implicaciones laborales («carta de intención», «cobertura por turnos»), texto antes que voz, datos personales fuera.
+- **Consecuencias:** nada de esto entra en la ruta de la demo de H12 ni se fusiona después de las 11:30; toda vista nueva va en archivos y rutas nuevas; lo que no esté fusionado se declara fuera de alcance en la tabla de cobertura del README. Los entregables obligatorios (#15, #16, #129, #17) van primero.
+- **Quién:** @Cornelio-Guerra
 
 ## Plantilla
 
