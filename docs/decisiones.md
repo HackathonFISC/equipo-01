@@ -59,6 +59,20 @@ Hora límite de entrega: **13:00 del 17 de octubre** (hora 0 = 13:00; registrado
 - **Consecuencias:** nada de esto entra en la ruta de la demo de H12 ni se fusiona después de las 11:30; toda vista nueva va en archivos y rutas nuevas; lo que no esté fusionado se declara fuera de alcance en la tabla de cobertura del README. Los entregables obligatorios (#15, #16, #129, #17) van primero.
 - **Quién:** @Cornelio-Guerra
 
+## 2026-10-17 04:30 · WhatsApp: webhook en la laptop y única excepción del modo demo pública
+
+- **Decisión:** el webhook `POST /api/whatsapp` (#160) corre en la laptop de la demo detrás de `cloudflared tunnel --url http://localhost:8000`, no en Vercel. En modo demo pública (`PUENTE_DEMO_PUBLICA=1` o Vercel) es la única ruta POST que pasa el middleware de solo lectura, y la ruta misma rechaza con 403 lo que no traiga una firma de Twilio válida. El consentimiento por WhatsApp se pide en cuanto la vacante entra en la lista corta, antes de que el orientador apruebe.
+- **Contexto:** en Vercel (#161) el estado vive en `/tmp` y se pierde entre invocaciones (la conversación no sobrevive) y el LLM queda en `reproducir`. Exponer la laptop por el túnel expone el tablero entero; con el modo público queda en solo lectura y el bot sigue recibiendo mensajes firmados. El tablero exige el consentimiento antes de aprobar (#49), así que pedirlo después de la aprobación no tendría efecto.
+- **Consecuencias:** en modo público el LLM queda en `reproducir` y una entrevista nueva no arma el perfil. La demo en vivo corre sin modo público y la URL del túnel solo va a la consola de Twilio. El número del joven no se guarda: el bot no escribe por su cuenta salvo el «perfil listo» y el resultado de la aprobación sigue por Telegram u `outbox/`.
+- **Quién:** @Cornelio-Guerra (Claude Code)
+
+## 2026-10-17 05:45 · WhatsApp también por el número de prueba gratis de Meta
+
+- **Decisión:** el mismo bot de #160 recibe además por `/api/whatsapp/meta`: la WhatsApp Cloud API con el número de prueba de Meta, firma `X-Hub-Signature-256` y respuestas por la Graph API en una tarea de fondo. El webhook de Twilio sigue igual.
+- **Contexto:** en la prueba en vivo Twilio pidió pago para usar WhatsApp. El número de prueba de Meta es gratis, admite hasta 5 destinatarios verificados y no exige verificar el negocio. Lo eligió @Cornelio-Guerra.
+- **Consecuencias:** el token temporal de Meta dura 24 h y hay que renovarlo en *API Setup* antes de la demo. Meta no acepta la respuesta en el cuerpo del webhook, así que todo sale por REST y el número del joven se usa solo en memoria mientras se responde.
+- **Quién:** @Cornelio-Guerra (Claude Code)
+
 ## Plantilla
 
 ## AAAA-MM-DD · Título

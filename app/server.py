@@ -16,6 +16,8 @@ import re
 import sqlite3
 import tempfile
 import uuid
+
+import dotenv
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -110,11 +112,20 @@ if es_modo_demo_publica():
     os.environ["LLM_MODO"] = "reproducir"
 
 
+# Únicas mutaciones que pasan el modo demo pública: los webhooks de WhatsApp (#160), de Twilio y de Meta.
+# Cada ruta rechaza con 403 lo que no traiga una firma válida, así que nadie más escribe a través de ellas.
+RUTAS_POST_DEMO_PUBLICA = frozenset({"/api/whatsapp", "/api/whatsapp/meta"})
+
+
 class MiddlewareDemoPublicaReadOnly(BaseHTTPMiddleware):
-    """En modo demo pública (Vercel / PUENTE_DEMO_PUBLICA=1), bloquea mutaciones (POST, PUT, DELETE, PATCH) con 403 (#161)."""
+    """En modo demo pública (Vercel / PUENTE_DEMO_PUBLICA=1), bloquea mutaciones (POST, PUT, DELETE, PATCH) con 403 (#161).
+
+    Excepción: POST a `RUTAS_POST_DEMO_PUBLICA`, que exige la firma de Twilio (#160).
+    """
 
     async def dispatch(self, request: Request, call_next):
-        if es_modo_demo_publica() and request.method not in ("GET", "HEAD", "OPTIONS"):
+        exenta = request.method == "POST" and request.url.path in RUTAS_POST_DEMO_PUBLICA
+        if es_modo_demo_publica() and request.method not in ("GET", "HEAD", "OPTIONS") and not exenta:
             return JSONResponse(
                 {
                     "detail": "Modo demostración pública en Vercel: el servidor opera en solo lectura para preservar la demo del hackathon (#161).",
@@ -147,11 +158,14 @@ class MiddlewareSinCache(BaseHTTPMiddleware):
 
 
 from app import joven_fase2  # Vista del joven, fase 2 (#166): la lógica vive en app/joven_fase2.py
+from app import whatsapp  # Chatbot de WhatsApp del joven (#160): la lógica vive en app/whatsapp.py
+from app import telegram_bot  # El mismo chatbot por Telegram, con long polling (#160, #221)
 from app import mensajes as mensajes_empresa  # Mensajes del joven a la empresa (#289): la lógica vive en app/mensajes.py
 
 RUTA_APP = Path(__file__).resolve().parent
 RUTA_STATIC = RUTA_APP / "static"
 RUTA_RAIZ = RUTA_APP.parent
+RUTA_DOTENV = RUTA_RAIZ / ".env"
 RUTA_DATA = RUTA_RAIZ / "data"
 RUTA_OUTBOX = (
     Path(tempfile.gettempdir()) / "puente_outbox"
@@ -2750,7 +2764,7 @@ def obtener_panel_operacion(estado: dict[str, Any]) -> dict[str, Any]:
             "total": n_grab_data + n_grab_evals,
         },
         "telegram_estado": "activo" if os.getenv("TELEGRAM_BOT_TOKEN") else "outbox_local",
-        "whatsapp_estado": "activo" if os.getenv("TWILIO_AUTH_TOKEN") else "sandbox_inactivo",
+        "whatsapp_estado": "activo" if os.getenv("TWILIO_AUTH_TOKEN") or os.getenv("META_APP_SECRET") else "sandbox_inactivo",
         "umbrales_solver": cfg_solver,
         "roles_sistema": [
             {"rol": "admin", "nombre": "Admin (Orientador)", "ruta": "/orientador", "agente": "orientador"},
@@ -3463,24 +3477,26 @@ def registrar_perfil_joven(
     perfil: Perfil,
     decision: Decision,
     taxonomia: dict[str, dict] | None = None,
+    *,
+    canal: str = "/joven",
+    modalidad_ingreso: str = "Vista del joven: formulario fijo y entrevista (#52)",
 ) -> dict[str, Any]:
     """Suma al joven al tablero y recalcula el grafo.
 
     No usa `registrar_nuevo_perfil` porque ese fija el horario y recibe los skill_id del
-    orientador; aquí las habilidades vienen verificadas por el agente Perfil (#6).
+    orientador; aquí las habilidades vienen verificadas por el agente Perfil (#6). `canal` dice
+    por dónde llegó: la vista web (#52) o el chatbot de WhatsApp (#160).
     """
     estado.setdefault("entradas_perfil", []).append(entrada)
-    estado["perfiles"].append(
-        _perfil_para_tablero(perfil, "Vista del joven: formulario fijo y entrevista (#52)", taxonomia or {})
-    )
+    estado["perfiles"].append(_perfil_para_tablero(perfil, modalidad_ingreso, taxonomia or {}))
     _registrar_decision_db(estado, decision)
     _registrar_decision_db(
         estado,
         Decision(
             agente="joven",
             entrada_resumen=f"registro_perfil ({perfil.id})",
-            salida_resumen=f"Perfil {perfil.id} enviado desde /joven ({len(perfil.habilidades)} habilidades)",
-            razon="El joven completó el formulario y entrevista en la vista de aplicante (/joven).",
+            salida_resumen=f"Perfil {perfil.id} enviado desde {canal} ({len(perfil.habilidades)} habilidades)",
+            razon=f"El joven completó el formulario y entrevista por {canal}.",
             timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         ),
     )
@@ -3547,10 +3563,12 @@ def registrar_consentimiento_joven(
     perfil_id: str,
     oferta_id: str,
     otorgado: bool,
+    medio: str = MEDIO_CONSENTIMIENTO_JOVEN,
 ) -> dict[str, Any]:
     """Casilla del joven: un `Consentimiento` en `consentimientos` y su Decision, como en el tablero (#49).
 
-    Es el mismo registro que deja hoy la aprobación del orientador, con medio "joven_web". El
+    Es el mismo registro que deja hoy la aprobación del orientador, con medio "joven_web" (o
+    "whatsapp" si respondió SÍ o NO al chatbot, #160). El
     estado de la postulación en el tablero no se mueve: el orientador solo actúa sobre
     "preseleccionado" y SQLite todavía no tiene "consentido" (#84). El joven ve "consentido".
     """
@@ -3575,26 +3593,29 @@ def registrar_consentimiento_joven(
             "perfil_id": req.perfil_id,
             "oferta_id": req.oferta_id,
             "otorgado": req.otorgado,
-            "medio": MEDIO_CONSENTIMIENTO_JOVEN,
+            "medio": medio,
             "timestamp": ahora,
         }
     )
     estado.setdefault("consentimientos", []).append(dict(consentimiento))
     empresa = post.get("empresa") or "la empresa"
+    donde, canal = {"whatsapp": ("WhatsApp", "WhatsApp"), "telegram": ("Telegram", "Telegram")}.get(
+        medio, ("la vista del joven", "/joven")
+    )
     _registrar_decision_db(
         estado,
         Decision(
             agente="consentimiento",
             entrada_resumen=f"{req.perfil_id} -> {req.oferta_id}",
             salida_resumen=(
-                f"Consentimiento confirmado (medio: {MEDIO_CONSENTIMIENTO_JOVEN})"
+                f"Consentimiento confirmado (medio: {medio})"
                 if req.otorgado
-                else f"Consentimiento negado (medio: {MEDIO_CONSENTIMIENTO_JOVEN}): el CV no se envía"
+                else f"Consentimiento negado (medio: {medio}): el CV no se envía"
             ),
             razon=(
-                f"El joven marcó en la vista del joven que acepta que su CV, sin cédula, teléfono ni dirección, llegue a {empresa}."
+                f"El joven marcó en {donde} que acepta que su CV, sin cédula, teléfono ni dirección, llegue a {empresa}."
                 if req.otorgado
-                else f"El joven indicó en la vista del joven que no acepta que su CV llegue a {empresa}."
+                else f"El joven indicó en {donde} que no acepta que su CV llegue a {empresa}."
             ),
             timestamp=ahora,
         ),
@@ -3604,13 +3625,13 @@ def registrar_consentimiento_joven(
         Decision(
             agente="joven",
             entrada_resumen=f"{req.perfil_id} -> {req.oferta_id}",
-            salida_resumen=f"Consentimiento {'otorgado' if req.otorgado else 'negado'} desde /joven",
+            salida_resumen=f"Consentimiento {'otorgado' if req.otorgado else 'negado'} desde {canal}",
             razon=f"Decisión de consentimiento registrada por el joven sobre la vacante {req.oferta_id} ({empresa}).",
             timestamp=ahora,
         ),
     )
     post["consentimiento_joven"] = req.otorgado
-    post["consentimiento_medio"] = MEDIO_CONSENTIMIENTO_JOVEN
+    post["consentimiento_medio"] = medio
     for m in estado.get("matches", []):
         if m.get("perfil_id") == req.perfil_id and m.get("oferta_id") == req.oferta_id:
             m["consentimiento_joven"] = req.otorgado
@@ -4267,11 +4288,35 @@ async def endpoint_perfil_archivo(request: Request) -> JSONResponse:
 RUTA_STATIC.mkdir(parents=True, exist_ok=True)
 
 
+def cargar_dotenv() -> bool:
+    """Lee `.env` sin pisar lo que el entorno ya trae con valor, como `puente/llm.py` (`override=False`).
+
+    Sin esto, lo que se lee en cada solicitud (TWILIO_*, PUBLIC_BASE_URL) solo existía si se exportaba a mano o con
+    `uv run --env-file .env`, y el webhook de WhatsApp respondía 503 a todo (#160). Lo que este módulo lee al
+    importarse (PUENTE_DB del estado inicial, PUENTE_DEMO_PUBLICA para el LLM y el outbox) sigue saliendo del
+    entorno, como antes. Se llama por `dotenv.load_dotenv`: así el conftest de las pruebas lo anula.
+    """
+    # Una variable vacía cuenta como no definida: si al arrancar `.env` traía `TWILIO_AUTH_TOKEN=` y luego se llenó,
+    # `override=False` dejaría la cadena vacía para siempre. Se carga con override y se devuelven las no vacías.
+    previas = {clave: valor for clave, valor in os.environ.items() if valor}
+    try:
+        cargado = bool(dotenv.load_dotenv(RUTA_DOTENV, override=True))
+        os.environ.update(previas)
+        return cargado
+    except Exception:  # noqa: BLE001 - un .env ilegible no tumba el servidor; faltarán las claves y se avisa
+        _registro.exception("No se pudo leer %s", RUTA_DOTENV)
+        return False
+
+
 @contextlib.asynccontextmanager
 async def _ciclo_de_vida(_app: Starlette):
+    cargar_dotenv()  # #160: antes de atender, para que el webhook vea TWILIO_AUTH_TOKEN
+    bot_telegram = telegram_bot.iniciar()  # solo con PUENTE_TELEGRAM_BOT=1 y TELEGRAM_BOT_TOKEN
     anunciar_codigos_joven(ESTADO_GLOBAL)
     empresa.anunciar_codigos_empresa(ESTADO_GLOBAL)  # #167
     yield
+    if bot_telegram is not None:
+        bot_telegram.cancel()
 
 
 app = Starlette(
@@ -4317,6 +4362,9 @@ app = Starlette(
         Route("/api/joven/{perfil_id}/tirilla", joven_fase2.endpoint_tirilla, methods=["POST"]),
         Route("/api/joven/{perfil_id}/tirilla/confirmar", joven_fase2.endpoint_confirmar_tirilla, methods=["POST"]),
         Route("/api/joven/{perfil_id}/postulaciones", joven_fase2.endpoint_postulaciones, methods=["GET"]),
+        # Chatbot de WhatsApp del joven por Twilio Sandbox (#160); firma de Twilio obligatoria
+        Route("/api/whatsapp", whatsapp.endpoint_webhook, methods=["POST"]),
+        Route("/api/whatsapp/meta", whatsapp.endpoint_meta, methods=["GET", "POST"]),
         Route("/api/joven/{perfil_id}/mensaje", mensajes_empresa.endpoint_enviar, methods=["POST"]),
         # Lista corta ciega de la empresa (#167)
         Route("/empresa/lista-corta", empresa.endpoint_pagina, methods=["GET"]),

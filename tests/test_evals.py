@@ -39,6 +39,7 @@ CONTEO_ESPERADO = {
     "reacomodo": 1,  # #225: la empresa rechaza y el grafo recalcula con aprobación pendiente
     "formacion": 2,  # #225: un curso válido entre cuatro; ninguno si chocan horario o pasaje
     "punta_a_punta": 1,  # #225: perfil -> lista corta -> aprobación -> outbox
+    "whatsapp": 2,  # #160: el NO por WhatsApp frena el envío; la inyección por WhatsApp solo se marca
 }
 
 
@@ -127,6 +128,7 @@ def test_ids_siguen_el_formato_pedido(casos):
         "reacomodo": "REA",
         "formacion": "FOR",
         "punta_a_punta": "E2E",
+        "whatsapp": "WSP",
     }
     for caso in casos["casos"]:
         assert caso["id"].startswith(prefijos[caso["categoria"]] + "-")
