@@ -853,7 +853,6 @@ wheels = [
 name = "puente"
 version = "0.1.0"
 source = { virtual = "." }
-default-groups = ["dev", "ocr"]
 dependencies = [
     { name = "anthropic" },
     { name = "fpdf2" },

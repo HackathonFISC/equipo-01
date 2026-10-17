@@ -25,11 +25,8 @@ dependencies = [
 [dependency-groups]
 dev = ["httpx", "pytest"]
 # OCR local para leer CVs en foto (#274). Va aparte para que no entre al paquete de Vercel, que pasa de 500 MB con
-# onnxruntime; ahí la demo es de solo lectura y no se suben fotos (#317). `uv sync` lo instala igual en local.
+# onnxruntime; ahí la demo es de solo lectura y no se suben fotos (#317). En local: `uv sync --group ocr`.
 ocr = ["rapidocr-onnxruntime>=1.4.4"]
-
-[tool.uv]
-default-groups = ["dev", "ocr"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
