@@ -1134,7 +1134,9 @@ def obtener_datos_iniciales_demo(
             "modalidad_ingreso": "datos de ejemplo (sintéticos) · entrevista sin CV",
             "horario_libre": "Lunes a Viernes 07:00-17:30 (estudia de noche 18:00-22:00)",
             "salario_minimo": 600.0,
-            "presupuesto_pasaje_diario": 5.00,
+            # El caso canónico de Yaritza (data/perfiles/yaritza.json, caso_yaritza.json y README) puede gastar
+            # B/. 3,00 al día: con eso Tocumen queda fuera por traslado y por pasaje, como dice el guion (#229).
+            "presupuesto_pasaje_diario": 3.00,
             "habilidades": [
                 {
                     "skill_id": "atencion_cliente",

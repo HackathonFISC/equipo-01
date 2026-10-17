@@ -1450,7 +1450,19 @@ document.addEventListener("DOMContentLoaded", () => {
             })
           )
         ) {
-          mostrarToast("Traslado máximo ajustado a 95 min: OF-TOCUMEN-03 ahora es viable para Yaritza y quedó trazado.");
+          // El aviso sale del estado recalculado, no de un texto fijo (#229): con el pasaje de Yaritza (B/. 3,00 al
+          // día) Tocumen deja de descartarse por traslado, pero el pasaje la sigue dejando fuera.
+          const viable = (estadoActual?.matches || []).some(
+            (m) => m.perfil_id === "PERFIL-YARITZA" && m.oferta_id === "OF-TOCUMEN-03"
+          );
+          const descarte = (estadoActual?.descartados || []).find(
+            (d) => d.perfil_id === "PERFIL-YARITZA" && d.oferta_id === "OF-TOCUMEN-03"
+          );
+          mostrarToast(
+            viable
+              ? "Traslado máximo ajustado a 95 min: OF-TOCUMEN-03 ahora es viable para Yaritza y quedó trazado."
+              : `Traslado máximo ajustado a 95 min y trazado. OF-TOCUMEN-03 ya no se descarta por traslado; sigue fuera para Yaritza: ${descarte?.motivo || "otra restricción"}.`
+          );
         }
       });
     });

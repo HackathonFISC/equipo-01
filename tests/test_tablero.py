@@ -899,17 +899,21 @@ def test_issue_168_roles_umbrales_tocumen_y_panel_operacion(
                 for m in est0["matches"]
             )
 
-            # 3. Cambiar el traslado máximo a 95 min hace viable OF-TOCUMEN-03 para Yaritza y queda trazado con agente='orientador'
+            # 3. Con el traslado máximo en 95 min, OF-TOCUMEN-03 deja de descartarse por traslado para Yaritza y el
+            # cambio queda trazado con agente='orientador'. Sigue fuera por pasaje: $4.70 al día frente a su
+            # presupuesto de $3.00 (el caso canónico, #229).
             r_umb = await client.post(
                 "/api/orientador/umbrales",
                 json={"max_minutos_traslado": 95, "max_vacantes_por_perfil": 3},
             )
             assert r_umb.status_code == 200
             est_umb = r_umb.json()
-            assert any(
-                m["perfil_id"] == "PERFIL-YARITZA" and m["oferta_id"] == "OF-TOCUMEN-03"
-                for m in est_umb["matches"]
+            motivo_tocumen = next(
+                d["motivo"]
+                for d in est_umb["descartados"]
+                if d["perfil_id"] == "PERFIL-YARITZA" and d["oferta_id"] == "OF-TOCUMEN-03"
             )
+            assert "traslado" not in motivo_tocumen and "pasaje diario $4.70" in motivo_tocumen
             assert any(
                 d["agente"] == "orientador" and "95 min" in d["salida_resumen"]
                 for d in est_umb["decisiones_db"]
@@ -1373,3 +1377,28 @@ def test_la_ruta_de_respaldo_registra_la_hora_por_confirmar(tmp_path: Path, monk
                      if t["salida_resumen"] == "sin franja compatible: fecha por confirmar" and "aviso de respaldo" in t["razon"]]
     assert len(por_confirmar) == 1
     assert (tmp_path / "entrevista_PERFIL-YARITZA_OF-CHORRERA-01.ics").exists()
+
+
+def test_yaritza_del_tablero_es_el_caso_canonico_y_tocumen_cae_por_traslado_y_pasaje() -> None:
+    """La Yaritza del tablero puede gastar B/. 3,00 al día, como yaritza.json, caso_yaritza.json y el README (#229).
+
+    Lo que se ve en el paso 4 del guion no cambia (Vista Alegre, 100 puntos, 20 min, $1.50 al día), y Tocumen
+    queda fuera por traslado y por pasaje, como dice el guion.
+    """
+    estado = obtener_datos_iniciales_demo()
+    yaritza = next(p for p in estado["perfiles"] if p["id"] == "PERFIL-YARITZA")
+    assert yaritza["presupuesto_pasaje_diario"] == 3.0
+
+    mejor = max(
+        (m for m in estado["matches"] if m["perfil_id"] == "PERFIL-YARITZA"), key=lambda m: m["puntaje"]
+    )
+    assert mejor["oferta_id"] == "OF-VISTAALEGRE-02" and mejor["puntaje"] == 100
+    desglose = mejor["desglose"]
+    assert desglose["minutos_traslado"] == 20 and desglose["pasaje_diario"] == 1.5
+
+    tocumen = next(
+        d["motivo"]
+        for d in estado["descartados"]
+        if d["perfil_id"] == "PERFIL-YARITZA" and d["oferta_id"] == "OF-TOCUMEN-03"
+    )
+    assert "traslado 95 min > 60" in tocumen and "presupuesto $3.00" in tocumen
