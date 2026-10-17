@@ -605,9 +605,54 @@ def test_cobertura_cero_descarta_en_lista_corta_salvo_oferta_sin_habilidades():
     assert "ninguna habilidad requerida en común" in str(descarte_maria.desglose.get("motivo_descarte"))
     assert set(descarte_maria.brechas) == {"manejo_caja", "atencion_cliente"}
 
-    # Si la vacante no exige habilidades, nadie se descarta por cobertura
+    # Si la vacante no exige habilidades, nadie se descarta por cobertura, pero requiere confirmación (#127)
     matches_sin_req = asignar([maria], [oferta_sin_requisitos], traslados)
     assert [m.perfil_id for m in matches_sin_req if m.oferta_id != SIN_OFERTA and m.desglose.get("viable")] == ["maria"]
+    m_sin_req = matches_sin_req[0]
+    assert m_sin_req.desglose["cobertura"] == 0.0
+    assert "habilidades" in m_sin_req.desglose["requiere_confirmacion"]
+    assert m_sin_req.desglose["penalizacion"] == 10
+    assert m_sin_req.puntaje == -10
+
+
+def test_desempate_estable_por_id_ante_barajado_y_oferta_sin_habilidades():
+    """Regresión #127: diez jóvenes iguales barajados 20 veces dan siempre la misma lista corta ordenada por id."""
+    import random
+
+    traslados = construir_matriz_default()
+    oferta = {
+        "id": "OF-UNICA",
+        "puesto": "Cajero",
+        "empresa": "Tienda",
+        "corregimiento": "La Chorrera",
+        "salario_mensual": 650.0,
+        "habilidades": ["atencion_cliente"],
+        "bloqueada": False,
+    }
+    base_perfiles = [
+        {
+            "id": f"P-{idx:02d}",
+            "nombre": f"Joven {idx}",
+            "corregimiento": "La Chorrera",
+            "salario_minimo": 500.0,
+            "presupuesto_pasaje_diario": 3.0,
+            "habilidades": ["atencion_cliente"],
+        }
+        for idx in range(10)
+    ]
+
+    rng = random.Random(2026)
+    listas_cortas: list[list[str]] = []
+    for _ in range(20):
+        copia = list(base_perfiles)
+        rng.shuffle(copia)
+        res = asignar(copia, [oferta], traslados)
+        corta = [m.perfil_id for m in res if m.oferta_id != SIN_OFERTA and m.desglose.get("viable")]
+        listas_cortas.append(corta)
+
+    esperada = ["P-00", "P-01", "P-02"]
+    for corta in listas_cortas:
+        assert corta == esperada
 
 
 
