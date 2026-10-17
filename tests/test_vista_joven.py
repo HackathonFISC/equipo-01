@@ -530,3 +530,38 @@ def test_registro_tiene_tope_de_tamano_y_de_frecuencia(entorno, monkeypatch: pyt
     codigos = [cliente.post("/api/joven/perfil", json=formulario_yaritza()).status_code for _ in range(3)]
     assert codigos == [201, 201, 429]
     assert len(llm.prompts) == 2  # el tercero no llegó al LLM
+
+
+def test_postular_manda_el_ultimo_registro_de_la_pareja(tmp_path: Path) -> None:
+    """Mismo criterio en `postular()` (#84), el grafo y el tablero: manda el último registro."""
+    from puente.agents.postulacion import consentimiento_otorgado, postular
+    from puente.schemas import HabilidadPerfil, Horario, Match, Oferta, Perfil
+
+    par = ("p1", "o1")
+    no = {"perfil_id": "p1", "oferta_id": "o1", "otorgado": False, "medio": "joven_web"}
+    si = {"perfil_id": "p1", "oferta_id": "o1", "otorgado": True, "medio": "joven_web"}
+    assert consentimiento_otorgado([no, si], par) is True
+    assert consentimiento_otorgado([si, no], par) is False
+    assert consentimiento_otorgado([], par) is False
+
+    perfil = Perfil(id="p1", nombre="Persona Ficticia", edad=21, corregimiento="La Chorrera",
+                    salario_minimo=300.0, presupuesto_pasaje_diario=2.0,
+                    habilidades=[HabilidadPerfil(skill_id="atencion_cliente", evidencia="atiendo clientes")])
+    oferta = Oferta(id="o1", puesto="Cajera", empresa="Super Demo", corregimiento="Arraiján",
+                    salario_mensual=420.0, horario=Horario(dias=["lunes"], hora_inicio="08:00", hora_fin="16:00"),
+                    habilidades=["atencion_cliente"])
+    match = Match(perfil_id="p1", oferta_id="o1", puntaje=90,
+                  desglose={"cobertura": 1.0, "minutos_traslado": 30, "pasaje_diario": 1.0, "penalizacion": 0})
+    aprobacion = {"orientador": "Orientadora Ficticia", "timestamp": "2026-10-20T09:30:00-05:00",
+                  "aprobados": [{"perfil_id": "p1", "oferta_id": "o1"}]}
+    conn = db.conectar(tmp_path / "ultimo.db")
+    try:
+        with pytest.raises(ValueError, match="Sin consentimiento"):
+            postular([match], {"p1": perfil}, {"o1": oferta}, aprobacion=aprobacion, conn=conn,
+                     outbox=tmp_path / "outbox", consentimientos=[si, no])
+        assert not (tmp_path / "outbox").exists()
+        postular([match], {"p1": perfil}, {"o1": oferta}, aprobacion=aprobacion, conn=conn,
+                 outbox=tmp_path / "outbox", consentimientos=[no, si])
+        assert db.embudo(conn)["enviado"] == 1
+    finally:
+        conn.close()

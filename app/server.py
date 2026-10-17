@@ -273,10 +273,30 @@ def _ultimo_consentimiento(estado: dict[str, Any], perfil_id: str, oferta_id: st
     )
 
 
+def _consentimientos_combinados(estado: dict[str, Any]) -> list[dict[str, Any]]:
+    """Los consentimientos del grafo y luego los del tablero que el grafo aún no tiene (#52, #54).
+
+    Es la única lista que leen el tablero, el grafo y `postular()`: en las tres manda el último
+    registro de cada pareja.
+    """
+    del_grafo: list[dict[str, Any]] = []
+    grafo, cfg = estado.get("_grafo"), estado.get("_config_grafo")
+    if grafo is not None and cfg is not None:
+        try:
+            del_grafo = [dict(c) for c in grafo.get_state(cfg).values.get("consentimientos") or []]
+        except Exception:
+            del_grafo = []
+    return del_grafo + [dict(c) for c in estado.get("consentimientos") or [] if dict(c) not in del_grafo]
+
+
 def _consentimiento_vigente(estado: dict[str, Any], perfil_id: str, oferta_id: str) -> bool:
     """False solo si el último registro de la pareja es un «no» (#52); sin registro, lo confirma el orientador (#49)."""
-    registro = _ultimo_consentimiento(estado, perfil_id, oferta_id)
-    return registro is None or bool(registro.get("otorgado"))
+    propios = [
+        c
+        for c in _consentimientos_combinados(estado)
+        if c.get("perfil_id") == perfil_id and c.get("oferta_id") == oferta_id
+    ]
+    return not propios or bool(propios[-1].get("otorgado"))
 
 
 def _construir_modelos_desde_estado(
@@ -1150,8 +1170,8 @@ def procesar_accion_orientador(
         # El «no» del joven en /joven (#52) manda sobre la casilla del orientador: 422 sin efectos.
         if not _consentimiento_vigente(estado, req.perfil_id, req.oferta_id):
             raise ErrorValidacionTablero(
-                f"{req.perfil_id} indicó en la vista del joven que no acepta que su CV llegue a "
-                f"{req.oferta_id}. Postulación no envía nada; el joven puede cambiar su decisión en /joven."
+                f"{req.perfil_id} negó su consentimiento: no acepta que su CV llegue a {req.oferta_id}. "
+                "Postulación no envía nada; el joven puede cambiar su decisión en /joven."
             )
         lista_consentidos = (
             req.consentidos
@@ -1169,24 +1189,26 @@ def procesar_accion_orientador(
             RUTA_OUTBOX, f"cv_{req.perfil_id}_{req.oferta_id}.pdf"
         )
 
-        consentimiento: Consentimiento = {
-            "perfil_id": req.perfil_id,
-            "oferta_id": req.oferta_id,
-            "otorgado": True,
-            "medio": "orientador",
-            "timestamp": ahora,
-        }
-        estado.setdefault("consentimientos", []).append(consentimiento)
-        _registrar_decision_db(
-            estado,
-            {
+        # El orientador confirma solo si el joven no dejó su propio registro (el «sí» de /joven queda con su medio).
+        if _ultimo_consentimiento(estado, req.perfil_id, req.oferta_id) is None:
+            consentimiento: Consentimiento = {
+                "perfil_id": req.perfil_id,
+                "oferta_id": req.oferta_id,
+                "otorgado": True,
+                "medio": "orientador",
                 "timestamp": ahora,
-                "agente": "consentimiento",
-                "entrada_resumen": f"{req.perfil_id} -> {req.oferta_id}",
-                "salida_resumen": "Consentimiento confirmado (medio: orientador)",
-                "razon": f"{req.orientador} confirmó que el joven consintió el envío de su CV sin PII a la empresa.",
-            },
-        )
+            }
+            estado.setdefault("consentimientos", []).append(consentimiento)
+            _registrar_decision_db(
+                estado,
+                {
+                    "timestamp": ahora,
+                    "agente": "consentimiento",
+                    "entrada_resumen": f"{req.perfil_id} -> {req.oferta_id}",
+                    "salida_resumen": "Consentimiento confirmado (medio: orientador)",
+                    "razon": f"{req.orientador} confirmó que el joven consintió el envío de su CV sin PII a la empresa.",
+                },
+            )
 
         # Reanudar el grafo real con Command(resume=...)
         archivos_generados: list[str] = []
@@ -1199,7 +1221,8 @@ def procesar_accion_orientador(
                 cfg_grafo,
                 {
                     "vacantes_resueltas": resueltas,
-                    "consentimientos": list(estado.get("consentimientos") or []),
+                    # Combinados: no pisa un «no» que ya estuviera en el grafo (#54).
+                    "consentimientos": _consentimientos_combinados(estado),
                 },
             )
             salida_resume = grafo.invoke(
@@ -1242,11 +1265,8 @@ def procesar_accion_orientador(
                 brechas=match_activo["brechas"],
                 explicacion=match_activo["explicacion"],
             )
-            # Los del grafo primero: si ahí el joven dijo «no», manda sobre el check del tablero (#54).
-            previos = [
-                *((grafo.get_state(cfg_grafo).values.get("consentimientos") or []) if grafo is not None and cfg_grafo is not None else []),
-                *(estado.get("consentimientos") or []),
-            ]
+            # Los del grafo primero y luego los del tablero; manda el último registro de la pareja (#52, #54).
+            previos = _consentimientos_combinados(estado)
             consentimientos = consentimientos_para([(req.perfil_id, req.oferta_id)], previos, ahora)
             RUTA_OUTBOX.mkdir(parents=True, exist_ok=True)
             conn = _conectar_db_estado(estado)

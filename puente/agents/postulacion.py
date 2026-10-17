@@ -12,9 +12,9 @@ y no actúa sobre ningún match que no esté en él. Forma esperada::
      "aprobados": [{"perfil_id": "p1", "oferta_id": "o1"}, ...]}
 
 El consentimiento del joven también se verifica aquí (Ley 81 de 2019: transferir datos
-personales a una empresa exige su consentimiento). ``postular`` pide un ``Consentimiento``
-con ``otorgado=True`` por cada pareja (perfil, oferta) y, sin él, lanza ValueError antes de
-cualquier efecto. El consentimiento queda como Decision con fecha y medio.
+personales a una empresa exige su consentimiento). ``postular`` pide que el último
+``Consentimiento`` de cada pareja (perfil, oferta) sea ``otorgado=True`` y, si no, lanza
+ValueError antes de cualquier efecto. El consentimiento queda como Decision con fecha y medio.
 
 ``crear_nodo_postulacion`` arma el nodo ``postulacion`` del grafo (#12) sin tocar
 ``puente/graph.py``: ``construir_grafo(nodos={"postulacion": crear_nodo_postulacion(...)})``.
@@ -95,17 +95,18 @@ def _consentimiento_otorgado(
 ) -> dict | None:
     """El Consentimiento otorgado de la pareja, o None.
 
-    Un ``otorgado=False`` explícito de la pareja manda sobre cualquier otro: si el joven lo
-    retiró, no se envía aunque otra entrada diga que sí.
+    Manda el último registro de la pareja, como en el grafo (`negaron_consentimiento`) y en el
+    tablero (#52, revisión del #84): si el joven retiró su «sí», no se envía; si después vuelve
+    a decir que sí, se puede enviar.
     """
     propios = [c for c in consentimientos or [] if _par(c) == par]
-    if any(_leer(c, "otorgado") is False for c in propios):
+    if not propios or _leer(propios[-1], "otorgado") is not True:
         return None
-    return next((c for c in propios if _leer(c, "otorgado") is True), None)
+    return propios[-1]
 
 
 def consentimiento_otorgado(consentimientos: list[dict] | None, par: tuple[str, str]) -> bool:
-    """True si la pareja tiene un consentimiento otorgado y ningún «no» explícito."""
+    """True si el último registro de la pareja es un consentimiento otorgado."""
     return _consentimiento_otorgado(consentimientos, par) is not None
 
 
