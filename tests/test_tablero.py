@@ -1323,3 +1323,53 @@ def test_cargar_desde_data_no_deja_pasar_pii_de_los_archivos(tmp_path: Path, mon
         assert [d for d in crudos if d in guardado] == []
 
     asyncio.run(_ejecutar())
+
+
+def _trazas_postulacion(ruta_db: Path) -> list[dict]:
+    conn = db.conectar(ruta_db)
+    try:
+        return db.trazas(conn, agente="postulacion")
+    finally:
+        conn.close()
+
+
+def test_sin_ninguna_hora_la_decision_queda_una_sola_vez(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """El grafo registra «no se envió nada» y la ruta de respaldo no la repite; responde 422 (#186)."""
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path)
+    sin_hora = lambda matches, *a, **k: ([], {}, [((m.perfil_id, m.oferta_id), "aviso de prueba", None) for m in matches])  # noqa: E731
+    monkeypatch.setattr(srv, "agendar_entrevistas", sin_hora)
+    estado = obtener_datos_iniciales_demo(db_path=tmp_path / "test_puente.db")
+    with pytest.raises(ErrorValidacionTablero, match="sin franja compatible"):
+        procesar_accion_orientador(
+            estado, accion="aprobar", perfil_id="PERFIL-YARITZA", oferta_id="OF-CHORRERA-01", consentimiento_joven=True,
+        )
+    sin_envio = [t for t in _trazas_postulacion(tmp_path / "test_puente.db")
+                 if t["salida_resumen"] == "no se envió nada" and "aviso de prueba" in t["razon"]]
+    assert len(sin_envio) == 1
+    assert list(tmp_path.glob("*.pdf")) == [] and list(tmp_path.glob("*.ics")) == []
+
+
+def test_la_ruta_de_respaldo_registra_la_hora_por_confirmar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sin el grafo (ruta de respaldo), la hora de respaldo deja su Decision, una vez (#186)."""
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path)
+    original = srv.agendar_entrevistas
+
+    def con_aviso(matches, *args, **kwargs):
+        siguen, inicios, avisos = original(matches, *args, **kwargs)
+        extra = [((m.perfil_id, m.oferta_id), "aviso de respaldo", inicios[(m.perfil_id, m.oferta_id)]) for m in siguen]
+        return siguen, inicios, [*avisos, *extra]
+
+    monkeypatch.setattr(srv, "agendar_entrevistas", con_aviso)
+    estado = obtener_datos_iniciales_demo(db_path=tmp_path / "test_puente.db")
+    estado["_grafo"] = None  # fuerza la ruta de respaldo del tablero
+    procesar_accion_orientador(
+        estado, accion="aprobar", perfil_id="PERFIL-YARITZA", oferta_id="OF-CHORRERA-01", consentimiento_joven=True,
+    )
+    por_confirmar = [t for t in _trazas_postulacion(tmp_path / "test_puente.db")
+                     if t["salida_resumen"] == "sin franja compatible: fecha por confirmar" and "aviso de respaldo" in t["razon"]]
+    assert len(por_confirmar) == 1
+    assert (tmp_path / "entrevista_PERFIL-YARITZA_OF-CHORRERA-01.ics").exists()

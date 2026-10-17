@@ -776,6 +776,8 @@ def _compilar_grafo_tablero(
             de_agenda = decisiones_de_agenda(avisos)
             for decision in de_agenda:
                 db.registrar_decision(conn, decision)
+            # La ruta de respaldo vuelve a agendar si el grafo no generó archivos: que no repita estas.
+            estado.setdefault("_agenda_registrada", set()).update(par for par, _, _ in avisos)
             if not matches_aprob:
                 return {"decisiones": [*(estado_g.get("decisiones") or []), *de_agenda]} if de_agenda else {}
             res = postular(
@@ -1669,7 +1671,8 @@ def procesar_accion_orientador(
                 con_fecha, inicios, avisos = agendar_entrevistas(
                     [m_schema], perfiles_map, ofertas_map, conn, desde=datetime.now(ZONA_PANAMA)
                 )
-                for decision in decisiones_de_agenda(avisos):
+                ya_registradas = estado.get("_agenda_registrada") or set()
+                for decision in decisiones_de_agenda([a for a in avisos if a[0] not in ya_registradas]):
                     db.registrar_decision(conn, decision)
                     estado["decisiones"].append(_serializar_decision(decision))
                 if not con_fecha:
