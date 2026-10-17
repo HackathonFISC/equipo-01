@@ -140,14 +140,14 @@ El chat corre sin red con la grabación de #209, verificada en `LLM_MODO=reprodu
 
 ## Cuidados
 
-- **Horas de entrevista:** no acercar la cámara al `.ics` ni a la fecha de la vista de la empresa. Hoy todas salen el domingo a las 10:00 (#136).
+- **Horas de entrevista:** cada candidato recibe su propia hora, sin cruzar sus clases ni otra entrevista de la misma empresa (#186). Son propuestas por confirmar con la empresa.
 - **Entorno:** `PYTHONUTF8=1`, `LLM_MODO=reproducir` y `ANTHROPIC_API_KEY` vacía en las dos terminales. Sin `PYTHONUTF8`, la consola de Windows puede romper los caracteres.
 - **Datos:** perfiles sintéticos («Ficticia», «Empresa de Prueba»). Las 20 ofertas son anuncios reales sin datos personales. No abrir `.env` ni mostrar tokens en pantalla: los `#codigo=` de la terminal A no son de un solo uso (cambian en cada reinicio): no se acercan.
 - **«Cargar un ejemplo desde `data/`»:** los archivos `data/ofertas/*.txt` sí pasan por Mercado, con grabaciones: las 7 que chocan con la Ley 11 quedan bloqueadas (CT02, CT24, CT40, CT46, CT54, K02 y K03). Las entradas rotuladas «ejemplo sintético (no es un archivo)» y las 5 ofertas iniciales del tablero son de prueba: no se presentan como extracción real.
 - **No abrir el PDF** del CV en el video; basta la ficha «CV · PDF».
 - **Trazas del tablero:** lo que hacen los stubs del tablero aparece como «tablero» (en gris), no como «mercado» ni «perfil» (#206).
 - **Base del tablero aparte:** «Reiniciar demo» borra `tablero.db`. Por eso la terminal B usa `terminal.db`.
-- **Archivos del tablero:** el tablero escribe CV, mensaje y `.ics` en `outbox/` del repo, que está en `.gitignore`, aunque se le pase otra ruta.
+- **Archivos del tablero:** el tablero escribe el CV, la carta, el mensaje y el `.ics` en `PUENTE_OUTBOX` (`$DEMO/outbox-tablero`) (#207).
 - **Navegador:** si un diálogo de confirmación no responde, recarga (F5) y sigue: el estado queda guardado en SQLite.
 
 ## Plan B general

@@ -372,7 +372,7 @@ Solo existe [`.env.example`](.env.example), sin claves reales: se copia a `.env`
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID_EMPRESA` | Bot y chat de la empresa de demo. Sin ellos, los mensajes van a `outbox/` |
 | `TELEGRAM_CHATS_JOVENES` | Un chat por joven (`perfil_id=chat_id`); quien no esté recibe su aviso en `outbox/` |
 | `PUENTE_DB` | Base SQLite; por defecto `puente.db`. El tablero, sin esta variable, usa `%TEMP%/puente_tablero.db` |
-| `PUENTE_OUTBOX` | Carpeta del CV ciego, el `.ics` y los mensajes; por defecto `outbox/`. Vale para la terminal y para los avisos del reacomodo del tablero; el resto del tablero escribe en `outbox/` de la raíz hasta que entre el #207 |
+| `PUENTE_OUTBOX` | Carpeta del CV ciego, el `.ics` y los mensajes; por defecto `outbox/`. Vale para la terminal y para el tablero: la lista corta, el `.ics` que confirma la empresa y los avisos del reacomodo (#207). Sin ella, el tablero usa `outbox/` de la raíz |
 | `PUENTE_ENTREVISTA_INICIO` | Fecha ISO 8601 de la entrevista; vacía, mañana a las 10:00, marcada como provisional |
 | `PUENTE_SAL_ANONIMO` | Clave del código anónimo del scorecard (#158); vacía, una al azar por proceso |
 
