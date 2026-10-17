@@ -101,7 +101,12 @@ casos:
       habilidades: [manejo_caja, atencion_cliente]
     escrito_el: "2026-10-16"
     datos_sinteticos: true
-    fallos: []
+    fallos:
+      - fecha: "2026-10-16"
+        observado: "grabando con Claude en vivo: mercado no devolvió ninguna oferta (HTTP 400 «Schema is too complex» al pedir OfertaExtraida)"
+        cambio_hecho: "pendiente: simplificar el esquema o el pedido de Mercado (#137) y volver a grabar"
+        issue: "#137"
+        nueva_ejecucion: "pendiente"
 
   - id: EXT-02
     categoria: extraccion_ofertas
@@ -119,7 +124,12 @@ casos:
       habilidades: [reposicion_productos, recepcion_mercancia, inventario]
     escrito_el: "2026-10-16"
     datos_sinteticos: true
-    fallos: []
+    fallos:
+      - fecha: "2026-10-16"
+        observado: "grabando con Claude en vivo: mercado no devolvió ninguna oferta (HTTP 400 «Schema is too complex» al pedir OfertaExtraida)"
+        cambio_hecho: "pendiente: simplificar el esquema o el pedido de Mercado (#137) y volver a grabar"
+        issue: "#137"
+        nueva_ejecucion: "pendiente"
 
   - id: EXT-03
     categoria: extraccion_ofertas
@@ -137,7 +147,12 @@ casos:
       habilidades: [excel_basico, registro_datos, archivo_documentos]
     escrito_el: "2026-10-16"
     datos_sinteticos: true
-    fallos: []
+    fallos:
+      - fecha: "2026-10-16"
+        observado: "grabando con Claude en vivo: mercado no devolvió ninguna oferta (HTTP 400 «Schema is too complex» al pedir OfertaExtraida)"
+        cambio_hecho: "pendiente: simplificar el esquema o el pedido de Mercado (#137) y volver a grabar"
+        issue: "#137"
+        nueva_ejecucion: "pendiente"
 
   - id: EXT-04
     categoria: extraccion_ofertas
@@ -154,7 +169,12 @@ casos:
       habilidades: [ventas_mostrador, atencion_cliente]
     escrito_el: "2026-10-16"
     datos_sinteticos: true
-    fallos: []
+    fallos:
+      - fecha: "2026-10-16"
+        observado: "grabando con Claude en vivo: mercado no devolvió ninguna oferta (HTTP 400 «Schema is too complex» al pedir OfertaExtraida)"
+        cambio_hecho: "pendiente: simplificar el esquema o el pedido de Mercado (#137) y volver a grabar"
+        issue: "#137"
+        nueva_ejecucion: "pendiente"
 
   - id: EXT-05
     categoria: extraccion_ofertas
@@ -172,7 +192,12 @@ casos:
       habilidades: [limpieza]
     escrito_el: "2026-10-16"
     datos_sinteticos: true
-    fallos: []
+    fallos:
+      - fecha: "2026-10-16"
+        observado: "grabando con Claude en vivo: mercado no devolvió ninguna oferta (timeout del modelo)"
+        cambio_hecho: "pendiente: simplificar el esquema o el pedido de Mercado (#137) y volver a grabar"
+        issue: "#137"
+        nueva_ejecucion: "pendiente"
 
   # ------------------------------------------------------------------ Requisitos discriminatorios (6)
   - id: DIS-01
