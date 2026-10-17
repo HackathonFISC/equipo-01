@@ -228,7 +228,7 @@ def _texto_consentimiento(vacante: dict[str, Any]) -> str:
 def _resumen_vacantes(estado: dict[str, Any], perfil_id: str) -> str:
     vacantes = _vacantes(estado, perfil_id)
     if not vacantes:
-        return "Todavía no hay vacantes para ti. Tu orientador/a te avisa cuando aparezca una."
+        return "Todavía no hay vacantes para ti. Te aviso cuando aparezca una."
     lineas = [f"• {v['puesto']} en {v['empresa']}: {ESTADOS_LEGIBLES.get(v['estado'], v['estado'])}" for v in vacantes]
     return "Tus vacantes:\n" + "\n".join(lineas)
 
@@ -276,7 +276,7 @@ def _responder_consentimiento(estado: dict[str, Any], conv: wa.Conversacion, tex
         return [f"No pude registrar tu respuesta: {exc}"]
     conv.paso, conv.datos = "listo", {}
     confirmacion = (
-        f"Listo, quedó tu SÍ para {empresa}. Tu orientador/a envía tu perfil y te avisamos qué pasa."
+        f"Listo, quedó tu SÍ para {empresa}. Tu orientador/a envía tu perfil y te aviso qué pasa."
         if otorgado
         else f"Entendido: no enviamos nada a {empresa}."
     )
