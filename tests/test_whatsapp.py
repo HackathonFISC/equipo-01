@@ -191,6 +191,25 @@ def test_el_servidor_lee_el_token_de_twilio_del_env_al_arrancar(tmp_path: Path, 
     assert "Soy Puente" in r.text
 
 
+def test_token_puesto_en_env_con_el_servidor_corriendo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sin reiniciar: el webhook vuelve a leer .env si aún no tiene token (prueba en vivo de #160)."""
+    monkeypatch.setattr(srv, "ESTADO_GLOBAL", srv.obtener_datos_iniciales_demo(db_path=tmp_path / "wa.db"))
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path / "outbox")
+    archivo = tmp_path / ".env"
+    monkeypatch.setattr(srv, "RUTA_DOTENV", archivo)
+    monkeypatch.setattr(dotenv, "load_dotenv", dotenv.main.load_dotenv)
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "temporal")
+    monkeypatch.delenv("TWILIO_AUTH_TOKEN")
+    monkeypatch.delenv("TWILIO_ACCOUNT_SID", raising=False)
+    monkeypatch.setenv("PUBLIC_BASE_URL", BASE)
+    monkeypatch.delenv("PUENTE_DEMO_PUBLICA", raising=False)
+    monkeypatch.delenv("VERCEL", raising=False)
+    with TestClient(srv.app) as cliente:
+        assert _enviar(cliente, "hola").status_code == 503  # aún no hay .env
+        archivo.write_text(f"TWILIO_AUTH_TOKEN={TOKEN}\n", encoding="utf-8")
+        assert _enviar(cliente, "hola").status_code == 200
+
+
 def test_sin_public_base_url_reconstruye_la_url_del_tunel(entorno, monkeypatch: pytest.MonkeyPatch) -> None:
     cliente, *_ = entorno
     monkeypatch.delenv("PUBLIC_BASE_URL")

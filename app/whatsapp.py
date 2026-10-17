@@ -487,6 +487,9 @@ async def endpoint_webhook(request: Request) -> Response:
     srv = _servidor()
     token = os.getenv("TWILIO_AUTH_TOKEN")
     if not token:
+        srv.cargar_dotenv()  # por si las claves se pusieron en .env con el servidor ya corriendo
+        token = os.getenv("TWILIO_AUTH_TOKEN")
+    if not token:
         return Response(twiml([]), status_code=503, media_type="application/xml")
     if srv._cuerpo_demasiado_grande(request, await request.body()):
         return Response(twiml([]), status_code=413, media_type="application/xml")
