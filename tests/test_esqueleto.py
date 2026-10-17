@@ -31,7 +31,7 @@ def test_modulo_importa(modulo):
 
 @pytest.mark.parametrize(
     "dependencia",
-    ["langgraph", "langchain_google_genai", "langsmith", "ortools", "streamlit", "fpdf", "ics", "pydantic", "yaml"],
+    ["langgraph", "langchain_google_genai", "langsmith", "ortools", "fpdf", "ics", "pydantic", "python_multipart", "yaml"],
 )
 def test_dependencia_instalada(dependencia):
     importlib.import_module(dependencia)

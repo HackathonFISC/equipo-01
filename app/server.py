@@ -272,6 +272,11 @@ class UmbralesSolverRequest(BaseModel):
     orientador: str = Field(default="Orientadora Ana Gómez", min_length=2, max_length=120)
 
 
+MENSAJE_RESPUESTA_SOLO_EN_LISTA_CORTA = (
+    "Rechazar o cubrir una vacante se hace desde /empresa/lista-corta, con el código de la empresa."
+)
+
+
 class EventoEmpresaTableroRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -750,6 +755,11 @@ def _compilar_grafo_tablero(
 ) -> tuple[Any, dict[str, Any]]:
     """Compila el grafo del tablero respaldado por `checkpointer_sqlite` (#122, #168)."""
     inyeccion_sesgo = bool(estado.get("sesgo_inyectado_demo", False))
+    # El nodo de postulación escribe en estos dos contenedores, creados aquí y compartidos por referencia:
+    # tras `/api/reset`, `ESTADO_GLOBAL.update(nuevo)` copia la misma referencia, y lo que el nodo anota
+    # lo ve el estado vivo. Escribir en `estado[...]` de la clausura lo dejaba en un estado que ya no se lee (#227).
+    archivos_por_par: dict[tuple[str, str], list[str]] = estado.setdefault("_ultimos_archivos_postulacion", {})
+    agenda_registrada: set[tuple[str, str]] = estado.setdefault("_agenda_registrada", set())
 
     def _inyectar_umbrales_grafo(estado_g: dict[str, Any]) -> dict[str, Any]:
         if not estado.get("umbrales_editados_orientador"):
@@ -817,7 +827,7 @@ def _compilar_grafo_tablero(
             for decision in de_agenda:
                 db.registrar_decision(conn, decision)
             # La ruta de respaldo vuelve a agendar si el grafo no generó archivos: que no repita estas.
-            estado.setdefault("_agenda_registrada", set()).update(par for par, _, _ in avisos)
+            agenda_registrada.update(par for par, _, _ in avisos)
             if not matches_aprob:
                 return {"decisiones": [*(estado_g.get("decisiones") or []), *de_agenda]} if de_agenda else {}
             res = postular(
@@ -834,11 +844,8 @@ def _compilar_grafo_tablero(
             )
         finally:
             conn.close()
-        estado.setdefault("_ultimos_archivos_postulacion", {})
         for pid, oid in pares_aprob:
-            estado["_ultimos_archivos_postulacion"][(pid, oid)] = [
-                arch.name for arch in res.archivos
-            ]
+            archivos_por_par[(pid, oid)] = [arch.name for arch in res.archivos]
         return {
             "decisiones": [*(estado_g.get("decisiones") or []), *de_agenda, *res.decisiones],
         }
@@ -3043,22 +3050,19 @@ async def endpoint_empresa_pagina(_request: Request) -> FileResponse:
     return FileResponse(RUTA_STATIC / "empresa.html")
 
 
-async def endpoint_empresa_postulaciones(_request: Request) -> JSONResponse:
-    """Devuelve las postulaciones enviadas a la empresa sin exponer datos internos del orientador (#168)."""
-    postulaciones_empresa = [
-        {
-            "id": p.get("id"),
-            "perfil_id": p.get("perfil_id"),
-            "nombre_perfil": p.get("nombre_perfil"),
-            "oferta_id": p.get("oferta_id"),
-            "puesto": p.get("puesto"),
-            "empresa": p.get("empresa"),
-            "estado": p.get("estado"),
-        }
-        for p in ESTADO_GLOBAL.get("postulaciones", [])
-        if p.get("estado") in (db.ENVIADO, db.ENTREVISTA, db.CONTRATADO, db.NO_SELECCIONADO)
-    ]
-    return JSONResponse({"postulaciones": postulaciones_empresa})
+async def endpoint_empresa_postulaciones(request: Request) -> JSONResponse:
+    """Las postulaciones enviadas a la empresa dueña del código, ciegas y solo de sus vacantes (#235).
+
+    Antes no pedía código y mezclaba las de todas las empresas con el nombre de cada joven.
+    """
+    estado = empresa._estado_actual()
+    empresa_id = empresa.empresa_del_token(estado, empresa._token_de(request))
+    if empresa_id is None:
+        return JSONResponse(
+            {"detail": "Falta el código de la empresa o no es correcto. Usa el enlace que te dio Puente."},
+            status_code=401,
+        )
+    return JSONResponse({"postulaciones": empresa.postulaciones_ciegas(estado, empresa_id)})
 
 
 async def endpoint_empresa_evento(request: Request) -> JSONResponse:
@@ -3067,6 +3071,9 @@ async def endpoint_empresa_evento(request: Request) -> JSONResponse:
         return err_resp  # type: ignore[return-value]
     try:
         req = EventoEmpresaTableroRequest.model_validate(datos)
+        if req.tipo in ("rechaza", "cubierta"):
+            # Sin código de empresa y sin `evento_empresa` (que avisa al joven y recalcula) solo cambiaba el estado.
+            return JSONResponse({"detail": MENSAJE_RESPUESTA_SOLO_EN_LISTA_CORTA}, status_code=409)
         if req.perfil_id and not _buscar_perfil(ESTADO_GLOBAL, req.perfil_id):
             return JSONResponse({"detail": f"Perfil '{req.perfil_id}' no encontrado."}, status_code=404)
         registrar_evento_empresa_tablero(
