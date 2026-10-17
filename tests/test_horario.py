@@ -350,3 +350,45 @@ def test_tirilla_sintetica_deja_a_yaritza_de_lunes_a_viernes_y_el_solver_descart
     assert viables == {"of-manana"}
     compatible, motivo = verificar_compatibilidad_horario(despues, ofertas[0])
     assert not compatible and "cruza con clases (18:30-21:30)" in motivo
+
+
+def test_franjas_que_cruzan_medianoche_compatibilidad():
+    """Issue #240: compatibilidad horaria para turnos que cruzan la medianoche.
+
+    Criterios:
+    (a) libre 18-23 contra puesto 22-06 da no compatible;
+    (b) clases 18-23 contra puesto 22-06 da «cruza con clases»;
+    (c) libre 20:00-08:00 (cruza) contra puesto 22-06 da compatible.
+    """
+    oferta_noche = Oferta(
+        id="of-noche-22-06",
+        puesto="Operador nocturno",
+        empresa="Empresa Nocturna S.A.",
+        corregimiento="Bella Vista",
+        horario=Horario(dias=["lunes"], hora_inicio="22:00", hora_fin="06:00"),
+    )
+
+    # (a) libre 18-23 contra puesto 22-06 da no compatible
+    perfil_a = _perfil(
+        horario_libre=[Horario(dias=["lunes"], hora_inicio="18:00", hora_fin="23:00")],
+    )
+    ok_a, motivo_a = verificar_compatibilidad_horario(perfil_a, oferta_noche)
+    assert not ok_a
+    assert "fuera de horario libre" in motivo_a
+
+    # (b) clases 18-23 contra puesto 22-06 da «cruza con clases»
+    perfil_b = _perfil(
+        horario_clases=[Horario(dias=["lunes"], hora_inicio="18:00", hora_fin="23:00")],
+    )
+    ok_b, motivo_b = verificar_compatibilidad_horario(perfil_b, oferta_noche)
+    assert not ok_b
+    assert "cruza con clases" in motivo_b
+
+    # (c) libre 20:00-08:00 (cruza) contra puesto 22-06 da compatible
+    perfil_c = _perfil(
+        horario_libre=[Horario(dias=["lunes"], hora_inicio="20:00", hora_fin="08:00")],
+    )
+    ok_c, motivo_c = verificar_compatibilidad_horario(perfil_c, oferta_noche)
+    assert ok_c
+    assert motivo_c is None
+

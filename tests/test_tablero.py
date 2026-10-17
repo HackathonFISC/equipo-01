@@ -1729,6 +1729,17 @@ def test_cobertura_por_turnos_aprobada_se_conserva_al_recalcular(tmp_path: Path,
             assert [c["oferta_id"] for c in estado["coberturas_turnos"]] == [oferta]
             enviadas = [p for p in estado["postulaciones"] if p["oferta_id"] == oferta and p["estado"] == "enviado"]
             assert len(enviadas) == 2
+            # Issue #240: cada postulación en cobertura por turnos tiene su propia cita con DTSTART distinto
+            ics_files = list((tmp_path / "outbox").glob("entrevista_*.ics"))
+            assert len(ics_files) >= 2
+            dtstarts = [
+                line.strip()
+                for f in ics_files
+                for line in f.read_text(encoding="utf-8").splitlines()
+                if line.startswith("DTSTART")
+            ]
+            assert len(dtstarts) >= 2
+            assert len(set(dtstarts)) == len(dtstarts)
 
     asyncio.run(_ejecutar())
 

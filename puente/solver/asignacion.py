@@ -368,6 +368,46 @@ def _extraer_ventana_horario(raw: Any) -> dict[str, Any]:
     }
 
 
+def _intervalos_minutos(inicio: int, fin: int) -> list[tuple[int, int]]:
+    """Devuelve los tramos [inicio, fin) en minutos del día (0..1440).
+
+    Si el intervalo cruza la medianoche (fin < inicio), se divide en dos tramos:
+    [inicio, 1440) y [0, fin).
+    """
+    if fin < inicio:
+        return [(inicio, 24 * 60), (0, fin)]
+    return [(inicio, fin)]
+
+
+def _cruzan_intervalos(i1: int, f1: int, i2: int, f2: int) -> bool:
+    """Verifica si dos intervalos en el ciclo diario de 24 h se solapan en algún minuto."""
+    for s1, e1 in _intervalos_minutos(i1, f1):
+        for s2, e2 in _intervalos_minutos(i2, f2):
+            if max(s1, s2) < min(e1, e2):
+                return True
+    return False
+
+
+def _cabe_intervalo_en_libre(i_of: int, f_of: int, i_lib: int, f_lib: int) -> bool:
+    """Verifica si el intervalo de la oferta está completamente contenido en el horario libre."""
+    of_cruza = f_of < i_of
+    lib_cruza = f_lib < i_lib
+
+    if not lib_cruza:
+        # Horario libre no cruza medianoche: la oferta no puede cruzarla y debe caber en [i_lib, f_lib]
+        if of_cruza:
+            return False
+        return i_of >= i_lib and f_of <= f_lib
+    else:
+        # Horario libre cruza medianoche: cubre [i_lib, 1440) y [0, f_lib]
+        if of_cruza:
+            # Ambos cruzan: tramo nocturno (>= i_lib) y tramo matutino (<= f_lib)
+            return i_of >= i_lib and f_of <= f_lib
+        else:
+            # La oferta no cruza: cabe si está totalmente en la noche o totalmente en la mañana
+            return i_of >= i_lib or f_of <= f_lib
+
+
 def verificar_compatibilidad_horario(perfil: Any, oferta: Any) -> tuple[bool, str | None]:
     """Verifica que el horario de la oferta no cruce con las clases y caiga dentro del horario libre."""
     horario_oferta_raw = _get_field(oferta, "horario", default=None)
@@ -383,8 +423,8 @@ def verificar_compatibilidad_horario(perfil: Any, oferta: Any) -> tuple[bool, st
             v_clase = _extraer_ventana_horario(clase)
             dias_comunes = ventana_oferta["dias"] & v_clase["dias"]
             if dias_comunes:
-                if max(ventana_oferta["inicio"], v_clase["inicio"]) < min(
-                    ventana_oferta["fin"], v_clase["fin"]
+                if _cruzan_intervalos(
+                    ventana_oferta["inicio"], ventana_oferta["fin"], v_clase["inicio"], v_clase["fin"]
                 ):
                     return (
                         False,
@@ -399,14 +439,16 @@ def verificar_compatibilidad_horario(perfil: Any, oferta: Any) -> tuple[bool, st
     if isinstance(libre_raw, str):
         norm = _normalizar_texto(libre_raw)
         if ("estudia de noche" in norm or "clases de noche" in norm or "nocturn" in norm) and "libre" not in norm:
-            if ventana_oferta["fin"] > 18 * 60:
+            if _cruzan_intervalos(ventana_oferta["inicio"], ventana_oferta["fin"], 18 * 60, 22 * 60):
                 return (
                     False,
                     f"horario oferta ({ventana_oferta['etiqueta']}) cruza con clases nocturnas (>= 18:00)",
                 )
             if "diurn" in norm or "estudia de noche" in norm or "clases de noche" in norm:
                 return True, None
-        if ("estudia de manana" in norm or "clases de manana" in norm) and ventana_oferta["inicio"] < 12 * 60:
+        if ("estudia de manana" in norm or "clases de manana" in norm) and _cruzan_intervalos(
+            ventana_oferta["inicio"], ventana_oferta["fin"], 7 * 60, 12 * 60
+        ):
             return (
                 False,
                 f"horario oferta ({ventana_oferta['etiqueta']}) cruza con clases matutinas (< 12:00)",
@@ -416,9 +458,9 @@ def verificar_compatibilidad_horario(perfil: Any, oferta: Any) -> tuple[bool, st
     for vl_raw in ventanas_libres:
         if isinstance(vl_raw, dict) and "clases" in vl_raw and vl_raw["clases"]:
             v_clase = _extraer_ventana_horario(vl_raw["clases"])
-            if (ventana_oferta["dias"] & v_clase["dias"]) and max(
-                ventana_oferta["inicio"], v_clase["inicio"]
-            ) < min(ventana_oferta["fin"], v_clase["fin"]):
+            if (ventana_oferta["dias"] & v_clase["dias"]) and _cruzan_intervalos(
+                ventana_oferta["inicio"], ventana_oferta["fin"], v_clase["inicio"], v_clase["fin"]
+            ):
                 return (
                     False,
                     f"horario oferta ({ventana_oferta['etiqueta']}) cruza con clases ({v_clase['etiqueta']})",
@@ -426,14 +468,16 @@ def verificar_compatibilidad_horario(perfil: Any, oferta: Any) -> tuple[bool, st
 
         vl = _extraer_ventana_horario(vl_raw)
         dias_faltantes = ventana_oferta["dias"] - vl["dias"]
-        cabe_en_horas = (
-            ventana_oferta["inicio"] >= vl["inicio"] and ventana_oferta["fin"] <= vl["fin"]
+        cabe_en_horas = _cabe_intervalo_en_libre(
+            ventana_oferta["inicio"], ventana_oferta["fin"], vl["inicio"], vl["fin"]
         )
         if not dias_faltantes and cabe_en_horas:
             return True, None
 
     primera_vl = _extraer_ventana_horario(ventanas_libres[0])
-    if ventana_oferta["inicio"] < primera_vl["inicio"] or ventana_oferta["fin"] > primera_vl["fin"]:
+    if not _cabe_intervalo_en_libre(
+        ventana_oferta["inicio"], ventana_oferta["fin"], primera_vl["inicio"], primera_vl["fin"]
+    ):
         return (
             False,
             f"horario oferta ({ventana_oferta['etiqueta']}) fuera de horario libre ({primera_vl['etiqueta']})",
