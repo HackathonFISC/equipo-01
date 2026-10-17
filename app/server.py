@@ -2438,6 +2438,14 @@ def aprobar_cobertura_turnos(
     _ruta_outbox().mkdir(parents=True, exist_ok=True)
     conn = _conectar_db_estado(estado)
     try:
+        # Cada segmento en su propia franja con la agenda del nodo de Postulación (#186, #240)
+        matches_turnos, inicios, avisos = agendar_entrevistas(
+            matches_turnos, perfiles_map, ofertas_map, conn, desde=datetime.now(ZONA_PANAMA)
+        )
+        de_agenda = decisiones_de_agenda(avisos)
+        for d in de_agenda:
+            _registrar_decision_db(estado, d)
+
         res_post = postular(
             matches_turnos,
             perfiles_map,
@@ -2447,6 +2455,7 @@ def aprobar_cobertura_turnos(
             outbox=_ruta_outbox(),
             consentimientos=consentimientos,
             mensaje_orientador=f"Propuesta de cobertura compartida por turnos ({seg_m['inicio']}-{seg_m['fin']} y {seg_t['inicio']}-{seg_t['fin']}) aprobada por {req.orientador}.",
+            inicio_entrevista=lambda m: inicios[(m.perfil_id, m.oferta_id)],
         )
     except ValueError as error:
         raise ErrorValidacionTablero(f"No se envió la cobertura por turnos a la empresa: {error}") from error
