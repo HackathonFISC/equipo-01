@@ -7,8 +7,8 @@ en la tabla `decisiones`.
 
 Es idempotente y no repite gasto de LLM: la tabla `cargas` guarda la extracción de cada archivo
 junto al hash de su contenido. Cada corrida pasa el conjunto completo por Mercado, pero solo
-llama al LLM para los archivos nuevos, cambiados o cuya extracción falló antes; el resto sale de
-`cargas`. Así la deduplicación, las reglas y la taxonomía siempre se aplican sobre todo el
+llama al LLM para los archivos nuevos, cambiados, cuya extracción falló antes o que se extrajeron
+con otro prompt, esquema o modelo de Mercado; el resto sale de `cargas`. Así la deduplicación, las reglas y la taxonomía siempre se aplican sobre todo el
 conjunto, y el resultado no depende de en qué corrida entró cada archivo. Las ofertas que
 dejaron de salir (archivo cambiado, borrado o ahora duplicado) se quitan de la base, salvo que
 ya tengan postulaciones: esas se reportan en cada corrida. Una carpeta sin ofertas no borra
@@ -37,19 +37,57 @@ CARPETA_OFERTAS = Path("data/ofertas")
 CARPETA_PERFILES = Path("data/perfiles")
 EXTENSIONES_OFERTA = {".txt"} | mercado.EXTENSIONES_ARCHIVO
 
-# `cargas`: la extracción de cada archivo con el hash de su contenido (no se borra: es gasto de LLM ya hecho).
+# `cargas`: la extracción de cada archivo con el hash de su contenido (no se borra: es gasto de LLM ya hecho)
+# y la `version` de cómo se extrajo; si la versión cambia, la extracción no se reusa.
 # `cargas_ofertas`: las ofertas de la base que salieron de la carga, incluidas las retenidas por postulaciones.
 _ESQUEMA_CARGAS = """
 CREATE TABLE IF NOT EXISTS cargas (
     archivo TEXT PRIMARY KEY,
     sha256 TEXT NOT NULL,
     extraccion_json TEXT NOT NULL,
-    timestamp TEXT NOT NULL
+    timestamp TEXT NOT NULL,
+    version TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS cargas_ofertas (
     oferta_id TEXT PRIMARY KEY
 );
 """
+
+
+def _preparar_tablas(conn: sqlite3.Connection) -> None:
+    """Crea las tablas de la carga y agrega `version` a una base anterior a la columna."""
+    conn.executescript(_ESQUEMA_CARGAS)
+    if "version" not in {c[1] for c in conn.execute("PRAGMA table_info(cargas)")}:
+        with conn:
+            conn.execute("ALTER TABLE cargas ADD COLUMN version TEXT NOT NULL DEFAULT ''")
+
+
+def _version_extraccion(extraer: Callable) -> str:
+    """Huella de cómo se extrae: instrucciones y esquema de Mercado, extractor, proveedor y modelo.
+
+    Cuando Mercado cambie de prompt, de esquema o de modelo (#43, #45), las extracciones viejas no se
+    reusan en silencio: se vuelven a pedir al LLM.
+    """
+    esquema = getattr(mercado, "OfertaExtraida", None)
+    nombre = getattr(extraer, "__qualname__", None) or type(extraer).__qualname__
+    partes = {
+        "instrucciones": getattr(mercado, "INSTRUCCIONES", ""),
+        "esquema": esquema.model_json_schema() if esquema is not None else None,
+        "extractor": f"{getattr(extraer, '__module__', '')}.{nombre}",
+        "proveedor": os.getenv("LLM_PROVEEDOR", ""),
+        "modelo": os.getenv("PUENTE_MODELO_LLM", ""),
+    }
+    texto = json.dumps(partes, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(texto.encode("utf-8")).hexdigest()[:16]
+
+
+def _cargar_dotenv() -> None:
+    """Como `puente.graph.main`: la clave y `LLM_MODO` del `.env` rigen también al correr la carga sola."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:  # pragma: no cover
+        return
+    load_dotenv(override=False)
 
 
 @dataclass
@@ -116,8 +154,8 @@ def cargar_ofertas(
     if not carpeta.is_dir():
         resumen.errores.append(f"carga: no existe la carpeta de ofertas {carpeta}")
         return resumen
-    conn.executescript(_ESQUEMA_CARGAS)
-    propias = {f[0] for f in conn.execute("SELECT oferta_id FROM cargas_ofertas")}
+    _preparar_tablas(conn)
+    propias ={f[0] for f in conn.execute("SELECT oferta_id FROM cargas_ofertas")}
     archivos = _archivos_de_ofertas(carpeta)
     if not archivos:
         if propias:
@@ -125,31 +163,35 @@ def cargar_ofertas(
         return resumen
     if releer is None:
         releer = os.getenv("LLM_MODO") == "grabar"
-    guardadas = {f[0]: (f[1], f[2]) for f in conn.execute("SELECT archivo, sha256, extraccion_json FROM cargas")}
+    guardadas = {
+        f[0]: (f[1], f[2], f[3]) for f in conn.execute("SELECT archivo, sha256, extraccion_json, version FROM cargas")
+    }
     sha_por_archivo = {ruta.name: hashlib.sha256(ruta.read_bytes()).hexdigest() for ruta in archivos}
     extraer = extraer or _extractor_por_defecto()
+    version = _version_extraccion(extraer)
 
     def extraer_o_reusar(entrada):
         sha = sha_por_archivo[entrada.fuente]
         previa = guardadas.get(entrada.fuente)
-        if not releer and previa and previa[0] == sha:
+        if not releer and previa and previa[0] == sha and previa[2] == version:
             resumen.desde_cargas += 1
             return json.loads(previa[1])
         resumen.llamadas_llm += 1
         try:
             extraida = extraer(entrada)
         except Exception as exc:
-            if previa and previa[0] == sha:  # al releer, un fallo del LLM no tumba la extracción buena guardada
+            if previa and previa[0] == sha:  # al releer (o con otra versión), un fallo del LLM no tumba la extracción guardada
                 resumen.errores.append(f"carga: no se pudo releer {entrada.fuente} ({exc}); se usa la extracción guardada")
                 return json.loads(previa[1])
             raise  # Mercado lo registra y el archivo se reintenta la próxima vez
         datos = extraida.model_dump() if hasattr(extraida, "model_dump") else dict(extraida)
         with conn:  # se guarda de inmediato: una llamada pagada no se repite aunque algo falle después
             conn.execute(
-                "INSERT INTO cargas (archivo, sha256, extraccion_json, timestamp) VALUES (?, ?, ?, ?) "
+                "INSERT INTO cargas (archivo, sha256, extraccion_json, timestamp, version) VALUES (?, ?, ?, ?, ?) "
                 "ON CONFLICT(archivo) DO UPDATE SET sha256 = excluded.sha256, "
-                "extraccion_json = excluded.extraccion_json, timestamp = excluded.timestamp",
-                (entrada.fuente, sha, json.dumps(datos, ensure_ascii=False), db._ahora()),
+                "extraccion_json = excluded.extraccion_json, timestamp = excluded.timestamp, "
+                "version = excluded.version",
+                (entrada.fuente, sha, json.dumps(datos, ensure_ascii=False), db._ahora(), version),
             )
         return datos
 
@@ -219,6 +261,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--releer", action="store_true", default=None,
                         help="vuelve a pedir todas las extracciones al LLM (activo con LLM_MODO=grabar)")
     args = parser.parse_args(argv)
+    _cargar_dotenv()
 
     conn = db.conectar(args.db)
     try:
