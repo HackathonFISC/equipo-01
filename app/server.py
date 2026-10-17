@@ -23,11 +23,16 @@ from typing import Any, Literal
 from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+import dataclasses
+import puente.rules.traslados as _mod_traslados
+from puente.agents import mercado
 from puente.agents.auditor import nodo_auditor
 from puente.agents.formacion import nodo_formacion
 from puente.agents.postulacion import consentimiento_otorgado, consentimientos_para, postular
@@ -53,6 +58,8 @@ from puente.schemas import (
     Oferta,
     Perfil,
 )
+from puente.solver.asignacion import ConfigSolver
+from puente.solver.turnos import proponer_cobertura
 from puente.tools import db
 
 # Vista del joven (#52): imports en un grupo propio para no tocar los del tablero (#49/#99).
@@ -84,13 +91,44 @@ from puente.guardrails import EDAD_MAX, EDAD_MIN, evaluar_entrada, limpiar_entra
 from puente.rules.taxonomia import normalizar_habilidad
 from puente.schemas import DIAS_VALIDOS, EntradaPerfil
 
+def es_modo_demo_publica() -> bool:
+    """True cuando el servidor corre en Vercel (`VERCEL=1`) o con `PUENTE_DEMO_PUBLICA=1` (#161)."""
+    return bool(
+        os.getenv("VERCEL", "").strip() in ("1", "true", "True")
+        or os.getenv("PUENTE_DEMO_PUBLICA", "").strip() in ("1", "true", "True")
+    )
+
+
+if es_modo_demo_publica():
+    os.environ["LLM_MODO"] = "reproducir"
+
+
+class MiddlewareDemoPublicaReadOnly(BaseHTTPMiddleware):
+    """En modo demo pública (Vercel / PUENTE_DEMO_PUBLICA=1), bloquea mutaciones (POST, PUT, DELETE, PATCH) con 403 (#161)."""
+
+    async def dispatch(self, request: Request, call_next):
+        if es_modo_demo_publica() and request.method not in ("GET", "HEAD", "OPTIONS"):
+            return JSONResponse(
+                {
+                    "detail": "Modo demostración pública en Vercel: el servidor opera en solo lectura para preservar la demo del hackathon (#161).",
+                    "modo_demo_publica": True,
+                },
+                status_code=403,
+            )
+        return await call_next(request)
+
+
 from app import joven_fase2  # Vista del joven, fase 2 (#166): la lógica vive en app/joven_fase2.py
 
 RUTA_APP = Path(__file__).resolve().parent
 RUTA_STATIC = RUTA_APP / "static"
 RUTA_RAIZ = RUTA_APP.parent
 RUTA_DATA = RUTA_RAIZ / "data"
-RUTA_OUTBOX = RUTA_RAIZ / "outbox"
+RUTA_OUTBOX = (
+    Path(tempfile.gettempdir()) / "puente_outbox"
+    if es_modo_demo_publica()
+    else RUTA_RAIZ / "outbox"
+)
 RUTA_DB_TABLERO = Path(tempfile.gettempdir()) / "puente_tablero.db"
 
 PATRON_ID_SEGURO = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -185,6 +223,52 @@ class SimularSesgoRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     activar: bool
+
+
+class AprobarCoberturaTurnosRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    oferta_id: str = Field(min_length=1, max_length=80)
+    consentimiento_manana: bool | None = None
+    consentimiento_tarde: bool | None = None
+    orientador: str = Field(default="Orientadora Ana Gómez", min_length=2, max_length=120)
+
+    @field_validator("oferta_id")
+    @classmethod
+    def _validar_id_seguro(cls, valor: str) -> str:
+        limpio = valor.strip()
+        if not PATRON_ID_SEGURO.fullmatch(limpio):
+            raise ValueError(f"ID inválido '{valor}': solo se permiten caracteres [A-Za-z0-9_-]")
+        return limpio
+
+
+class UmbralesSolverRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    max_minutos_traslado: int | None = Field(default=None, ge=10, le=240)
+    max_porcentaje_salario_pasaje: float | None = Field(default=None, gt=0.0, le=1.0)
+    max_porcentaje_pasaje: float | None = Field(default=None, gt=0.0, le=100.0)
+    max_candidatos_por_vacante: int | None = Field(default=None, ge=1, le=20, alias="k")
+    max_vacantes_por_perfil: int | None = Field(default=None, ge=1, le=20)
+    orientador: str = Field(default="Orientadora Ana Gómez", min_length=2, max_length=120)
+
+
+class EventoEmpresaTableroRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    tipo: Literal["rechaza", "cubierta", "acepta"]
+    oferta_id: str = Field(min_length=1, max_length=80)
+    perfil_id: str | None = Field(default=None, max_length=80)
+    nota: str = Field(default="", max_length=500)
+    empresa: str = Field(default="Empresa", min_length=2, max_length=120)
+
+    @field_validator("oferta_id")
+    @classmethod
+    def _validar_id_seguro(cls, valor: str) -> str:
+        limpio = valor.strip()
+        if not PATRON_ID_SEGURO.fullmatch(limpio):
+            raise ValueError(f"ID inválido '{valor}': solo se permiten caracteres [A-Za-z0-9_-]")
+        return limpio
 
 
 def _slug_seguro(texto: str, prefijo: str = "ITEM") -> str:
@@ -346,6 +430,9 @@ def _registrar_decision_db(estado: dict[str, Any], decision: Decision | dict[str
     conn = _conectar_db_estado(estado)
     try:
         db.registrar_decision(conn, serializada)
+        if serializada.get("agente") == "orientador_humano":
+            copia_orientador = {**serializada, "agente": "orientador"}
+            db.registrar_decision(conn, copia_orientador)
     finally:
         conn.close()
     estado.setdefault("decisiones", []).append(serializada)
@@ -602,8 +689,18 @@ def _compilar_grafo_tablero(
     modelos_perfiles: list[Perfil],
     modelos_ofertas: list[Oferta],
 ) -> tuple[Any, dict[str, Any]]:
-    """Compila el grafo del tablero respaldado por `checkpointer_sqlite` (#122)."""
+    """Compila el grafo del tablero respaldado por `checkpointer_sqlite` (#122, #168)."""
     inyeccion_sesgo = bool(estado.get("sesgo_inyectado_demo", False))
+
+    def _inyectar_umbrales_grafo(estado_g: dict[str, Any]) -> dict[str, Any]:
+        if not estado.get("umbrales_editados_orientador"):
+            return estado_g
+        cfg_dict = dict(estado.get("config_solver") or {})
+        cfg_obj = ConfigSolver(**cfg_dict)
+        return {**estado_g, "config_solver": cfg_obj}
+
+    def _nodo_matching_tablero(estado_g: dict[str, Any]) -> dict[str, Any]:
+        return nodo_matching_grafo(_inyectar_umbrales_grafo(estado_g))
 
     def _nodo_auditor_tablero(estado_g: dict[str, Any]) -> dict[str, Any]:
         def _fn_perfil_sesgado(p_var: Any) -> Any:
@@ -620,7 +717,7 @@ def _compilar_grafo_tablero(
             return p_var
 
         cambios = nodo_auditor(
-            estado_g,
+            _inyectar_umbrales_grafo(estado_g),
             fn_perfil=_fn_perfil_sesgado if inyeccion_sesgo else None,
         )
         return {k: v for k, v in cambios.items() if k not in ("perfiles", "ofertas")}
@@ -679,7 +776,7 @@ def _compilar_grafo_tablero(
         nodos={
             "mercado": _stub_del_tablero(stub_mercado, "mercado"),
             "perfil": _stub_del_tablero(stub_perfil, "perfil"),
-            "matching": nodo_matching_grafo,
+            "matching": _nodo_matching_tablero,
             "auditor": _nodo_auditor_tablero,
             "formacion": nodo_formacion,
             "postulacion": _nodo_postulacion_tablero,
@@ -828,6 +925,27 @@ def recalcular_pipeline_tablero(
     estado["descartados"] = list(descartados_map.values())
     estado["auditoria"] = salida_grafo.get("auditoria") or {}
 
+    # Cobertura por turnos (#165): solo para ofertas activas sin candidato individual de turno completo
+    ofertas_con_match_individual = {m["oferta_id"] for m in matches_ui}
+    ofertas_sin_match = [
+        o for o in modelos_ofertas if o.id not in ofertas_con_match_individual and not o.bloqueada
+    ]
+    coberturas_objs = proponer_cobertura(
+        ofertas_sin_match,
+        modelos_perfiles,
+        config=estado.get("config_solver"),
+        excluidos=excluidos_actuales,
+    )
+    coberturas_ui: list[dict[str, Any]] = []
+    for cob in coberturas_objs:
+        cob_dict = cob.model_dump()
+        for seg in cob_dict.get("segmentos", []):
+            seg["consentimiento_joven"] = _consentimiento_vigente(
+                estado, seg["perfil_id"], cob_dict["oferta_id"]
+            )
+        coberturas_ui.append(cob_dict)
+    estado["coberturas_turnos"] = coberturas_ui
+
     # Registrar las decisiones de los nodos centrales en puente.tools.db en orden cronológico real (#124)
     if registrar_trazas:
         decisiones_nodos = [
@@ -835,11 +953,31 @@ def recalcular_pipeline_tablero(
             for d in (salida_grafo.get("decisiones") or [])
             if _serializar_decision(d).get("agente") in ("matching", "formacion", "auditor")
         ]
+        if coberturas_ui:
+            resumen_cob = "; ".join(
+                f"{c['oferta_id']}: {c['segmentos'][0]['perfil_id']} ({c['segmentos'][0]['inicio']}-{c['segmentos'][0]['fin']}) + "
+                f"{c['segmentos'][1]['perfil_id']} ({c['segmentos'][1]['inicio']}-{c['segmentos'][1]['fin']})"
+                for c in coberturas_ui
+            )
+            decisiones_nodos.append(
+                _serializar_decision(
+                    Decision(
+                        agente="cobertura_turnos",
+                        entrada_resumen=f"{len(ofertas_sin_match)} vacante(s) sin candidato de turno completo",
+                        salida_resumen=f"{len(coberturas_ui)} dupla(s) de cobertura por turnos: {resumen_cob}",
+                        razon=(
+                            "Cobertura por turnos determinística con CP-SAT (#165): ningún joven cubre la jornada "
+                            "completa sin cruzar con clases, pero la dupla complementaria cubre mañana y tarde."
+                        ),
+                        timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    )
+                )
+            )
         # Si ya había decisiones manuales previas (orientador, tablero, guardrails), conservarlas antes
         previas_manuales = [
             d
             for d in (estado.get("decisiones") or [])
-            if d.get("agente") not in ("matching", "formacion", "auditor")
+            if d.get("agente") not in ("matching", "formacion", "auditor", "cobertura_turnos")
         ]
 
         conn = _conectar_db_estado(estado)
@@ -961,7 +1099,7 @@ def obtener_datos_iniciales_demo(
             "modalidad_ingreso": "datos de ejemplo (sintéticos) · entrevista sin CV",
             "horario_libre": "Lunes a Viernes 07:00-17:30 (estudia de noche 18:00-22:00)",
             "salario_minimo": 600.0,
-            "presupuesto_pasaje_diario": 3.00,
+            "presupuesto_pasaje_diario": 5.00,
             "habilidades": [
                 {
                     "skill_id": "atencion_cliente",
@@ -1061,7 +1199,7 @@ def obtener_datos_iniciales_demo(
             "puesto": "Cajero/a de Sucursal Este",
             "empresa": "Comercial Aeropuerto S.A. (Empresa de Prueba)",
             "corregimiento": "Tocumen",
-            "salario_mensual": 650.0,
+            "salario_mensual": 700.0,
             "horario": "Lunes a Viernes 08:00-17:00",
             "habilidades": ["atencion_cliente", "manejo_caja"],
             "requisitos_texto": "Manejo de caja registradora y atención a clientes en sucursal de Tocumen.",
@@ -1176,6 +1314,11 @@ def procesar_accion_orientador(
         orientador=orientador,
         consentimiento_joven=consentimiento_joven,
         consentidos=consentidos,
+    )
+    # Nota y mensaje son texto libre del orientador: sin cédula, teléfono ni dirección exacta antes de
+    # guardarlos en la explicación, la postulación o `decisiones`, en cualquier acción (#213).
+    req = req.model_copy(
+        update=limpiar_entrada({"nota_edicion": req.nota_edicion, "mensaje_empresa": req.mensaje_empresa})
     )
     ahora = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -1742,41 +1885,41 @@ def registrar_nuevo_perfil(
 
 
 def listar_catalogo_data() -> dict[str, list[dict[str, str]]]:
-    """Devuelve la lista de ofertas y perfiles disponibles en data/ (más muestras sintéticas)."""
+    """Ofertas y perfiles de data/ (se leen de verdad, #188) más ejemplos sintéticos rotulados como tales."""
     ofertas_cat = [
         {
             "id": "ejemplo_sintetico_chorrera",
-            "etiqueta": "datos de ejemplo (sintéticos) · Cajero/a Tiempo Completo (La Chorrera, $650)",
+            "etiqueta": "ejemplo sintético (no es un archivo) · Cajero/a Tiempo Completo (La Chorrera, $650)",
         },
         {
             "id": "ejemplo_sintetico_CT11_edad",
-            "etiqueta": "datos de ejemplo (sintéticos) · Vendedor '18 a 25 años y buena presencia' (Bella Vista)",
+            "etiqueta": "ejemplo sintético (no es un archivo) · Vendedor '18 a 25 años y buena presencia' (Bella Vista)",
         },
         {
             "id": "ejemplo_sintetico_K04_tocumen",
-            "etiqueta": "datos de ejemplo (sintéticos) · Auxiliar de Bodega (Tocumen, $640)",
+            "etiqueta": "ejemplo sintético (no es un archivo) · Auxiliar de Bodega (Tocumen, $640)",
         },
     ]
     perfiles_cat = [
         {
             "id": "ejemplo_sintetico_yaritza",
-            "etiqueta": "datos de ejemplo (sintéticos) · Yaritza (20 años, La Chorrera, fonda familiar)",
+            "etiqueta": "ejemplo sintético (no es un archivo) · Yaritza (20 años, La Chorrera, fonda familiar)",
         },
         {
             "id": "ejemplo_sintetico_perfil_b",
-            "etiqueta": "datos de ejemplo (sintéticos) · Joven voluntario en feria libre (Arraiján)",
+            "etiqueta": "ejemplo sintético (no es un archivo) · Joven voluntario en feria libre (Arraiján)",
         },
     ]
     dir_of = RUTA_DATA / "ofertas"
     if dir_of.exists():
-        for arch in sorted(dir_of.glob("*.txt"))[:10]:
+        for arch in sorted(dir_of.glob("*.txt")):  # todas: con [:10] quedaban fuera las de Konzerta (#188)
             rel = f"data/ofertas/{arch.name}"
-            ofertas_cat.append({"id": rel, "etiqueta": f"{rel} (archivo en data/)"})
+            ofertas_cat.append({"id": rel, "etiqueta": f"{rel} · anuncio real, lo lee Mercado"})
     dir_pf = RUTA_DATA / "perfiles"
     if dir_pf.exists():
-        for arch in sorted(dir_pf.glob("*.json"))[:10]:
+        for arch in sorted(dir_pf.glob("*.json")):
             rel = f"data/perfiles/{arch.name}"
-            perfiles_cat.append({"id": rel, "etiqueta": f"{rel} (archivo en data/)"})
+            perfiles_cat.append({"id": rel, "etiqueta": f"{rel} · perfil sintético del archivo"})
     return {"ofertas": ofertas_cat, "perfiles": perfiles_cat}
 
 
@@ -1796,6 +1939,12 @@ def cargar_desde_catalogo_data(
             f"El item_id '{req.item_id}' no existe en el catálogo permitido de '{req.tipo}'."
         )
 
+    if req.item_id.startswith("data/ofertas/"):
+        return _cargar_oferta_desde_archivo(estado, RUTA_DATA / "ofertas" / Path(req.item_id).name)
+    if req.item_id.startswith("data/perfiles/"):
+        return _cargar_perfil_desde_archivo(estado, RUTA_DATA / "perfiles" / Path(req.item_id).name)
+
+    # Ejemplos sintéticos escritos aquí (no son archivos de data/; el catálogo los rotula así).
     if req.tipo == "oferta":
         if "CT11" in req.item_id:
             return analizar_nueva_oferta_texto(
@@ -1855,6 +2004,607 @@ def cargar_desde_catalogo_data(
     )
 
 
+def cargar_escenario_cobertura_turnos(estado: dict[str, Any]) -> dict[str, Any]:
+    """Carga la oferta de turno completo 08:00-17:00 en La Chorrera y dos estudiantes complementarios (#165)."""
+    ids_perfiles = {p["id"] for p in estado.get("perfiles", [])}
+    perfiles_turnos = [
+        {
+            "id": "PERFIL-SOFIA-MANANA",
+            "nombre": "Sofía (estudia tarde)",
+            "genero": "femenino",
+            "edad": 20,
+            "corregimiento": "La Chorrera",
+            "modalidad_ingreso": "datos de ejemplo (sintéticos) · turno matutino",
+            "horario_libre": "Lunes a Viernes 07:30-12:45 (clases 13:30-18:00)",
+            "horario_libre_bloques": [
+                {
+                    "dias": ["lunes", "martes", "miercoles", "jueves", "viernes"],
+                    "hora_inicio": "07:30",
+                    "hora_fin": "12:45",
+                }
+            ],
+            "horario_clases_bloques": [
+                {
+                    "dias": ["lunes", "martes", "miercoles", "jueves", "viernes"],
+                    "hora_inicio": "13:30",
+                    "hora_fin": "18:00",
+                }
+            ],
+            "salario_minimo": 300.0,
+            "presupuesto_pasaje_diario": 2.50,
+            "habilidades": [
+                {
+                    "skill_id": "facturacion",
+                    "nombre": "Facturación y cobro",
+                    "evidencia": "Emisión de facturas y recibos en librería familiar por las mañanas",
+                },
+                {
+                    "skill_id": "control_calidad",
+                    "nombre": "Control de calidad",
+                    "evidencia": "Revisión de mercancía recibida antes de abrir mostrador",
+                },
+            ],
+        },
+        {
+            "id": "PERFIL-MATEO-TARDE",
+            "nombre": "Mateo (estudia mañana)",
+            "genero": "masculino",
+            "edad": 21,
+            "corregimiento": "La Chorrera",
+            "modalidad_ingreso": "datos de ejemplo (sintéticos) · turno vespertino",
+            "horario_libre": "Lunes a Viernes 12:15-17:30 (clases 07:30-11:45)",
+            "horario_libre_bloques": [
+                {
+                    "dias": ["lunes", "martes", "miercoles", "jueves", "viernes"],
+                    "hora_inicio": "12:15",
+                    "hora_fin": "17:30",
+                }
+            ],
+            "horario_clases_bloques": [
+                {
+                    "dias": ["lunes", "martes", "miercoles", "jueves", "viernes"],
+                    "hora_inicio": "07:30",
+                    "hora_fin": "11:45",
+                }
+            ],
+            "salario_minimo": 300.0,
+            "presupuesto_pasaje_diario": 2.50,
+            "habilidades": [
+                {
+                    "skill_id": "control_calidad",
+                    "nombre": "Control de calidad",
+                    "evidencia": "Verificación de lotes y fechas de vencimiento en abarrotería por las tardes",
+                },
+                {
+                    "skill_id": "facturacion",
+                    "nombre": "Facturación y cobro",
+                    "evidencia": "Cierre de facturación vespertina en negocio barrial",
+                },
+            ],
+        },
+    ]
+    for p_nuevo in perfiles_turnos:
+        if p_nuevo["id"] not in ids_perfiles:
+            estado["perfiles"].append(p_nuevo)
+
+    ids_ofertas = {o["id"] for o in estado.get("ofertas", [])}
+    if "OF-CHORRERA-TURNO-01" not in ids_ofertas:
+        estado["ofertas"].append(
+            {
+                "id": "OF-CHORRERA-TURNO-01",
+                "puesto": "Auxiliar de Facturación y Control de Calidad (Jornada Completa)",
+                "empresa": "Farmacia Oeste S.A. (Empresa de Prueba)",
+                "corregimiento": "La Chorrera",
+                "salario_mensual": 650.0,
+                "horario": "Lunes a Viernes 08:00-17:00",
+                "habilidades": ["facturacion", "control_calidad"],
+                "requisitos_texto": "Jornada completa de 08:00 a 17:00 en La Chorrera para facturación y control de calidad.",
+                "fuente": "datos de ejemplo (sintéticos)",
+                "bloqueada": False,
+                "alertas": [],
+            }
+        )
+    return recalcular_pipeline_tablero(estado, registrar_trazas=True)
+
+
+def aprobar_cobertura_turnos(
+    estado: dict[str, Any],
+    *,
+    oferta_id: str,
+    consentimiento_manana: bool | None = None,
+    consentimiento_tarde: bool | None = None,
+    orientador: str = "Orientadora Ana Gómez",
+) -> dict[str, Any]:
+    """Aprueba una propuesta de cobertura por turnos creando las dos postulaciones con consentimiento de cada joven (#165)."""
+    req = AprobarCoberturaTurnosRequest(
+        oferta_id=oferta_id,
+        consentimiento_manana=consentimiento_manana,
+        consentimiento_tarde=consentimiento_tarde,
+        orientador=orientador,
+    )
+    coberturas = estado.get("coberturas_turnos") or []
+    cob = next((c for c in coberturas if c.get("oferta_id") == req.oferta_id), None)
+    if cob is None or len(cob.get("segmentos", [])) < 2:
+        raise ErrorValidacionTablero(
+            f"No existe propuesta de cobertura por turnos para la oferta '{req.oferta_id}'."
+        )
+    seg_m, seg_t = cob["segmentos"][0], cob["segmentos"][1]
+    pid_m, pid_t = seg_m["perfil_id"], seg_t["perfil_id"]
+
+    if _consentimiento_rechazado_por_joven(estado, pid_m, req.oferta_id) or _consentimiento_rechazado_por_joven(
+        estado, pid_t, req.oferta_id
+    ):
+        raise ErrorValidacionTablero(
+            "Uno de los jóvenes indicó que no acepta enviar su CV a esta vacante; la cobertura no se puede aprobar."
+        )
+
+    ok_m = req.consentimiento_manana is True or (
+        req.consentimiento_manana is None and _consentimiento_vigente(estado, pid_m, req.oferta_id)
+    )
+    ok_t = req.consentimiento_tarde is True or (
+        req.consentimiento_tarde is None and _consentimiento_vigente(estado, pid_t, req.oferta_id)
+    )
+    if not ok_m or not ok_t:
+        raise ErrorValidacionTablero(
+            "Se requiere confirmar el consentimiento explícito de ambos jóvenes (mañana y tarde) antes de aprobar la cobertura por turnos (#165)."
+        )
+
+    ahora = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for pid, seg in ((pid_m, seg_m), (pid_t, seg_t)):
+        if not _consentimiento_vigente(estado, pid, req.oferta_id):
+            estado.setdefault("consentimientos", []).append(
+                {
+                    "perfil_id": pid,
+                    "oferta_id": req.oferta_id,
+                    "otorgado": True,
+                    "medio": "orientador_tablero",
+                    "timestamp": ahora,
+                }
+            )
+        seg["consentimiento_joven"] = True
+
+    # Construir modelos desde estado para invocar al agente de postulación real (#165)
+    modelos_perfiles, _, modelos_ofertas, _ = _construir_modelos_desde_estado(estado)
+    perfiles_map = {p.id: p for p in modelos_perfiles}
+    ofertas_map = {o.id: o for o in modelos_ofertas}
+
+    for p_raw in estado.get("perfiles", []):
+        if p_raw.get("id") in (pid_m, pid_t) and p_raw.get("id") not in perfiles_map:
+            perfiles_map[p_raw["id"]] = Perfil.model_validate(p_raw)
+    for o_raw in estado.get("ofertas", []):
+        if o_raw.get("id") == req.oferta_id and o_raw.get("id") not in ofertas_map:
+            ofertas_map[o_raw["id"]] = Oferta.model_validate(o_raw)
+
+    def _desglose_segmento(seg_info: dict[str, Any]) -> dict[str, Any]:
+        d = dict(seg_info.get("desglose") or {})
+        d.setdefault("cobertura", 1.0)
+        d.setdefault("minutos_traslado", 0)
+        d.setdefault("pasaje_diario", 0.0)
+        d.setdefault("penalizacion", 0)
+        return d
+
+    matches_turnos = [
+        Match(
+            perfil_id=pid_m,
+            oferta_id=req.oferta_id,
+            puntaje=seg_m.get("puntaje", 80),
+            desglose=_desglose_segmento(seg_m),
+            brechas=list(seg_m.get("brechas") or []),
+            explicacion=f"Cobertura por turnos ({seg_m['inicio']}-{seg_m['fin']}) aprobada por {req.orientador}",
+        ),
+        Match(
+            perfil_id=pid_t,
+            oferta_id=req.oferta_id,
+            puntaje=seg_t.get("puntaje", 80),
+            desglose=_desglose_segmento(seg_t),
+            brechas=list(seg_t.get("brechas") or []),
+            explicacion=f"Cobertura por turnos ({seg_t['inicio']}-{seg_t['fin']}) aprobada por {req.orientador}",
+        ),
+    ]
+
+    aprobacion = {
+        "orientador": req.orientador,
+        "timestamp": ahora,
+        "aprobados": [
+            {"perfil_id": pid_m, "oferta_id": req.oferta_id},
+            {"perfil_id": pid_t, "oferta_id": req.oferta_id},
+        ],
+    }
+
+    previos = _consentimientos_combinados(estado)
+    consentimientos = consentimientos_para(
+        [(pid_m, req.oferta_id), (pid_t, req.oferta_id)],
+        previos,
+        ahora,
+    )
+    RUTA_OUTBOX.mkdir(parents=True, exist_ok=True)
+    conn = _conectar_db_estado(estado)
+    try:
+        res_post = postular(
+            matches_turnos,
+            perfiles_map,
+            ofertas_map,
+            aprobacion=aprobacion,
+            conn=conn,
+            outbox=RUTA_OUTBOX,
+            consentimientos=consentimientos,
+            mensaje_orientador=f"Propuesta de cobertura compartida por turnos ({seg_m['inicio']}-{seg_m['fin']} y {seg_t['inicio']}-{seg_t['fin']}) aprobada por {req.orientador}.",
+        )
+    except ValueError as error:
+        raise ErrorValidacionTablero(f"No se envió la cobertura por turnos a la empresa: {error}") from error
+    finally:
+        conn.close()
+
+    for d_post in res_post.decisiones:
+        d_ser = _serializar_decision(d_post)
+        if d_ser not in estado["decisiones"]:
+            estado["decisiones"].append(d_ser)
+
+    archivos_nombres = [arch.name for arch in res_post.archivos]
+
+    for idx, seg in enumerate((seg_m, seg_t)):
+        pid = seg["perfil_id"]
+        archivos_perfil = [
+            arch.name for arch in res_post.archivos
+            if pid in arch.name or req.oferta_id in arch.name
+        ] or archivos_nombres
+
+        post_existente = _buscar_postulacion(estado, pid, req.oferta_id)
+        db_id = res_post.postulaciones[idx] if idx < len(res_post.postulaciones) else None
+        if post_existente is None:
+            estado.setdefault("postulaciones", []).append(
+                {
+                    "id": f"POST-{pid}-{req.oferta_id}",
+                    "db_id": db_id,
+                    "perfil_id": pid,
+                    "nombre_perfil": seg.get("nombre_perfil", pid),
+                    "oferta_id": req.oferta_id,
+                    "puesto": f"{cob.get('puesto', req.oferta_id)} · Turno {seg['inicio']}-{seg['fin']}",
+                    "empresa": cob.get("empresa", ""),
+                    "puntaje": seg.get("puntaje", 0),
+                    "estado": EstadoPostulacion.ENVIADO.value,
+                    "comentario_orientador": f"Cobertura por turnos ({seg['inicio']}-{seg['fin']}) aprobada por {req.orientador}",
+                    "mensaje_empresa": cob.get("explicacion", ""),
+                    "consentimiento_joven": True,
+                    "archivos_generados": archivos_perfil,
+                }
+            )
+        else:
+            if db_id is not None:
+                post_existente["db_id"] = db_id
+            post_existente["estado"] = EstadoPostulacion.ENVIADO.value
+            post_existente["consentimiento_joven"] = True
+            post_existente["comentario_orientador"] = f"Cobertura por turnos ({seg['inicio']}-{seg['fin']}) aprobada por {req.orientador}"
+            post_existente["archivos_generados"] = archivos_perfil
+
+    _registrar_decision_db(
+        estado,
+        Decision(
+            agente="orientador",
+            entrada_resumen=f"cobertura_turnos -> {req.oferta_id} ({pid_m} + {pid_t})",
+            salida_resumen=(
+                f"Cobertura por turnos aprobada por {req.orientador}: "
+                f"{pid_m} ({seg_m['inicio']}-{seg_m['fin']}) y {pid_t} ({seg_t['inicio']}-{seg_t['fin']})"
+            ),
+            razon=cob.get("motivo", "Aprobación de cobertura por turnos con consentimiento de ambos jóvenes."),
+            timestamp=ahora,
+        ),
+    )
+    estado["metricas"] = _calcular_metricas_impacto(estado)
+    _guardar_estado_tablero_db(estado)
+    return estado
+
+
+def actualizar_umbrales_solver(
+    estado: dict[str, Any],
+    *,
+    max_minutos_traslado: int | None = None,
+    max_porcentaje_salario_pasaje: float | None = None,
+    max_porcentaje_pasaje: float | None = None,
+    max_candidatos_por_vacante: int | None = None,
+    max_vacantes_por_perfil: int | None = None,
+    orientador: str = "Orientadora Ana Gómez",
+) -> dict[str, Any]:
+    """Actualiza los umbrales editables del solver CP-SAT, registra la Decision y recalcula (#168)."""
+    req = UmbralesSolverRequest(
+        max_minutos_traslado=max_minutos_traslado,
+        max_porcentaje_salario_pasaje=max_porcentaje_salario_pasaje,
+        max_porcentaje_pasaje=max_porcentaje_pasaje,
+        max_candidatos_por_vacante=max_candidatos_por_vacante,
+        max_vacantes_por_perfil=max_vacantes_por_perfil,
+        orientador=orientador,
+    )
+    cfg_actual = dict(
+        estado.get("config_solver")
+        or {
+            "max_minutos_traslado": 60,
+            "max_porcentaje_salario_pasaje": 0.15,
+            "max_candidatos_por_vacante": 3,
+            "max_vacantes_por_perfil": 2,
+        }
+    )
+    explicitos = set(estado.get("umbrales_explicitos") or [])
+    cambios_txt: list[str] = []
+
+    if req.max_minutos_traslado is not None:
+        ant = cfg_actual.get("max_minutos_traslado", 60)
+        cfg_actual["max_minutos_traslado"] = int(req.max_minutos_traslado)
+        explicitos.add("max_minutos_traslado")
+        cambios_txt.append(f"max_minutos_traslado: {ant} -> {req.max_minutos_traslado} min")
+
+    pct_val = req.max_porcentaje_salario_pasaje
+    if pct_val is None and req.max_porcentaje_pasaje is not None:
+        pct_val = (
+            req.max_porcentaje_pasaje / 100.0
+            if req.max_porcentaje_pasaje > 1.0
+            else req.max_porcentaje_pasaje
+        )
+    if pct_val is not None:
+        ant = cfg_actual.get("max_porcentaje_salario_pasaje", 0.15)
+        cfg_actual["max_porcentaje_salario_pasaje"] = round(float(pct_val), 4)
+        explicitos.add("max_porcentaje_salario_pasaje")
+        cambios_txt.append(
+            f"max_porcentaje_salario_pasaje: {int(round(float(ant) * 100))}% -> {int(round(float(pct_val) * 100))}%"
+        )
+
+    if req.max_candidatos_por_vacante is not None:
+        ant = cfg_actual.get("max_candidatos_por_vacante", 3)
+        cfg_actual["max_candidatos_por_vacante"] = int(req.max_candidatos_por_vacante)
+        explicitos.add("max_candidatos_por_vacante")
+        cambios_txt.append(f"k_por_vacante: {ant} -> {req.max_candidatos_por_vacante}")
+
+    if req.max_vacantes_por_perfil is not None:
+        ant = cfg_actual.get("max_vacantes_por_perfil", 2)
+        cfg_actual["max_vacantes_por_perfil"] = int(req.max_vacantes_por_perfil)
+        explicitos.add("max_vacantes_por_perfil")
+        cambios_txt.append(f"max_vacantes_por_perfil: {ant} -> {req.max_vacantes_por_perfil}")
+
+    if not cambios_txt:
+        raise ErrorValidacionTablero("Debe indicar al menos un umbral del solver para actualizar.")
+
+    estado["config_solver"] = cfg_actual
+    estado["umbrales_editados_orientador"] = True
+    estado["umbrales_explicitos"] = sorted(explicitos)
+
+    ahora = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _registrar_decision_db(
+        estado,
+        Decision(
+            agente="orientador",
+            entrada_resumen=f"umbrales_solver ({req.orientador})",
+            salida_resumen=f"Umbrales del solver actualizados: {', '.join(cambios_txt)}",
+            razon=f"El orientador ({req.orientador}) ajustó los parámetros determinísticos de ConfigSolver y recalculó el matching.",
+            timestamp=ahora,
+        ),
+    )
+    return recalcular_pipeline_tablero(estado, registrar_trazas=True)
+
+
+def registrar_evento_empresa_tablero(
+    estado: dict[str, Any],
+    *,
+    tipo: Literal["rechaza", "cubierta", "acepta"],
+    oferta_id: str,
+    perfil_id: str | None = None,
+    nota: str = "",
+    empresa: str = "Empresa",
+) -> dict[str, Any]:
+    """Registra una acción desde la vista de empresa con `agente='empresa'` y recalcula si aplica (#168, #54)."""
+    req = EventoEmpresaTableroRequest(
+        tipo=tipo,
+        oferta_id=oferta_id,
+        perfil_id=perfil_id,
+        nota=nota,
+        empresa=empresa,
+    )
+    oferta = next((o for o in estado.get("ofertas", []) if o.get("id") == req.oferta_id), None)
+    if oferta is None:
+        raise ErrorValidacionTablero(f"No existe la oferta '{req.oferta_id}'.")
+
+    ahora = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    nombre_emp = oferta.get("empresa") or req.empresa
+    def _actualizar_post_sql(conn_db: sqlite3.Connection, post_id: int, nuevo_est: str, motivo_txt: str) -> None:
+        try:
+            db.cambiar_estado(conn_db, post_id, nuevo_est, motivo_txt)
+        except ValueError as exc:
+            raise ErrorValidacionTablero(f"Transición no permitida para la postulación: {exc}") from exc
+
+    conn = _conectar_db_estado(estado)
+    try:
+        if req.tipo == "rechaza" and req.perfil_id:
+            post = _buscar_postulacion(estado, req.perfil_id, req.oferta_id)
+            if post is not None:
+                _actualizar_post_sql(
+                    conn,
+                    int(post["db_id"]),
+                    db.NO_SELECCIONADO,
+                    req.nota or f"Rechazado por {nombre_emp}",
+                )
+                post["estado"] = EstadoPostulacion.NO_SELECCIONADO.value
+            excl = estado.setdefault("excluidos", [])
+            if not any(
+                e.get("perfil_id") == req.perfil_id and e.get("oferta_id") == req.oferta_id
+                for e in excl
+            ):
+                excl.append(
+                    {
+                        "perfil_id": req.perfil_id,
+                        "oferta_id": req.oferta_id,
+                        "origen": "empresa",
+                        "motivo": req.nota or f"Rechazado por {nombre_emp}",
+                    }
+                )
+        elif req.tipo == "acepta" and req.perfil_id:
+            post = _buscar_postulacion(estado, req.perfil_id, req.oferta_id)
+            if post is not None:
+                _actualizar_post_sql(
+                    conn,
+                    int(post["db_id"]),
+                    db.ENTREVISTA,
+                    req.nota or f"Citado a entrevista por {nombre_emp}",
+                )
+                post["estado"] = EstadoPostulacion.ENTREVISTA.value
+        elif req.tipo == "cubierta":
+            for post in estado.get("postulaciones", []):
+                if post.get("oferta_id") == req.oferta_id:
+                    nuevo_est = (
+                        EstadoPostulacion.CONTRATADO.value
+                        if req.perfil_id and post.get("perfil_id") == req.perfil_id
+                        else EstadoPostulacion.NO_SELECCIONADO.value
+                    )
+                    _actualizar_post_sql(
+                        conn,
+                        int(post["db_id"]),
+                        nuevo_est,
+                        req.nota or f"Vacante cubierta en {nombre_emp}",
+                    )
+                    post["estado"] = nuevo_est
+    finally:
+        conn.close()
+
+    _registrar_decision_db(
+        estado,
+        Decision(
+            agente="empresa",
+            entrada_resumen=f"{nombre_emp} -> {req.oferta_id}" + (f" ({req.perfil_id})" if req.perfil_id else ""),
+            salida_resumen=f"Respuesta de empresa ({req.tipo}) sobre {req.oferta_id}",
+            razon=req.nota or f"Acción '{req.tipo}' registrada en la vista de empresa por {nombre_emp}.",
+            timestamp=ahora,
+        ),
+    )
+    if req.tipo in ("rechaza", "cubierta"):
+        return recalcular_pipeline_tablero(estado, registrar_trazas=True)
+    estado["metricas"] = _calcular_metricas_impacto(estado)
+    _guardar_estado_tablero_db(estado)
+    return estado
+
+
+def obtener_panel_operacion(estado: dict[str, Any]) -> dict[str, Any]:
+    """Construye el panel de operación admin: uso/costo del LLM, modo, grabaciones, canales y umbrales (#168)."""
+    uso_agentes: dict[str, Any] = {}
+    uso_tot: dict[str, Any] = {
+        "llamadas": 0,
+        "tokens_entrada": 0,
+        "tokens_salida": 0,
+        "tokens_cache_lectura": 0,
+        "tokens_cache_escritura": 0,
+        "costo_usd": 0.0,
+    }
+    try:
+        from puente.llm import uso_por_agente, uso_total
+
+        uso_agentes = uso_por_agente()
+        uso_tot = uso_total()
+    except Exception:
+        pass
+
+    dir_grab_data = RUTA_DATA / "grabaciones"
+    dir_grab_evals = RUTA_RAIZ / "evals" / "grabaciones"
+    n_grab_data = len(list(dir_grab_data.glob("*.json"))) if dir_grab_data.exists() else 0
+    n_grab_evals = len(list(dir_grab_evals.glob("*.json"))) if dir_grab_evals.exists() else 0
+
+    cfg_solver = dict(
+        estado.get("config_solver")
+        or {
+            "max_minutos_traslado": 60,
+            "max_porcentaje_salario_pasaje": 0.15,
+            "max_candidatos_por_vacante": 3,
+            "max_vacantes_por_perfil": 2,
+        }
+    )
+    return {
+        "llm_modo": os.getenv("LLM_MODO", "reproducir").strip() or "reproducir",
+        "uso_por_agente": uso_agentes,
+        "uso_total": uso_tot,
+        "grabaciones_disponibles": {
+            "data_grabaciones": n_grab_data,
+            "evals_grabaciones": n_grab_evals,
+            "total": n_grab_data + n_grab_evals,
+        },
+        "telegram_estado": "activo" if os.getenv("TELEGRAM_BOT_TOKEN") else "outbox_local",
+        "whatsapp_estado": "activo" if os.getenv("TWILIO_AUTH_TOKEN") else "sandbox_inactivo",
+        "umbrales_solver": cfg_solver,
+        "roles_sistema": [
+            {"rol": "admin", "nombre": "Admin (Orientador)", "ruta": "/", "agente": "orientador"},
+            {"rol": "aplicante", "nombre": "Aplicante (Joven)", "ruta": "/joven", "agente": "joven"},
+            {"rol": "empresa", "nombre": "Empresa", "ruta": "/empresa", "agente": "empresa"},
+        ],
+    }
+
+
+def _rechazo_guardrails(estado: dict[str, Any], datos: dict[str, Any]) -> str | None:
+    """Guardrails (#9) sobre lo que llega de un archivo de data/; deja sus Decisiones y devuelve el rechazo, si hay."""
+    resultados = evaluar_entrada(datos)
+    for resultado in resultados:
+        _registrar_decision_db(estado, resultado.decision)
+    rechazo = next((r for r in resultados if not r.ok), None)
+    return (rechazo.respuesta or rechazo.motivo) if rechazo else None
+
+
+def _cargar_oferta_desde_archivo(estado: dict[str, Any], ruta: Path) -> dict[str, Any]:
+    """Lee un anuncio de data/ofertas con el agente Mercado (puente.llm; en reproducir, las grabaciones de #139)."""
+    rel = f"data/ofertas/{ruta.name}"
+    texto = ruta.read_text(encoding="utf-8")
+    rechazo = _rechazo_guardrails(estado, {"texto": texto})
+    if rechazo:
+        raise ErrorValidacionTablero(rechazo)
+    resultado = mercado.procesar_ofertas([{"texto": texto, "fuente": rel}])
+    for decision in resultado.decisiones:
+        _registrar_decision_db(estado, decision)
+    if not resultado.ofertas:
+        motivo = resultado.errores[0] if resultado.errores else "sin detalle"
+        raise ErrorValidacionTablero(f"Mercado no pudo leer {rel}: {motivo}")
+    oferta = resultado.ofertas[0]
+    nuevo_id = oferta.id.upper()  # el id de Mercado sale del texto: el mismo archivo da el mismo id
+    if any(o.get("id") == nuevo_id for o in estado.get("ofertas", [])):
+        raise ErrorValidacionTablero(f"{rel} ya está en el tablero como {nuevo_id}.")
+    bloqueada, alertas = _evaluar_reglas_discriminacion(texto)  # Ley 11 sobre el texto del anuncio, no un resumen
+    estado["ofertas"].append(
+        {
+            "id": nuevo_id,
+            "puesto": oferta.puesto,
+            "empresa": oferta.empresa,
+            "corregimiento": oferta.corregimiento,
+            "salario_mensual": oferta.salario_mensual,
+            "horario": _texto_horarios([oferta.horario]) if oferta.horario else None,
+            "habilidades": oferta.habilidades,
+            "requisitos_texto": oferta.requisitos_texto,
+            "alertas": alertas,
+            "bloqueada": bloqueada,
+            "fuente": rel,
+        }
+    )
+    return recalcular_pipeline_tablero(estado, registrar_trazas=True)
+
+
+def _cargar_perfil_desde_archivo(estado: dict[str, Any], ruta: Path) -> dict[str, Any]:
+    """Suma al tablero un perfil sintético de data/perfiles tal como está en el archivo (#188)."""
+    rel = f"data/perfiles/{ruta.name}"
+    try:
+        perfil = Perfil.model_validate(json.loads(ruta.read_text(encoding="utf-8")))
+    except ValueError as exc:
+        raise ErrorValidacionTablero(f"{rel} no es un perfil válido: {exc}") from exc
+    perfil = perfil.model_copy(update={"id": f"PERFIL-DATA-{perfil.id}"})
+    if _buscar_perfil(estado, perfil.id) is not None:
+        raise ErrorValidacionTablero(f"{rel} ya está en el tablero como {perfil.id}.")
+    evidencias = " ".join(h.evidencia for h in perfil.habilidades)
+    rechazo = _rechazo_guardrails(estado, {"texto": evidencias, "edad": perfil.edad})
+    if rechazo:
+        raise ErrorValidacionTablero(rechazo)
+    estado["perfiles"].append(_perfil_para_tablero(perfil, f"{rel} (sintético)", cargar_taxonomia_grafo()))
+    _registrar_decision_db(
+        estado,
+        {
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "agente": "perfil",
+            "entrada_resumen": f"Perfil {perfil.id} desde {rel}",
+            "salida_resumen": f"{len(perfil.habilidades)} habilidad(es) con su evidencia del archivo; Matching recalculado",
+            "razon": "Perfil sintético de data/ cargado tal cual, con sus horarios y evidencias.",
+        },
+    )
+    return recalcular_pipeline_tablero(estado, registrar_trazas=True)
+
+
 def serializar_estado_publico(estado: dict[str, Any]) -> dict[str, Any]:
     """Construye el JSON serializable del estado (excluyendo objetos internos de LangGraph)."""
     conteo_embudo = {est: 0 for est in ESTADOS_POSTULACION}
@@ -1870,10 +2620,18 @@ def serializar_estado_publico(estado: dict[str, Any]) -> dict[str, Any]:
         # `entradas_perfil` (#52) trae las respuestas en texto libre de cada joven: no sale.
         if not k.startswith("_") and k != "entradas_perfil"
     }
+    es_publica = es_modo_demo_publica()
     payload["conteo_embudo"] = conteo_embudo
     payload["catalogo_data"] = listar_catalogo_data()
     payload["decisiones_db"] = _leer_decisiones_db(estado)
     payload["metricas"] = _calcular_metricas_impacto(estado)
+    payload["operacion"] = obtener_panel_operacion(estado)
+    payload["modo_demo_publica"] = es_publica
+    payload["aviso_demo_publica"] = (
+        "Demo pública de solo lectura (estado efímero): corre con LLM_MODO=reproducir sin claves y el estado se reinicia entre invocaciones."
+        if es_publica
+        else None
+    )
     return payload
 
 
@@ -2044,6 +2802,111 @@ async def endpoint_reset(request: Request) -> JSONResponse:
     empresa.anunciar_codigos_empresa(ESTADO_GLOBAL)  # #167: y los de /empresa/lista-corta
     _guardar_estado_tablero_db(ESTADO_GLOBAL)
     return await endpoint_estado(request)
+
+
+async def endpoint_cobertura_turnos_demo(request: Request) -> JSONResponse:
+    _, err_resp = await _leer_json_validado(request)
+    if err_resp is not None:
+        return err_resp
+    cargar_escenario_cobertura_turnos(ESTADO_GLOBAL)
+    anunciar_codigos_joven(ESTADO_GLOBAL)
+    return await endpoint_estado(request)
+
+
+async def endpoint_aprobar_cobertura_turnos(request: Request) -> JSONResponse:
+    datos, err_resp = await _leer_json_validado(request)
+    if err_resp is not None or datos is None:
+        return err_resp  # type: ignore[return-value]
+    try:
+        req = AprobarCoberturaTurnosRequest.model_validate(datos)
+        aprobar_cobertura_turnos(
+            ESTADO_GLOBAL,
+            oferta_id=req.oferta_id,
+            consentimiento_manana=req.consentimiento_manana,
+            consentimiento_tarde=req.consentimiento_tarde,
+            orientador=req.orientador,
+        )
+    except ValidationError as exc:
+        return JSONResponse({"detail": exc.errors(include_context=False)}, status_code=422)
+    except ErrorValidacionTablero as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
+    return await endpoint_estado(request)
+
+
+async def endpoint_umbrales_solver(request: Request) -> JSONResponse:
+    datos, err_resp = await _leer_json_validado(request)
+    if err_resp is not None or datos is None:
+        return err_resp  # type: ignore[return-value]
+    try:
+        req = UmbralesSolverRequest.model_validate(datos)
+        actualizar_umbrales_solver(
+            ESTADO_GLOBAL,
+            max_minutos_traslado=req.max_minutos_traslado,
+            max_porcentaje_salario_pasaje=req.max_porcentaje_salario_pasaje,
+            max_porcentaje_pasaje=req.max_porcentaje_pasaje,
+            max_candidatos_por_vacante=req.max_candidatos_por_vacante,
+            max_vacantes_por_perfil=req.max_vacantes_por_perfil,
+            orientador=req.orientador,
+        )
+    except ValidationError as exc:
+        return JSONResponse({"detail": exc.errors(include_context=False)}, status_code=422)
+    except ErrorValidacionTablero as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
+    return await endpoint_estado(request)
+
+
+async def endpoint_admin_operacion(_request: Request) -> JSONResponse:
+    return JSONResponse(obtener_panel_operacion(ESTADO_GLOBAL))
+
+
+async def endpoint_empresa_pagina(_request: Request) -> FileResponse:
+    return FileResponse(RUTA_STATIC / "empresa.html")
+
+
+async def endpoint_empresa_postulaciones(_request: Request) -> JSONResponse:
+    """Devuelve las postulaciones enviadas a la empresa sin exponer datos internos del orientador (#168)."""
+    postulaciones_empresa = [
+        {
+            "id": p.get("id"),
+            "perfil_id": p.get("perfil_id"),
+            "nombre_perfil": p.get("nombre_perfil"),
+            "oferta_id": p.get("oferta_id"),
+            "puesto": p.get("puesto"),
+            "empresa": p.get("empresa"),
+            "estado": p.get("estado"),
+        }
+        for p in ESTADO_GLOBAL.get("postulaciones", [])
+        if p.get("estado") in (db.ENVIADO, db.ENTREVISTA, db.CONTRATADO, db.NO_SELECCIONADO)
+    ]
+    return JSONResponse({"postulaciones": postulaciones_empresa})
+
+
+async def endpoint_empresa_evento(request: Request) -> JSONResponse:
+    datos, err_resp = await _leer_json_validado(request)
+    if err_resp is not None or datos is None:
+        return err_resp  # type: ignore[return-value]
+    try:
+        req = EventoEmpresaTableroRequest.model_validate(datos)
+        if req.perfil_id and not _buscar_perfil(ESTADO_GLOBAL, req.perfil_id):
+            return JSONResponse({"detail": f"Perfil '{req.perfil_id}' no encontrado."}, status_code=404)
+        registrar_evento_empresa_tablero(
+            ESTADO_GLOBAL,
+            tipo=req.tipo,
+            oferta_id=req.oferta_id,
+            perfil_id=req.perfil_id,
+            nota=req.nota,
+            empresa=req.empresa,
+        )
+    except ValidationError as exc:
+        return JSONResponse({"detail": exc.errors(include_context=False)}, status_code=422)
+    except ErrorValidacionTablero as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
+    return JSONResponse({
+        "ok": True,
+        "tipo": req.tipo,
+        "oferta_id": req.oferta_id,
+        "perfil_id": req.perfil_id,
+    })
 
 
 # --- Vista del joven (#52, fase 1) ---
@@ -2275,34 +3138,48 @@ def registrar_perfil_joven(
     No usa `registrar_nuevo_perfil` porque ese fija el horario y recibe los skill_id del
     orientador; aquí las habilidades vienen verificadas por el agente Perfil (#6).
     """
-    taxonomia = taxonomia or {}
     estado.setdefault("entradas_perfil", []).append(entrada)
     estado["perfiles"].append(
-        {
-            "id": perfil.id,
-            "nombre": perfil.nombre,
-            "genero": perfil.genero or "no_especificado",
-            "edad": perfil.edad,
-            "corregimiento": perfil.corregimiento,
-            "modalidad_ingreso": "Vista del joven: formulario fijo y entrevista (#52)",
-            "horario_libre": _horario_para_tablero(perfil),
-            # Lo que el Matching usa de verdad (#4): los bloques del formulario, no el texto de arriba.
-            "horario_libre_bloques": [h.model_dump() for h in perfil.horario_libre],
-            "horario_clases_bloques": [h.model_dump() for h in perfil.horario_clases],
-            "salario_minimo": perfil.salario_minimo,
-            "presupuesto_pasaje_diario": perfil.presupuesto_pasaje_diario,
-            "habilidades": [
-                {
-                    "skill_id": h.skill_id,
-                    "nombre": taxonomia.get(h.skill_id, {}).get("nombre_es", h.skill_id),
-                    "evidencia": h.evidencia,
-                }
-                for h in perfil.habilidades
-            ],
-        }
+        _perfil_para_tablero(perfil, "Vista del joven: formulario fijo y entrevista (#52)", taxonomia or {})
     )
     _registrar_decision_db(estado, decision)
+    _registrar_decision_db(
+        estado,
+        Decision(
+            agente="joven",
+            entrada_resumen=f"registro_perfil ({perfil.id})",
+            salida_resumen=f"Perfil {perfil.id} enviado desde /joven ({len(perfil.habilidades)} habilidades)",
+            razon="El joven completó el formulario y entrevista en la vista de aplicante (/joven).",
+            timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        ),
+    )
     return recalcular_pipeline_tablero(estado, registrar_trazas=True)
+
+
+def _perfil_para_tablero(perfil: Perfil, modalidad_ingreso: str, taxonomia: dict[str, dict]) -> dict[str, Any]:
+    """El perfil como lo guarda el tablero, con sus horarios y evidencias reales (#52, #188)."""
+    return {
+        "id": perfil.id,
+        "nombre": perfil.nombre,
+        "genero": perfil.genero or "no_especificado",
+        "edad": perfil.edad,
+        "corregimiento": perfil.corregimiento,
+        "modalidad_ingreso": modalidad_ingreso,
+        "horario_libre": _horario_para_tablero(perfil),
+        # Lo que el Matching usa de verdad (#4): los bloques del perfil, no el texto de arriba.
+        "horario_libre_bloques": [h.model_dump() for h in perfil.horario_libre],
+        "horario_clases_bloques": [h.model_dump() for h in perfil.horario_clases],
+        "salario_minimo": perfil.salario_minimo,
+        "presupuesto_pasaje_diario": perfil.presupuesto_pasaje_diario,
+        "habilidades": [
+            {
+                "skill_id": h.skill_id,
+                "nombre": taxonomia.get(h.skill_id, {}).get("nombre_es", h.skill_id),
+                "evidencia": h.evidencia,
+            }
+            for h in perfil.habilidades
+        ],
+    }
 
 
 def _buscar_perfil(estado: dict[str, Any], perfil_id: str) -> dict[str, Any] | None:
@@ -2388,6 +3265,16 @@ def registrar_consentimiento_joven(
                 if req.otorgado
                 else f"El joven indicó en la vista del joven que no acepta que su CV llegue a {empresa}."
             ),
+            timestamp=ahora,
+        ),
+    )
+    _registrar_decision_db(
+        estado,
+        Decision(
+            agente="joven",
+            entrada_resumen=f"{req.perfil_id} -> {req.oferta_id}",
+            salida_resumen=f"Consentimiento {'otorgado' if req.otorgado else 'negado'} desde /joven",
+            razon=f"Decisión de consentimiento registrada por el joven sobre la vacante {req.oferta_id} ({empresa}).",
             timestamp=ahora,
         ),
     )
@@ -2662,6 +3549,7 @@ async def _ciclo_de_vida(_app: Starlette):
 app = Starlette(
     debug=False,
     lifespan=_ciclo_de_vida,
+    middleware=[Middleware(MiddlewareDemoPublicaReadOnly)],
     routes=[
         Route("/", endpoint_index, methods=["GET"]),
         Route("/api/estado", endpoint_estado, methods=["GET"]),
@@ -2672,6 +3560,13 @@ app = Starlette(
         Route("/api/cargar-data", endpoint_cargar_data, methods=["POST"]),
         Route("/api/auditor/simular-sesgo", endpoint_simular_sesgo, methods=["POST"]),
         Route("/api/reset", endpoint_reset, methods=["POST"]),
+        Route("/api/orientador/cobertura-turnos/demo", endpoint_cobertura_turnos_demo, methods=["POST"]),
+        Route("/api/orientador/cobertura-turnos/aprobar", endpoint_aprobar_cobertura_turnos, methods=["POST"]),
+        Route("/api/orientador/umbrales", endpoint_umbrales_solver, methods=["POST"]),
+        Route("/api/admin/operacion", endpoint_admin_operacion, methods=["GET"]),
+        Route("/empresa", endpoint_empresa_pagina, methods=["GET"]),
+        Route("/api/empresa/postulaciones", endpoint_empresa_postulaciones, methods=["GET"]),
+        Route("/api/empresa/evento", endpoint_empresa_evento, methods=["POST"]),
         # Vista del joven (#52)
         Route("/joven", endpoint_joven_pagina, methods=["GET"]),
         Route("/api/joven/formulario", endpoint_joven_formulario, methods=["GET"]),
