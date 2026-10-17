@@ -13,14 +13,26 @@ proveedor sustituido que devuelve la salida escrita aquí a mano. Así la clave 
 que calcula `puente.llm` y la salida es la que un extractor fiel daría para estos documentos. Si hay
 clave y quieres la respuesta real del modelo, corre la demo con `LLM_MODO=grabar` y sube los archivos.
 
+Estas dos grabaciones NO las produjo el modelo, y cada archivo lo dice en su campo `nota` (#236):
+«proveedor» y «modelo» solo identifican la clave del hash, y el uso 0/0 indica que no hubo llamada.
+Quedan explicadas en `data/grabaciones/README.md`, y `tests/test_grabaciones_a_mano.py` exige que
+cualquier grabación sin uso lleve esa nota.
+
 Uso: `uv run python scripts/grabar_fixtures_ingesta.py`
 """
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 from pathlib import Path
+
+NOTA_A_MANO = (
+    "Salida escrita a mano por scripts/grabar_fixtures_ingesta.py; no la produjo el modelo. "
+    "«proveedor» y «modelo» solo identifican la clave del hash, no quién respondió; el uso 0/0 indica que "
+    "no hubo llamada. Ver data/grabaciones/README.md (#170, #236)."
+)
 
 from fpdf import FPDF
 from PIL import Image, ImageDraw, ImageFont
@@ -110,8 +122,23 @@ def grabar() -> None:
     def falso_llamar(_cliente, *, agente: str, **_kw):
         return salidas[agente], 0, 0
 
+    guardar_original = llm._guardar_grabacion
+
+    def guardar_con_nota(directorio: str, clave: str, **kw) -> None:
+        """Escribe la grabación como siempre y le agrega la `nota`, justo después de «modelo» (#236)."""
+        guardar_original(directorio, clave, **kw)
+        ruta = llm._ruta_grabacion(directorio, clave)
+        registro = json.loads(ruta.read_text(encoding="utf-8"))
+        sellado: dict[str, object] = {}
+        for campo, valor in registro.items():
+            sellado[campo] = valor
+            if campo == "modelo":
+                sellado["nota"] = NOTA_A_MANO
+        ruta.write_text(json.dumps(sellado, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+
     llm._cliente_por_defecto = falso_cliente
     llm._llamar_anthropic = falso_llamar
+    llm._guardar_grabacion = guardar_con_nota
 
     # Mercado: la foto va como archivo, con el nombre que le pone el servidor.
     salidas["mercado"] = OfertaExtraida(

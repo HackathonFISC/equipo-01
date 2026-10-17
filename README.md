@@ -264,7 +264,7 @@ Redactor y Micromisión se usan por línea de comandos y en los evals; todavía 
 | `data/perfiles/` | 10 perfiles de 18 a 29 años, incluida Yaritza | Sintético |
 | `data/cursos.csv` | 9 cursos con títulos y áreas reales del INADEH | Cupos y horarios de prueba |
 | `data/retos.csv` | Retos cortos por habilidad de Micromisión (#158) | De prueba |
-| `data/grabaciones/`, `evals/grabaciones/` | Respuestas grabadas de Claude para la demo y los evals sin red | Generado |
+| `data/grabaciones/`, `evals/grabaciones/` | Respuestas grabadas de Claude para la demo y los evals sin red, salvo dos de `data/grabaciones/` (el volante y el CV sintéticos de #170), escritas a mano y rotuladas así en su `nota` (ver [`data/grabaciones/README.md`](data/grabaciones/README.md)) | Generado, salvo esas dos |
 
 Supuestos del equipo, configurables en el solver: 60 minutos por trayecto, pasaje de hasta 15 % del salario, 22 días laborables al mes y la misma duración y tarifa a la ida y a la vuelta.
 
@@ -429,12 +429,12 @@ Las palabras clave de inyección ("ignora tus instrucciones", "eres ahora", "sys
 | Postulación | 2 | 2/2 | Sin consentimiento no sale nada; con consentimiento, CV, carta, .ics y mensaje sin datos sensibles | 100 % | sí |
 | Reacomodo | 1 | 1/1 | Tras el rechazo de la empresa: pareja excluida, aviso al joven y nueva aprobación pendiente | 100 % | sí |
 | Formación | 2 | 2/2 | Cursos calculados a mano, con cupo, horario sin cruce, traslado de hasta 60 min y pasaje dentro del presupuesto | 100 % | sí |
-| De punta a punta | 1 | 0/1 | Listas cortas calculadas a mano y CV, carta e .ics por pareja en outbox, sin datos sensibles | 100 % | no (#238) |
+| De punta a punta | 1 | 1/1 | Listas cortas calculadas a mano y CV, carta e .ics por pareja en outbox, sin datos sensibles | 100 % | sí |
 
 Para leer esta tabla con honestidad:
 
 - **No siempre fue así.** El 16 de octubre, 4 de los 5 casos de extracción fallaban (#152 a #155). Se corrigieron en el código de Mercado, sin tocar lo esperado, y el historial queda en `evals/resultados.md`.
-- **Un caso falla hoy.** E2E-01 recorre el caso Yaritza de punta a punta. Coinciden las parejas enviadas, los archivos y la ausencia de datos sensibles, pero la lista corta de la cocina sale ordenada por id (Carlos 50, María 50, Yaritza 100) y no por puntaje. El fallo queda anotado y se sigue en #238.
+- **El caso de punta a punta falló y se corrigió.** El primer día E2E-01 recorría el caso Yaritza y la lista corta de la cocina salía ordenada por id (Carlos 50, María 50, Yaritza 100) y no por puntaje; coincidían las parejas, los archivos y la ausencia de datos sensibles. Se arregló en el código (#238: puntaje de mayor a menor y, a igual puntaje, id del perfil), sin tocar lo esperado, y el historial queda en `evals/resultados.md`.
 - **Las metas son provisionales.** Las propuso el equipo.
 - **No se mide la variación.** En modo reproducir cada caso con LLM usa una sola grabación.
 - **Todos los datos de los casos son sintéticos.**

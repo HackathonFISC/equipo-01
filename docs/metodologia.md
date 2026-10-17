@@ -205,6 +205,7 @@ Cómo se lee cada arista condicional:
      - hasta 3 candidatos por plaza (una vacante con 2 plazas admite 6) y hasta 2 vacantes por joven.
    - **Si falta un dato** de la oferta, como el salario, el horario o las habilidades, no se descarta por ese dato. El par baja 10 puntos por cada dato que falta y queda «por confirmar». La excepción es el traslado: un par sin fila en la matriz de traslados no es viable.
    - **El puntaje** es la cobertura de habilidades. Los minutos de traslado no restan puntaje: filtran por el máximo y desempatan entre las vacantes de un mismo joven.
+   - **El orden de la lista corta** de cada vacante es por puntaje, de mayor a menor, y a igual puntaje por id del perfil. Los minutos de traslado no cuentan: así ve primero a los más aptos el orientador y así se presentan a la empresa (#238).
    - **La explicación** de cada match es una plantilla determinística, sin LLM.
    - **Ejemplo con Yaritza**, desde La Chorrera (`data/traslados.csv`):
      - Vista Alegre: 20 minutos y 0.75 por viaje, o sea 1.50 al día ida y vuelta: entra.
