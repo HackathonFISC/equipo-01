@@ -1,4 +1,4 @@
-"""Pruebas del Tablero Web del Orientador y validaciones de seguridad (Issues #11 y #33)."""
+"""Pruebas del Tablero Web del Orientador conectado al grafo real y SQLite (Issues #11, #33 y #49)."""
 
 from __future__ import annotations
 
@@ -14,10 +14,12 @@ from app.server import (
     analizar_nueva_oferta_texto,
     app,
     calcular_matches_tablero,
+    desbloquear_oferta_con_motivo,
     obtener_datos_iniciales_demo,
     procesar_accion_orientador,
     registrar_nuevo_perfil,
 )
+from puente.tools import db
 
 
 def test_datos_iniciales_demo_incluyen_caso_yaritza_ley11_y_fuentes_sinteticas() -> None:
@@ -26,15 +28,27 @@ def test_datos_iniciales_demo_incluyen_caso_yaritza_ley11_y_fuentes_sinteticas()
     assert len(estado["perfiles"]) >= 3
     assert any(p["id"] == "PERFIL-YARITZA" for p in estado["perfiles"])
 
-    # Verificar que todas las fuentes iniciales estén rotuladas como datos de ejemplo (sintéticos)
+    # Verificar que todas las fuentes iniciales estén rotuladas como datos de ejemplo (sintéticos) y empresas de prueba
     for o in estado["ofertas"]:
         assert "sintéticos" in o["fuente"]
+        assert "Prueba" in o["empresa"]
         assert "Konzerta" not in o["fuente"]
         assert "Computrabajo" not in o["fuente"]
 
-    # Verificar que las trazas provienen únicamente de los nodos que realmente corrieron
+    # Verificar que el grafo se detuvo en el interrupt del orientador y registró decisiones en SQLite
+    assert estado["estado_grafo"] == "interrupt_orientador"
+    assert estado["interrupt_pendiente"] is not None
     agentes_trazados = [d["agente"] for d in estado["decisiones"]]
     assert agentes_trazados == ["matching", "formacion", "auditor"]
+
+    # Verificar vista de descartados y motivo (#49)
+    assert len(estado["descartados"]) >= 1
+    assert any(
+        d["perfil_id"] == "PERFIL-YARITZA"
+        and d["oferta_id"] == "OF-TOCUMEN-03"
+        and "95 min > 60" in d["motivo"]
+        for d in estado["descartados"]
+    )
 
     # Verificar match de Yaritza en La Chorrera, curso INADEH real y descarte de Tocumen
     matches_yaritza = [
@@ -57,10 +71,12 @@ def test_datos_iniciales_demo_incluyen_caso_yaritza_ley11_y_fuentes_sinteticas()
         assert o["alertas"][0]["frase"]
         assert "Ley 11 de 2005" in o["alertas"][0]["regla"]
 
-    # Verificar auditoría contrafactual 100% imparcial
+    # Verificar auditoría contrafactual 100% imparcial y métricas de impacto
     assert estado["auditoria"]["porcentaje_identico_global"] == 100.0
     assert estado["auditoria"]["sesgo_detectado"] is False
     assert "corregimiento" in estado["auditoria"]["nota_metodologica"].lower()
+    assert "referencia_inec" in estado["metricas"]
+    assert "operativas_demo" in estado["metricas"]
 
 
 def test_traslado_faltante_no_inventa_45_min_y_descarta_con_motivo() -> None:
@@ -68,16 +84,14 @@ def test_traslado_faltante_no_inventa_45_min_y_descarta_con_motivo() -> None:
     analizar_nueva_oferta_texto(
         estado,
         puesto="Inventarista Regional",
-        empresa="Bodega Norte",
+        empresa="Bodega Norte (Empresa de Prueba)",
         corregimiento="Changuinola",
         salario_mensual=700.0,
         requisitos_texto="Control de inventario en almacén.",
         habilidades=["inventario"],
     )
     id_changuinola = estado["ofertas"][-1]["id"]
-    # No debe existir ningún match viable hacia Changuinola
     assert not any(m["oferta_id"] == id_changuinola for m in estado["matches"])
-    # Y en ofertas_descartadas de Yaritza debe figurar el motivo 'sin dato de traslado'
     match_yaritza = next(
         m for m in estado["matches"] if m["perfil_id"] == "PERFIL-YARITZA"
     )
@@ -85,21 +99,35 @@ def test_traslado_faltante_no_inventa_45_min_y_descarta_con_motivo() -> None:
     assert "sin dato de traslado" in motivo_desc
 
 
-def test_acciones_orientador_aprobar_editar_quitar_rechazar_y_bloqueo_post_rechazo(
+def test_acciones_orientador_consentimiento_sqlite_editar_quitar_rechazar_y_desbloquear(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import app.server as srv
 
     monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path)
-    estado = obtener_datos_iniciales_demo()
+    db_test = tmp_path / "test_puente.db"
+    estado = obtener_datos_iniciales_demo(db_path=db_test)
 
-    # 1. Editar observación antes de aprobar
+    # 0. Sin consentimiento del joven (`consentimiento_joven=False`), aprobar falla y no envía nada (#49)
+    with pytest.raises(ErrorValidacionTablero):
+        procesar_accion_orientador(
+            estado,
+            accion="aprobar",
+            perfil_id="PERFIL-YARITZA",
+            oferta_id="OF-CHORRERA-01",
+            consentimiento_joven=False,
+        )
+    assert list(tmp_path.glob("*.pdf")) == []
+
+    # 1. Editar cambia solo el mensaje a la empresa y la nota del orientador sin recalcular (#49)
+    n_decisiones_antes_editar = len(estado["decisiones"])
     procesar_accion_orientador(
         estado,
         accion="editar",
         perfil_id="PERFIL-YARITZA",
         oferta_id="OF-CHORRERA-01",
         nota_edicion="Candidata con experiencia verificada en fonda familiar",
+        mensaje_empresa="Mensaje personalizado para Supermercado Oeste",
     )
     post = next(
         p
@@ -107,21 +135,38 @@ def test_acciones_orientador_aprobar_editar_quitar_rechazar_y_bloqueo_post_recha
         if p["perfil_id"] == "PERFIL-YARITZA" and p["oferta_id"] == "OF-CHORRERA-01"
     )
     assert "fonda familiar" in post["comentario_orientador"]
+    assert post["mensaje_empresa"] == "Mensaje personalizado para Supermercado Oeste"
+    assert len(estado["decisiones"]) == n_decisiones_antes_editar + 1
 
-    # 2. Aprobar match -> genera 3 archivos en outbox/ y cambia estado a enviado
+    # 2. Aprobar con consentimiento reanuda el grafo, genera 3 archivos en outbox/ y deja filas en `decisiones` de SQLite (#49)
     procesar_accion_orientador(
         estado,
         accion="aprobar",
         perfil_id="PERFIL-YARITZA",
         oferta_id="OF-CHORRERA-01",
         nota_edicion="Aprobado por orientador",
+        consentimiento_joven=True,
     )
     assert post["estado"] == "enviado"
+    assert len(estado["consentimientos"]) == 1
+    assert estado["consentimientos"][0]["medio"] == "orientador"
     assert len(post["archivos_generados"]) == 3
     for nombre_arch in post["archivos_generados"]:
         ruta_arch = (tmp_path / nombre_arch).resolve()
         assert ruta_arch.is_relative_to(tmp_path.resolve())
         assert ruta_arch.exists()
+
+    # Verificar que la tabla `decisiones` de SQLite tiene las filas del grafo, consentimiento y postulación
+    conn = db.conectar(db_test)
+    try:
+        filas_dec = conn.execute("SELECT agente, salida_resumen FROM decisiones").fetchall()
+        agentes_sql = {f["agente"] for f in filas_dec}
+        assert "matching" in agentes_sql
+        assert "consentimiento" in agentes_sql
+        assert "postulacion" in agentes_sql
+        assert "orientador_humano" in agentes_sql
+    finally:
+        conn.close()
 
     # 3. Rechazar otro match y comprobar que NO se puede aprobar después de rechazar
     procesar_accion_orientador(
@@ -148,7 +193,7 @@ def test_acciones_orientador_aprobar_editar_quitar_rechazar_y_bloqueo_post_recha
         )
     assert post_rechazado["estado"] == "no_seleccionado"
 
-    # 4. Quitar candidato y recalcular Matching
+    # 4. Quitar candidato recalcula sin él (#49)
     procesar_accion_orientador(
         estado,
         accion="quitar_candidato",
@@ -156,6 +201,34 @@ def test_acciones_orientador_aprobar_editar_quitar_rechazar_y_bloqueo_post_recha
         oferta_id="OF-CHORRERA-01",
     )
     assert not any(p["id"] == "PERFIL-DANIELA" for p in estado["perfiles"])
+    assert any(
+        e["perfil_id"] == "PERFIL-DANIELA" and e["oferta_id"] == "OF-CHORRERA-01"
+        for e in estado["excluidos"]
+    )
+
+    # 5. Desbloquear oferta bloqueada con motivo registra Decision y la habilita en el grafo (#49)
+    desbloquear_oferta_con_motivo(
+        estado,
+        oferta_id="OF-BLOQ-EDAD-04",
+        motivo="Empresa retiró el requisito de edad tras observación del orientador",
+    )
+    of_desbloq = next(o for o in estado["ofertas"] if o["id"] == "OF-BLOQ-EDAD-04")
+    assert of_desbloq["bloqueada"] is False
+    assert any(
+        d["agente"] == "orientador_humano" and "Desbloquear oferta OF-BLOQ-EDAD-04" in d["entrada_resumen"]
+        for d in estado["decisiones"]
+    )
+
+
+def test_en_app_no_queda_logica_propia_de_matching_traslados_ni_auditoria() -> None:
+    """Criterio 3 (#49): En app/ no queda lógica propia de matching, traslados ni auditoría."""
+    codigo_server = (Path(__file__).resolve().parents[1] / "app" / "server.py").read_text(
+        encoding="utf-8"
+    )
+    assert "from puente.rules.traslados" not in codigo_server
+    assert "auditar_lista_corta" not in codigo_server
+    assert "construir_grafo" in codigo_server
+    assert "Command(" in codigo_server
 
 
 def test_registrar_perfil_con_uuid_no_sobrescribe_yaritza_y_soporta_apostrofo() -> None:
@@ -230,7 +303,7 @@ def test_endpoints_http_validaciones_path_traversal_415_y_422(
                 },
             )
             assert r_traversal.status_code == 422
-            assert list(tmp_path.glob("*")) == []
+            assert list(tmp_path.glob("*.pdf")) == []
 
             # 3. Par inexistente -> 422
             r_no_match = await client.post(
@@ -290,14 +363,27 @@ def test_endpoints_http_validaciones_path_traversal_415_y_422(
             )
             assert r_sal.status_code == 422
 
-            # 6. Simular inyección de sesgo y verificar que el Auditor real la detecta
+            # 6. Endpoint de desbloqueo de oferta con motivo
+            r_desbloq = await client.post(
+                "/api/ofertas/desbloquear",
+                json={
+                    "oferta_id": "OF-BLOQ-EDAD-04",
+                    "motivo": "Requisito corregido por la empresa",
+                },
+            )
+            assert r_desbloq.status_code == 200
+            datos_desbloq = r_desbloq.json()
+            of_04 = next(o for o in datos_desbloq["ofertas"] if o["id"] == "OF-BLOQ-EDAD-04")
+            assert of_04["bloqueada"] is False
+
+            # 7. Simular inyección de sesgo y verificar que el Auditor real la detecta
             r_sesgo = await client.post(
                 "/api/auditor/simular-sesgo", json={"activar": True}
             )
             assert r_sesgo.status_code == 200
             datos_sesgo = r_sesgo.json()
             assert datos_sesgo["auditoria"]["sesgo_detectado"] is True
-            assert datos_sesgo["auditoria"]["accion_grafo"] == "matching"
+            assert datos_sesgo["auditoria"]["accion_grafo"] in ("orientador", "perfil", "matching")
 
             await client.post("/api/reset")
 

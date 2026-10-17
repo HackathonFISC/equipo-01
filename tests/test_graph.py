@@ -454,6 +454,31 @@ def test_demo_por_consola_con_salida_cp1252(tmp_path, monkeypatch):
     assert "Flujo terminado." in texto
 
 
+def test_demo_llm_ofrece_grabado_y_claude_pero_no_gemini(tmp_path, capsys):
+    """#85: el LLM real de la demo es Claude vía puente.llm; la opción gemini de `--llm` ya no existe."""
+    with pytest.raises(SystemExit) as ayuda:
+        g.main(["--help"])
+    assert ayuda.value.code == 0
+    texto = capsys.readouterr().out
+    assert "{grabado,claude}" in texto and "ANTHROPIC_API_KEY" in texto
+    with pytest.raises(SystemExit) as error:
+        g.main(["--llm", "gemini", "--checkpoints", str(tmp_path / "cp.db")])
+    assert error.value.code == 2 and "gemini" in capsys.readouterr().err
+
+
+
+def test_demo_muestra_los_errores_si_falta_una_grabacion(tmp_path, monkeypatch):
+    """Sin la grabación de Perfil, Yaritza no entra al Matching: la demo lo dice en vez de parecer completa."""
+    import puente.llm
+
+    monkeypatch.setenv("LLM_DIR_GRABACIONES", str(tmp_path / "grabaciones_vacias"))
+    puente.llm.reiniciar_uso()
+    lineas: list[str] = []
+    g.main(["--llm", "claude", "--checkpoints", str(tmp_path / "cp.db"), "--auto", "aprobar,aprobar"], escribir=lineas.append)
+    texto = "\n".join(lineas)
+    assert "Flujo terminado." in texto
+    assert "⚠  Errores" in texto and "Falta la grabación" in texto and "perfil" in texto
+
 CEDULA, TELEFONO = "8-123-4567", "6123-4567"
 
 
@@ -711,3 +736,14 @@ def test_fase2_cada_agente_es_un_nodo_con_nombre_para_langsmith():
     assert {"guardrails", "router", "mercado", "perfil", "matching", "auditor", "formacion", "aprobacion", "postulacion"} <= nodos
     config = config_caso("yaritza")
     assert config["run_name"] == "puente:yaritza" and config["metadata"]["thread_id"] == "yaritza"
+
+
+def test_fase2_demo_con_llm_claude_usa_llm_puente(tmp_path, monkeypatch, capsys, caso):
+    """`--llm claude` corre los agentes reales y Perfil llama a `llm_puente` (aquí falso, sin red)."""
+    _, estado = caso
+    llm = _llm_yaritza(estado)
+    monkeypatch.setattr(g, "llm_puente", llm)
+    g.main(["--llm", "claude", "--checkpoints", str(tmp_path / "cp.db"), "--auto", "aprobar,aprobar"])
+    salida = capsys.readouterr().out
+    assert "LLM claude" in salida and "Flujo terminado." in salida
+    assert len(llm.prompts) == 1  # la entrevista de Yaritza pasó por llm_puente, no por la respuesta grabada

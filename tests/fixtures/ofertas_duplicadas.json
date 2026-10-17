@@ -1,5 +1,5 @@
 {
-  "_nota": "Datos sintéticos para #43 (dedup por similitud). Empresas ficticias. Se reemplazan por los pares de #3 cuando el PR #27 llegue a main.",
+  "_nota": "Datos sintéticos para #43 (dedup por similitud) y #75 (mismo corregimiento). Empresas ficticias. Se reemplazan por los pares de #3 cuando el PR #27 llegue a main.",
   "pares_duplicados": [
     {
       "nombre": "cajero_konzerta_vs_computrabajo",
@@ -30,6 +30,21 @@
                      "horario": {"dias": ["miercoles", "jueves", "viernes", "sabado", "domingo"], "hora_inicio": "16:00", "hora_fin": "23:00"},
                      "habilidades": ["atención al cliente"], "requisitos_texto": "Experiencia minima 6 meses y trato amable con los clientes"}
       }
+    },
+    {
+      "nombre": "bodega_empresa_confidencial_en_un_portal",
+      "a": {
+        "texto": "Logística Ficticia Canal busca Auxiliar de bodega en Juan Díaz. Recibir y despachar mercancía, conteo de inventario. Turno de lunes a viernes de 06:00 a 14:00. Salario B/. 700 mensuales.",
+        "extraida": {"puesto": "Auxiliar de bodega", "empresa": "Logística Ficticia Canal", "corregimiento": "Juan Díaz", "salario_mensual": 700,
+                     "horario": {"dias": ["lunes", "martes", "miercoles", "jueves", "viernes"], "hora_inicio": "06:00", "hora_fin": "14:00"},
+                     "habilidades": ["inventario"], "requisitos_texto": "Recibir y despachar mercancía, conteo de inventario"}
+      },
+      "b": {
+        "texto": "Empresa confidencial busca Auxiliar de bodega - Juan Díaz. Recibir y despachar mercancía y conteo de inventario. Turno: lunes a viernes de 06:00 a 14:00. Salario B/.700 mensual.",
+        "extraida": {"puesto": "Auxiliar de bodega", "empresa": "Confidencial", "corregimiento": "Juan Diaz", "salario_mensual": 700,
+                     "horario": {"dias": ["lunes", "martes", "miercoles", "jueves", "viernes"], "hora_inicio": "06:00", "hora_fin": "14:00"},
+                     "habilidades": ["inventario"], "requisitos_texto": "Recibir y despachar mercancía y conteo de inventario"}
+      }
     }
   ],
   "par_distinto": {
@@ -45,6 +60,21 @@
       "extraida": {"puesto": "Cajero(a)", "empresa": "Ferretería Ficticia El Martillo", "corregimiento": "Tocumen", "salario_mensual": 620,
                    "horario": {"dias": ["martes", "miercoles", "jueves", "viernes", "sabado"], "hora_inicio": "09:00", "hora_fin": "17:00"},
                    "habilidades": ["manejo de caja"], "requisitos_texto": "bachiller, manejo de caja e inventario"}
+    }
+  },
+  "par_misma_cadena": {
+    "nombre": "cajero_misma_cadena_dos_sucursales",
+    "a": {
+      "texto": "Farmacias Ficticias Vida Sana busca Cajero(a) para su sucursal de Vista Alegre. Requisitos: bachiller, manejo de caja y trato amable. Horario de lunes a viernes de 08:00 a 16:00. Salario B/. 650 mensuales. Entrevistas en la sucursal de Vista Alegre.",
+      "extraida": {"puesto": "Cajero(a)", "empresa": "Farmacias Ficticias Vida Sana", "corregimiento": "Vista Alegre", "salario_mensual": 650,
+                   "horario": {"dias": ["lunes", "martes", "miercoles", "jueves", "viernes"], "hora_inicio": "08:00", "hora_fin": "16:00"},
+                   "habilidades": ["manejo de caja", "atención al cliente"], "requisitos_texto": "bachiller, manejo de caja y trato amable"}
+    },
+    "b": {
+      "texto": "Farmacias Ficticias Vida Sana busca Cajero(a) para su sucursal de Pedregal. Requisitos: bachiller, manejo de caja y trato amable. Horario de martes a sábado de 10:00 a 18:00. Salario B/. 620 mensuales. Entrevistas en la sucursal de Pedregal.",
+      "extraida": {"puesto": "Cajero(a)", "empresa": "Farmacias Ficticias Vida Sana", "corregimiento": "Pedregal", "salario_mensual": 620,
+                   "horario": {"dias": ["martes", "miercoles", "jueves", "viernes", "sabado"], "hora_inicio": "10:00", "hora_fin": "18:00"},
+                   "habilidades": ["manejo de caja", "atención al cliente"], "requisitos_texto": "bachiller, manejo de caja y trato amable"}
     }
   },
   "konzerta_sin_salario": {
