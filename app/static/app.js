@@ -901,7 +901,7 @@ async function ejecutarAccionOrientador(boton) {
     const ok = await confirmar({
       titulo: `¿Enviar la postulación de ${match?.nombre_perfil || perfilId}?`,
       html: `<p><strong>${puesto}</strong> en ${empresa}. Al aprobar, el grafo se reanuda y se generan:</p>
-        <ul><li>CV en PDF sin cédula, teléfono ni dirección</li><li>Mensaje de Telegram para la empresa</li><li>Cita de entrevista en <code>.ics</code></li></ul>`,
+        <ul><li>CV en PDF sin cédula, teléfono ni dirección</li><li>Mensaje para la empresa (Telegram u <code>outbox/</code>)</li><li>Cita de entrevista en <code>.ics</code></li></ul>`,
       textoBoton: "Aprobar y enviar",
     });
     if (!ok) return;
