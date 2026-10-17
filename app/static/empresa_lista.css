@@ -472,6 +472,22 @@ textarea:focus-visible {
   padding-top: 0.75rem;
 }
 
+/* ---------- Propuestas de Puente: versión legal y cobertura por turnos (#258) ---------- */
+
+.propuesta {
+  border-top: 1px dashed var(--border);
+  padding-top: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.propuesta h4 {
+  margin: 0 0 0.35rem;
+}
+
+.propuesta p {
+  margin: 0.35rem 0;
+}
+
 /* ---------- Aviso flotante ---------- */
 
 .toast {
