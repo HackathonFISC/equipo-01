@@ -74,6 +74,27 @@ def test_duplicados_y_ruta_ausente_no_inflan_metricas():
     assert resultado["total_habilidades_informales_con_evidencia"] == 1
 
 
+def test_oferta_bloqueada_no_cuenta_como_descarte_de_traslado():
+    perfil = {"id": "P", "corregimiento": "Origen", "habilidades": []}
+    ofertas = [
+        {"id": "A", "corregimiento": "Origen", "bloqueada": False, "habilidades": []},
+        {"id": "B", "corregimiento": "Lejos", "bloqueada": True, "habilidades": []},
+        {"id": "C", "corregimiento": "Lejos", "bloqueada": False, "habilidades": []},
+    ]
+    match = {"perfil_id": "P", "oferta_id": "A", "desglose": {
+        "viable": True, "minutos_traslado": 10, "pasaje_diario": 0.5,
+        "ofertas_descartadas": {
+            "B": "oferta bloqueada por Ley 11; traslado 90 min > 60",
+            "C": "traslado 90 min > 60",
+        },
+    }}
+    rutas = {("Origen", "Lejos"): (90, 3.0)}
+    resultado = calcular_metricas([match], [perfil], ofertas, rutas)
+    assert resultado["total_ofertas_descartadas_traslado_pasaje"] == 1
+    assert [d["oferta_id"] for d in resultado["ofertas_descartadas_traslado_pasaje"]] == ["C"]
+    assert [d["oferta_descartada_id"] for d in resultado["comparaciones_mensuales"]] == ["C"]
+
+
 def test_dias_invalidos():
     with pytest.raises(ValueError):
         calcular_metricas([], [], [], {}, dias_laborables=0)
