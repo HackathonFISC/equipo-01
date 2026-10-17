@@ -712,3 +712,61 @@ def test_ni_el_pdf_ni_el_mensaje_a_la_empresa_filtran_ubicacion_descartes_ni_otr
             assert p.corregimiento not in salida
         for o in otras:
             assert o.empresa not in salida and o.puesto not in salida
+
+
+def _aprobar_directo(nodo, oferta, perfiles, matches, ofertas=None):
+    """Llama al nodo con una aprobación del orientador para esos matches (SINTÉTICO)."""
+    return nodo({
+        "aprobacion": {"orientador": "Orientadora Ficticia", "timestamp": "2026-10-19T06:30:00-05:00",
+                       "oferta_id": oferta.id,
+                       "aprobados": [{"perfil_id": m.perfil_id, "oferta_id": m.oferta_id} for m in matches]},
+        "ofertas": ofertas or [oferta], "perfiles": perfiles, "matches": matches, "lista_corta": matches,
+        "decisiones": [], "errores": [],
+    })
+
+
+def _nodo_para(tmp_path):
+    return crear_nodo_postulacion(ruta_db=tmp_path / "puente.db", outbox=tmp_path / "outbox",
+                                  enviar=Doble(), enviar_joven=Doble(), ahora=lambda: AHORA)
+
+
+def _inicio_ics(outbox, perfil_id, oferta_id):
+    (evento,) = ics.Calendar((outbox / f"entrevista_{perfil_id}_{oferta_id}.ics").read_text(encoding="utf-8")).events
+    return evento.begin.datetime.astimezone(PANAMA)
+
+
+def test_la_misma_oferta_en_dos_aprobaciones_no_repite_la_hora(tmp_path):
+    oferta, perfiles, matches = _tres_de_una_oferta()
+    nodo = _nodo_para(tmp_path)
+    _aprobar_directo(nodo, oferta, perfiles, [matches[0]])  # Ana primero
+    _aprobar_directo(nodo, oferta, perfiles, [matches[1]])  # Bea en otra aprobación
+    ana = _inicio_ics(tmp_path / "outbox", "ana", oferta.id)
+    bea = _inicio_ics(tmp_path / "outbox", "bea", oferta.id)
+    assert ana == datetime(2026, 10, 19, 8, 0, tzinfo=PANAMA)
+    assert bea >= ana + timedelta(minutes=45)  # la empresa no entrevista a dos a la vez
+
+
+def test_dos_ofertas_de_la_misma_empresa_no_cruzan_sus_entrevistas(tmp_path):
+    oferta, perfiles, matches = _tres_de_una_oferta()
+    otra = oferta.model_copy(update={"id": "o-tres-b", "puesto": "Repositor"})  # misma empresa
+    m_otra = matches[1].model_copy(update={"oferta_id": otra.id})
+    nodo = _nodo_para(tmp_path)
+    _aprobar_directo(nodo, oferta, perfiles, [matches[0]])
+    _aprobar_directo(nodo, otra, perfiles, [m_otra], ofertas=[oferta, otra])
+    ana = _inicio_ics(tmp_path / "outbox", "ana", oferta.id)
+    bea = _inicio_ics(tmp_path / "outbox", "bea", otra.id)
+    assert bea >= ana + timedelta(minutes=45) or bea + timedelta(minutes=45) <= ana
+
+
+def test_el_mismo_joven_en_dos_ofertas_no_queda_en_dos_entrevistas_que_se_cruzan(tmp_path):
+    oferta, perfiles, matches = _tres_de_una_oferta()
+    otra = oferta.model_copy(update={"id": "o-otra-empresa", "empresa": "Otra Empresa Ficticia"})
+    bea, bea_otra = matches[1], matches[1].model_copy(update={"oferta_id": otra.id})  # 30 min de traslado
+    nodo = _nodo_para(tmp_path)
+    _aprobar_directo(nodo, oferta, perfiles, [bea])
+    _aprobar_directo(nodo, otra, perfiles, [bea_otra], ofertas=[oferta, otra])
+    primera = _inicio_ics(tmp_path / "outbox", "bea", oferta.id)
+    segunda = _inicio_ics(tmp_path / "outbox", "bea", otra.id)
+    margen, duracion = timedelta(minutes=30), timedelta(minutes=45)
+    # Con su traslado de ida y vuelta, las dos ventanas no se tocan.
+    assert segunda - margen >= primera + duracion + margen or segunda + duracion + margen <= primera - margen

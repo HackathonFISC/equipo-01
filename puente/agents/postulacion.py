@@ -473,6 +473,12 @@ def postular(
         decidir(etiqueta, ics.name,
                 f"Invitación .ics con fecha provisional ({inicio.isoformat(timespec='minutes')}, "
                 "hora de Panamá), por confirmar con la empresa")
+        # Queda en la base para que la próxima aprobación no la cruce (misma empresa o mismo joven).
+        db.guardar_entrevista(
+            conn, perfil.id, oferta.id, oferta.empresa, inicio,
+            inicio + timedelta(minutes=DURACION_ENTREVISTA_MIN),
+            dict(match.desglose).get("minutos_traslado") or 0,
+        )
 
         resultado.archivos += [cv, ics]
         resultado.calendarios[(perfil.id, oferta.id)] = ics
@@ -613,9 +619,11 @@ def _ejecutar_nodo(
     if any(m.oferta_id not in ofertas for m in matches):
         ofertas = {**{o.id: o for o in db.listar_ofertas(conn, no_bloqueadas=False)}, **ofertas}
     inicios: dict[tuple[str, str], datetime] = {}
-    # Entrevistas ya propuestas a cada empresa en esta llamada: cada candidato de una oferta
-    # recibe una hora distinta, la siguiente libre para la empresa.
+    # Entrevistas ya propuestas a cada empresa (en cualquiera de sus ofertas) y a cada joven, en
+    # esta llamada y en aprobaciones anteriores guardadas en la tabla entrevistas: cada candidato
+    # recibe una hora distinta y un joven no queda en dos entrevistas que se cruzan.
     agenda_empresa: dict[str, list[tuple[datetime, datetime]]] = {}
+    agenda_joven: dict[str, list[tuple[datetime, datetime]]] = {}
     desde = reloj()
     con_fecha: list[Match] = []
     for match in matches:
@@ -637,7 +645,10 @@ def _ejecutar_nodo(
         traslado = dict(match.desglose).get("minutos_traslado", 0)
         inicio, aviso = elegir_franja_con_respaldo(
             oferta, perfil, traslado, desde=desde, duracion_min=DURACION_ENTREVISTA_MIN,
-            ocupadas=agenda_empresa.get(oferta.id, []),
+            ocupadas=[*db.entrevistas_ocupadas(conn, empresa=oferta.empresa, salvo=par),
+                      *agenda_empresa.get(oferta.empresa, [])],
+            ocupadas_joven=[*db.entrevistas_ocupadas(conn, perfil_id=par[0], salvo=par),
+                            *agenda_joven.get(par[0], [])],
         )
         if inicio is None:
             # Sin ninguna hora que no cruce sus clases ni el traslado, esta persona no sale (no se
@@ -659,9 +670,10 @@ def _ejecutar_nodo(
                 f"{aviso}. Fecha propuesta: {inicio.strftime('%Y-%m-%d %H:%M')}",
             )
         inicios[par] = inicio
-        agenda_empresa.setdefault(oferta.id, []).append(
-            (inicio, inicio + timedelta(minutes=DURACION_ENTREVISTA_MIN))
-        )
+        fin = inicio + timedelta(minutes=DURACION_ENTREVISTA_MIN)
+        margen = timedelta(minutes=max(float(traslado or 0), 0.0))
+        agenda_empresa.setdefault(oferta.empresa, []).append((inicio, fin))
+        agenda_joven.setdefault(par[0], []).append((inicio - margen, fin + margen))
         con_fecha.append(match)
     if not con_fecha:
         return cambios(consentimientos)

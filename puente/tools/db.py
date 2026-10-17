@@ -92,6 +92,15 @@ CREATE TABLE IF NOT EXISTS descartes (
     timestamp TEXT NOT NULL,
     UNIQUE (perfil_id, oferta_id, motivo)
 );
+CREATE TABLE IF NOT EXISTS entrevistas (
+    perfil_id TEXT NOT NULL,
+    oferta_id TEXT NOT NULL,
+    empresa TEXT NOT NULL,
+    inicio TEXT NOT NULL,
+    fin TEXT NOT NULL,
+    traslado_min REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (perfil_id, oferta_id)
+);
 """
 
 
@@ -343,6 +352,46 @@ def trazas(
         )
         params.append(max(int(limite), 0))
     return [dict(f) for f in conn.execute(consulta, params)]
+
+
+def guardar_entrevista(
+    conn: sqlite3.Connection, perfil_id: str, oferta_id: str, empresa: str,
+    inicio: datetime, fin: datetime, traslado_min: float = 0,
+) -> None:
+    """Guarda la entrevista propuesta de la pareja (una por pareja; la última manda)."""
+    conn.execute(
+        "INSERT OR REPLACE INTO entrevistas (perfil_id, oferta_id, empresa, inicio, fin, traslado_min) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (perfil_id, oferta_id, empresa, inicio.isoformat(), fin.isoformat(), float(traslado_min or 0)),
+    )
+    conn.commit()
+
+
+def entrevistas_ocupadas(
+    conn: sqlite3.Connection, *, empresa: str | None = None, perfil_id: str | None = None,
+    salvo: tuple[str, str] | None = None,
+) -> list[tuple[datetime, datetime]]:
+    """Intervalos ya ocupados por otras aprobaciones u otras ofertas.
+
+    Con ``empresa``: las entrevistas (inicio, fin) que esa empresa ya tiene, en cualquiera de
+    sus ofertas. Con ``perfil_id``: las ventanas del joven, con su traslado de ida y vuelta.
+    ``salvo`` excluye la pareja (perfil_id, oferta_id) que se está agendando.
+    """
+    filas = conn.execute(
+        "SELECT perfil_id, oferta_id, inicio, fin, traslado_min FROM entrevistas "
+        "WHERE (? IS NULL OR empresa = ?) AND (? IS NULL OR perfil_id = ?)",
+        (empresa, empresa, perfil_id, perfil_id),
+    ).fetchall()
+    ocupadas = []
+    for f in filas:
+        if salvo is not None and (f["perfil_id"], f["oferta_id"]) == tuple(salvo):
+            continue
+        inicio, fin = datetime.fromisoformat(f["inicio"]), datetime.fromisoformat(f["fin"])
+        if perfil_id is not None:
+            margen = timedelta(minutes=f["traslado_min"])
+            inicio, fin = inicio - margen, fin + margen
+        ocupadas.append((inicio, fin))
+    return ocupadas
 
 
 def descartes(conn: sqlite3.Connection, *, perfil_id: str | None = None) -> list[dict]:
