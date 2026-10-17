@@ -14,8 +14,9 @@ por proceso y el cliente queda en caché: tras editar `.env`, reinicie el tabler
 - `ANTHROPIC_WORKSPACE_ID` (opcional): workspace al que se carga el gasto, para claves que no son de un workspace.
 - `LLM_PROVEEDOR_RESPALDO` y `LLM_MODELO_RESPALDO` (opcionales): un solo reintento si el modelo rechaza (refusal).
 - `PUENTE_LLM_FALLBACKS` (`false` por defecto): respaldo del servidor de Anthropic (beta). Sin verificar con clave.
-- `PUENTE_LLM_TOPE_USD`: límite estimado por proceso para llamadas reales; se comprueba antes y después de cada
-  respuesta. El costo exacto de una llamada solo se conoce cuando el proveedor devuelve su uso.
+- `PUENTE_LLM_TOPE_USD`: límite estimado por proceso para llamadas reales; se comprueba antes de cada llamada.
+  El costo exacto solo se conoce cuando el proveedor devuelve su uso, así que la llamada que cruza el tope
+  devuelve su respuesta (ya está pagada y, en `grabar`, se guarda) y el tope frena las siguientes.
 
 La salida estructurada usa `messages.create` con `output_config.format` y valida el JSON aquí, después de revisar
 `stop_reason`: así un corte por `max_tokens` o un rechazo con texto no llegan como un error de esquema. El esquema que
@@ -207,12 +208,7 @@ def _registrar(agente: str, modelo: str, entrada: int, salida: int, *, reproduci
         fila["tokens_entrada"] += entrada
         fila["tokens_salida"] += salida
         fila["costo_usd"] += _costo(modelo, entrada, salida)
-        tope = _tope_usd()
-        if tope is not None and sum(f["costo_usd"] for f in _uso.values()) > tope:
-            raise ErrorLLM(
-                f"La última llamada superó el tope estimado de US${tope:.2f} de esta sesión.",
-                causa="tope_gasto", modelo=modelo, agente=agente,
-            )
+        # Sin lanzar: esta respuesta ya se pagó. Si cruzó el tope, `_verificar_tope` frena la llamada siguiente (#125).
 
 
 def uso_por_agente() -> dict[str, dict[str, Any]]:

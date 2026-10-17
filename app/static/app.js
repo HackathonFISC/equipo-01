@@ -532,7 +532,7 @@ function renderizarOpcion(m, indice, perfil, oferta) {
     ? `
       <div class="acciones">
         <label class="chip-check" style="margin-bottom:0.4rem">
-          <input type="checkbox" id="${escaparHtml(consentId)}" checked />
+          <input type="checkbox" id="${escaparHtml(consentId)}" ${m.consentimiento_joven === true ? "checked" : ""} />
           <span>El joven consintió el envío de datos a la empresa (consentimiento informado)</span>
         </label>
         <input type="text" id="${escaparHtml(msgId)}" class="input" placeholder="Mensaje a la empresa (editable)" value="${escaparHtml(post?.mensaje_empresa || "")}" />
@@ -546,7 +546,7 @@ function renderizarOpcion(m, indice, perfil, oferta) {
             <button type="button" class="btn btn--ghost btn-accion-hitl" data-accion="editar" ${datosPar} title="Guarda el mensaje y la nota sin enviar ni recalcular">
               ${icono("edit")}Guardar nota
             </button>
-            <button type="button" class="btn btn--ghost btn-accion-hitl" data-accion="quitar_candidato" ${datosPar} title="Saca a este joven de la lista y recalcula el Matching">
+            <button type="button" class="btn btn--ghost btn-accion-hitl" data-accion="quitar_candidato" ${datosPar} title="Excluye al joven de esta vacante y recalcula el Matching">
               ${icono("refresh")}Quitar
             </button>
             <button type="button" class="btn btn--ghost-bad btn-accion-hitl" data-accion="rechazar" ${datosPar} title="Descarta esta opción; no se envía nada a la empresa">
@@ -750,7 +750,7 @@ function devolverFoco(perfilId) {
 const TEXTOS_ACCION = {
   aprobar: "Postulación enviada: CV, mensaje y cita quedaron en outbox/.",
   editar: "Nota guardada. La opción sigue por aprobar.",
-  quitar_candidato: "Joven retirado de la lista; Matching recalculado.",
+  quitar_candidato: "Candidato retirado de esta vacante; Matching recalculado.",
   rechazar: "Opción rechazada. No se envió nada a la empresa.",
 };
 
@@ -761,7 +761,7 @@ async function ejecutarAccionOrientador(boton) {
   const consentEl = consentId ? document.getElementById(consentId) : null;
   const nota = inputEl ? inputEl.value.trim() : "";
   const mensajeEmpresa = msgEl ? msgEl.value.trim() : "";
-  const consentimientoJoven = consentEl ? Boolean(consentEl.checked) : true;
+  const consentimientoJoven = consentEl ? Boolean(consentEl.checked) : false;
   const match = (estadoActual.matches || []).find((m) => m.perfil_id === perfilId && m.oferta_id === ofertaId);
   const persona = escaparHtml(match?.nombre_perfil || perfilId);
   const empresa = escaparHtml(match?.empresa || ofertaId);
@@ -798,8 +798,8 @@ async function ejecutarAccionOrientador(boton) {
   }
   if (accion === "quitar_candidato") {
     const ok = await confirmar({
-      titulo: `¿Quitar a ${match?.nombre_perfil || perfilId} de la lista corta?`,
-      html: `<p>Todas sus opciones pasan a <em>no seleccionado</em> y el Matching se recalcula con los demás jóvenes.</p>`,
+      titulo: `¿Quitar a ${match?.nombre_perfil || perfilId} de esta vacante?`,
+      html: `<p>Se excluye únicamente el par (${persona}, <strong>${puesto}</strong>) y el Matching se recalcula; el joven sigue disponible para otras vacantes.</p>`,
       textoBoton: "Quitar y recalcular",
       tono: "bad",
     });

@@ -66,9 +66,8 @@ def respuesta(parsed=None, texto="", stop="end_turn", entrada=100, salida=50, de
 def test_tope_de_gasto_detiene_la_siguiente_llamada(monkeypatch):
     monkeypatch.setenv("PUENTE_LLM_TOPE_USD", "0.0001")
     cliente = ClienteAnthropic(respuesta(parsed=Salida(respuesta="ok"), entrada=100, salida=50))
-    with pytest.raises(ErrorLLM, match="tope estimado") as primera:
-        generar_estructurado("hola", Salida, agente="perfil", cliente=cliente)
-    assert primera.value.causa == "tope_gasto"
+    # La llamada que cruza el tope ya está pagada: devuelve su respuesta.
+    assert generar_estructurado("hola", Salida, agente="perfil", cliente=cliente).respuesta == "ok"
     assert len(cliente.llamadas) == 1
     assert llm.uso_por_agente()["perfil"]["costo_usd"] > 0.0001
 
@@ -76,6 +75,25 @@ def test_tope_de_gasto_detiene_la_siguiente_llamada(monkeypatch):
         generar_estructurado("otra", Salida, agente="perfil", cliente=cliente)
     assert segunda.value.causa == "tope_gasto"
     assert len(cliente.llamadas) == 1
+
+
+def test_tope_de_gasto_en_grabar_guarda_la_llamada_que_lo_cruza(monkeypatch, tmp_path):
+    carpeta = tmp_path / "grabaciones"
+    monkeypatch.setenv("LLM_MODO", "grabar")
+    monkeypatch.setenv("LLM_DIR_GRABACIONES", str(carpeta))
+    monkeypatch.setenv("PUENTE_LLM_TOPE_USD", "0.0001")
+    cliente = ClienteAnthropic(respuesta(parsed=Salida(respuesta="grabada"), entrada=100, salida=50))
+
+    assert generar_estructurado("hola", Salida, agente="perfil", cliente=cliente).respuesta == "grabada"
+    assert len(list(carpeta.glob("*.json"))) == 1
+
+    with pytest.raises(ErrorLLM) as segunda:
+        generar_estructurado("otra", Salida, agente="perfil", cliente=cliente)
+    assert segunda.value.causa == "tope_gasto" and len(cliente.llamadas) == 1
+
+    # La grabación sirve en reproducir aunque el tope siga alcanzado: reproducir no consume.
+    monkeypatch.setenv("LLM_MODO", "reproducir")
+    assert generar_estructurado("hola", Salida, agente="perfil", cliente=cliente).respuesta == "grabada"
 
 
 class ClienteAnthropic:
