@@ -18,7 +18,8 @@
 #
 # Formato de las entradas y de lo esperado, por categoría:
 #   extraccion_ofertas          entrada.texto -> esperado {puesto, empresa, corregimiento, salario_mensual, habilidades[]}
-#   requisitos_discriminatorios entrada.texto -> esperado {bloqueada, reglas[] ("art. 1" | "art. 2"), alertas[] (presencia | foto | estado_civil)}
+#   requisitos_discriminatorios entrada {texto, puesto? (#190: el campo Puesto, que se revisa con las mismas reglas)}
+#                               -> esperado {bloqueada, reglas[] ("art. 1" | "art. 2"), alertas[] (presencia | foto | estado_civil | sexo_implicito)}
 #   perfil_sin_cv               entrada {respuestas[] (hasta 5, en el orden de PREGUNTAS_ENTREVISTA de puente/agents/perfil.py:
 #                               1 edad y corregimiento, 2 estudio o trabajo y horario, 3 negocio o ayuda en casa,
 #                               4 voluntariado o comunidad, 5 qué sabe hacer y salario mínimo),
@@ -443,6 +444,226 @@ casos:
       reglas: ["art. 2"]
       alertas: []
     escrito_el: "2026-10-16"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: DIS-12
+    categoria: requisitos_discriminatorios
+    descripcion: "#190: la exigencia de sexo está solo en el campo Puesto («Mesero (masculino)»); los requisitos son neutros. Bloquea por el art. 1 igual que si estuviera en los requisitos. Antes de #190 el tablero solo revisaba los requisitos y la dejaba pasar."
+    entrada:
+      puesto: "Mesero (masculino)"
+      texto: |
+        Restaurante Ficticio en Bella Vista. Atención de mesas y toma de pedidos.
+        Salario $500 mensual. Turno de 4 a 11.
+    esperado:
+      bloqueada: true
+      reglas: ["art. 1"]
+      alertas: []
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: DIS-13
+    categoria: requisitos_discriminatorios
+    descripcion: "#190: el límite de edad está solo en el Puesto («Recepcionista joven 18-25», sin «años»). Bloquea por el art. 2."
+    entrada:
+      puesto: "Recepcionista joven 18-25"
+      texto: |
+        Clínica Ficticia en Betania. Atención telefónica y agenda de citas.
+        Salario $520 mensual.
+    esperado:
+      bloqueada: true
+      reglas: ["art. 2"]
+      alertas: []
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: DIS-14
+    categoria: requisitos_discriminatorios
+    descripcion: "#190: Puesto escrito solo en femenino («Vendedora»), habitual en Panamá. Solo alerta sexo implícito (usar la forma inclusiva, «Vendedor(a)»), igual que «cajera» en los requisitos; no bloquea."
+    entrada:
+      puesto: "Vendedora"
+      texto: |
+        Tienda Ficticia en Albrook. Atención al cliente y manejo de caja.
+        Salario $500 mensual.
+    esperado:
+      bloqueada: false
+      reglas: []
+      alertas: [sexo_implicito]
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: DIS-15
+    categoria: requisitos_discriminatorios
+    descripcion: "#191: «Buscamos joven de 18 a 25», rango de edad sin «años» pegado a «joven» en singular. Bloquea por el art. 2."
+    entrada:
+      texto: |
+        Buscamos joven de 18 a 25 para despacho en minisúper de Vista Alegre.
+        Salario $480 mensual.
+    esperado:
+      bloqueada: true
+      reglas: ["art. 2"]
+      alertas: []
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: DIS-16
+    categoria: requisitos_discriminatorios
+    descripcion: "#191: «buena apariencia» es lo mismo que «buena presencia»: solo alerta, porque la Ley 11 de 2005 no menciona la apariencia."
+    entrada:
+      texto: |
+        Recepcionista para hotel en Calidonia. Buena apariencia y trato amable.
+        Salario $550 mensual.
+    esperado:
+      bloqueada: false
+      reglas: []
+      alertas: [presencia]
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: DIS-17
+    categoria: requisitos_discriminatorios
+    descripcion: "#191: «no embarazadas» excluye por embarazo, que solo puede afectar a mujeres: exigencia de sexo, bloquea por el art. 1."
+    entrada:
+      texto: |
+        Se solicita cajero(a) para supermercado en Tocumen. No embarazadas.
+        Salario $520 mensual.
+    esperado:
+      bloqueada: true
+      reglas: ["art. 1"]
+      alertas: []
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: DIS-18
+    categoria: requisitos_discriminatorios
+    descripcion: "Control negativo de #190 y #191: «mayores de 18 años» es la edad legal, «experiencia de 2 a 5 años» no es una edad, «atención a jóvenes de 15 a 24 años», «buena apariencia del local» y «mujeres embarazadas» hablan de otros, no del candidato. Puesto neutro. No bloquea ni alerta."
+    entrada:
+      puesto: "Promotor(a) comunitario"
+      texto: |
+        Centro Comunitario Ficticio en San Miguelito. Atención a jóvenes de 15 a 24 años y a mujeres embarazadas
+        del programa de salud. Mantener la buena apariencia del local. Mayores de 18 años, experiencia de 2 a 5 años.
+        Salario $600 mensual.
+    esperado:
+      bloqueada: false
+      reglas: []
+      alertas: []
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: DIS-19
+    categoria: requisitos_discriminatorios
+    descripcion: "Revisión del PR #210: «Embarazadas abstenerse», con la exclusión detrás, excluye por embarazo: exigencia de sexo, bloquea por el art. 1. Antes daba cero hallazgos."
+    entrada:
+      texto: |
+        Se solicita cajero(a) para minisúper en Vista Alegre. Embarazadas abstenerse.
+        Salario $500 mensual.
+    esperado:
+      bloqueada: true
+      reglas: ["art. 1"]
+      alertas: []
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: DIS-20
+    categoria: requisitos_discriminatorios
+    descripcion: "Revisión del PR #210: «Prueba de embarazo obligatoria» como requisito de ingreso solo puede dejar fuera a mujeres: bloquea por el art. 1. Antes daba cero hallazgos."
+    entrada:
+      texto: |
+        Empresa Ficticia busca operario(a) de empaque en Tocumen.
+        Requisitos: bachiller, prueba de embarazo obligatoria.
+        Salario $520 mensual.
+    esperado:
+      bloqueada: true
+      reglas: ["art. 1"]
+      alertas: []
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: DIS-21
+    categoria: requisitos_discriminatorios
+    descripcion: "Control negativo de la revisión del PR #210: «Caballero» como apellido de contacto y de empresa, y «Damas & Caballeros» como nombre de tienda, no piden un sexo. Puesto neutro. No bloquea ni alerta (el PR los bloqueaba por el art. 1)."
+    entrada:
+      puesto: "Vendedor(a) de mostrador"
+      texto: |
+        Supermercados Caballero, S.A. (ficticia) busca vendedor(a) para su Tienda Damas & Caballeros en Albrook.
+        Atención al cliente y manejo de caja. Salario $500 mensual.
+        Contacto: Sr. José Caballero.
+    esperado:
+      bloqueada: false
+      reglas: []
+      alertas: []
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: DIS-22
+    categoria: requisitos_discriminatorios
+    descripcion: "Revisión del PR #210: «Mayores de 18 años y menores de 35», frase común en anuncios panameños. El mínimo de 18 es legal, pero el tope de 35 es un límite de edad: bloquea por el art. 2. Fallaba ya en main."
+    entrada:
+      texto: |
+        Empresa Ficticia busca mensajero(a) en Juan Díaz. Mayores de 18 años y menores de 35.
+        Salario $500 mensual.
+    esperado:
+      bloqueada: true
+      reglas: ["art. 2"]
+      alertas: []
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: DIS-23
+    categoria: requisitos_discriminatorios
+    descripcion: "Revisión del PR #210: Puesto «Vacante para damas». El «para» va detrás de la vacante, así que pide un sexo (no es «ropa para damas»): bloquea por el art. 1."
+    entrada:
+      puesto: "Vacante para damas"
+      texto: |
+        Recepción y atención telefónica en clínica ficticia de Betania.
+        Salario $520 mensual.
+    esperado:
+      bloqueada: true
+      reglas: ["art. 1"]
+      alertas: []
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: DIS-24
+    categoria: requisitos_discriminatorios
+    descripcion: "Revisión del PR #210: «buena presentación personal» es «buena presencia» con otras palabras: solo alerta, porque la Ley 11 de 2005 no menciona la apariencia."
+    entrada:
+      texto: |
+        Anfitrión(a) para restaurante ficticio en Bella Vista. Buena presentación personal y trato amable.
+        Salario $500 mensual.
+    esperado:
+      bloqueada: false
+      reglas: []
+      alertas: [presencia]
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: DIS-25
+    categoria: requisitos_discriminatorios
+    descripcion: "Control negativo de embarazo (revisión del PR #210): «licencia por maternidad», «fuero de maternidad», «el seguro cubre embarazo y parto» y atender a una «cliente embarazada» son beneficios o tareas, no excluyen a nadie. No bloquea ni alerta."
+    entrada:
+      texto: |
+        Farmacia Ficticia en San Miguelito busca dependiente(a). Atención a toda clienta, incluida la cliente embarazada.
+        Beneficios: licencia por maternidad y fuero de maternidad según la ley; el seguro cubre embarazo y parto.
+        Salario $520 mensual.
+    esperado:
+      bloqueada: false
+      reglas: []
+      alertas: []
+    escrito_el: "2026-10-17"
     datos_sinteticos: true
     fallos: []
 

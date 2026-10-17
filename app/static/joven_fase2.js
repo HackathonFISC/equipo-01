@@ -14,14 +14,15 @@
   const DIAS = ["lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"];
   const CAMPOS_BLOQUE = ["dia", "hora_inicio", "hora_fin", "solape"];
 
-  // Las respuestas del caso guía tal como están en tests/fixtures/caso_yaritza.json: su lectura está grabada
-  // en data/grabaciones, así la demo sin conexión (LLM_MODO=reproducir) arma el perfil sin red ni claves.
+  // Las respuestas del guion del video tal como están en data/demo/yaritza_chat.json, en orden y letra por letra
+  // (#194): su lectura está grabada en data/grabaciones (llamadas.chat de data/demo/grabaciones_video.json), así la
+  // demo sin conexión (LLM_MODO=reproducir) arma el perfil sin red ni claves. Son las mismas de EJEMPLO_YARITZA.
   const EJEMPLO_CHAT_YARITZA = [
-    "Tengo 20 años y vivo en La Chorrera.",
-    "Estudio de noche, de lunes a viernes de 6 a 10 de la noche. En el día ayudo en la fonda.",
-    "Atiendo la fonda de mi mamá todas las mañanas. Atiendo a los clientes y les tomo el pedido, cobro y doy el vuelto.",
-    "No he hecho voluntariado.",
-    "Sé usar el celular y ayudo a cocinar el almuerzo. Necesito ganar al menos 400 al mes.",
+    "Sí, en la fonda de mi mamá. Le ayudo todas las mañanas antes de irme a clases: atiendo a los clientes, les tomo el pedido, cobro y doy el vuelto. A la hora del almuerzo se llena y hay que estar pilas.",
+    "No, no he tenido otros trabajos. Todo lo que sé lo aprendí en la fonda.",
+    "No he hecho voluntariado. Entre la fonda y las clases de noche no me queda tiempo.",
+    "Sé usar bien el celular, para WhatsApp y para cobrar por Yappy. También ayudo a cocinar: pico la verdura y preparo el arroz y las lentejas del almuerzo.",
+    "La señora de al lado me pide que le ayude con el celular, por ejemplo a pagar la luz por Yappy, porque ella no se entiende con eso. Le enseño paso a paso hasta que lo hace sola.",
   ];
 
   const PASOS = {
