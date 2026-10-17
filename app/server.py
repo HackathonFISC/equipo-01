@@ -389,8 +389,13 @@ def _calcular_metricas_impacto(estado: dict[str, Any]) -> dict[str, Any]:
         {
             "referencia_inec": {
                 "fuente": "INEC Panamá · Encuesta de Mercado Laboral",
-                "desempleo_juvenil_pct": 16.8,
-                "informalidad_juvenil_pct": 48.2,
+                "fecha": "agosto de 2026",
+                "desocupacion_nacional_pct": 8.5,
+                "desocupacion_20_24_pct": 22.6,
+                "desocupacion_25_29_pct": 14.4,
+                "informalidad_no_agricola_pct": 45.8,
+                "fuente_desocupacion_url": "https://www.inec.gob.pa/archivos/P0579518620260930152328Cuadro%205.pdf",
+                "fuente_informalidad_url": "https://www.inec.gob.pa/archivos/P0862619320260930153357Bolet%C3%ADn%20de%20la%20Encuesta%20de%20Mercado%20Laboral%20-%20Agosto%202026.pdf",
                 "nota": "Cifras contextuales de referencia nacional; las métricas operativas corresponden al lote sintético de la demo.",
             },
             "operativas_demo": {
