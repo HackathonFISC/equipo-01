@@ -240,7 +240,7 @@ Cómo se lee cada arista condicional:
 9. **Postulación** (#7, #12, #84). Solo corre después de la aprobación:
    - guarda perfil, oferta y postulación en SQLite y la avanza por sus estados, cada paso con su `Decision` en la tabla `decisiones`;
    - genera el CV ciego en PDF, solo con las habilidades que tienen evidencia;
-   - genera la carta de presentación (#212, `puente/tools/carta.py`) por plantilla y sin LLM: saludo, puesto, hasta 3 habilidades que la oferta pide con su frase literal (si son menos de 2, completa con otras que tengan evidencia) y la disponibilidad. Solo dice que el horario del puesto «cabe» si es fijo y no cruza la medianoche. La evidencia pasa por `cegar()`; el texto de la oferta no, porque tapar ahí el corregimiento del joven se lo revelaría a la empresa (#226). Todo pasa por `limpiar_pii()` y el nombre va tal como lo da la persona (#123);
+   - genera la carta de presentación (#212, `puente/tools/carta.py`) por plantilla y sin LLM: saludo, puesto, hasta 3 habilidades que la oferta pide con su frase literal (si son menos de 2, completa con otras que tengan evidencia) y la disponibilidad. Solo dice que el horario del puesto «cabe» si es fijo y no cruza la medianoche. La evidencia y el nombre de cada habilidad pasan por `cegar()`; el texto de la oferta no, porque tapar ahí el corregimiento del joven se lo revelaría a la empresa (#226). Todo pasa por `limpiar_pii()` y el nombre va tal como lo da la persona (#123);
    - elige una franja de entrevista sin choques y crea el `.ics` de 45 minutos;
    - envía la lista corta a la empresa por Telegram o, sin token, la escribe en `outbox/`.
 
@@ -303,7 +303,7 @@ uv run python -m puente.graph
 - **`--auto`** decide sin preguntar, por ejemplo `--auto "aprobar,aprobar,empresa_rechaza:yaritza@of-cajero-vista-alegre,aprobar"`. Sin esta opción, la demo pregunta en cada vacante.
 - **`--telegram`**: en la demo por terminal es la única forma de que algo salga por Telegram. Sin esta opción, todo se escribe en `outbox/`, aunque `.env` traiga token.
   - **El tablero no tiene esa opción y tiene dos caminos de salida:**
-    - **Postulación.** La lista corta a la empresa (CV ciego, carta, `.ics` y mensaje) la arma `_nodo_postulacion_tablero` en `app/server.py`. Llama a `postular()` (`puente/agents/postulacion.py`) con `outbox/` de la raíz del repositorio, y `postular()` la manda con `enviar_lista_corta()` (`puente/tools/telegram.py`). Sale por Telegram si el entorno del proceso trae `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID_EMPRESA`; si no, queda en esa carpeta.
+    - **Postulación.** La lista corta a la empresa (CV ciego, carta, `.ics` y mensaje) la arma `_nodo_postulacion_tablero` en `app/server.py`. Llama a `postular()` (`puente/agents/postulacion.py`) con la carpeta de `PUENTE_OUTBOX` (o `outbox/` de la raíz si no está definida, #207), y `postular()` la manda con `enviar_lista_corta()` (`puente/tools/telegram.py`). Sale por Telegram si el entorno del proceso trae `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID_EMPRESA`; si no, queda en esa carpeta.
     - **Avisos del reacomodo.** Los avisos al joven los escribe el nodo `avisos` del grafo, que el tablero no reemplaza: `crear_nodo_avisos()` de `nodos_fase_2()` (`puente/graph.py`), con el transporte `sin_telegram`. Nunca salen por Telegram y van a `PUENTE_OUTBOX` o, si falta, a `outbox/` del directorio desde donde se arrancó el servidor (`outbox_por_entorno()`).
 
 **Otras piezas:**
@@ -339,9 +339,9 @@ La vista de la empresa (`/empresa/lista-corta`) se abre con un código por empre
 |---|---|---|---|---|
 | Base de Puente | `puente.db` | `%TEMP%/puente_tablero.db` | `PUENTE_DB` | Perfiles, ofertas, postulaciones con su historial, `entrevistas`, `decisiones`, `descartes`, y las tablas de la carga `cargas` y `cargas_ofertas`; la del tablero guarda además su estado en `tablero_estado` (#122) |
 | Checkpoints del grafo | `checkpoints.db` | `<base>_checkpoints.db`, junto a la base | `PUENTE_CHECKPOINTS` | Cada caso por `thread_id`, para retomarlo después del `interrupt()` |
-| Salida de mensajes | `outbox/` | Lista corta: `outbox/` en la raíz del repositorio. Avisos del reacomodo: `PUENTE_OUTBOX` u `outbox/` del directorio de trabajo | `PUENTE_OUTBOX` (terminal y avisos del tablero) | CV ciego, carta, `.ics` y mensajes a la empresa y al joven cuando no salen por Telegram |
+| Salida de mensajes | `outbox/` | `PUENTE_OUTBOX`; sin ella, lista corta en `outbox/` de la raíz y avisos del reacomodo en `outbox/` del directorio de trabajo | `PUENTE_OUTBOX` (terminal y tablero, #207) | CV ciego, carta, `.ics` y mensajes a la empresa y al joven cuando no salen por Telegram |
 
-Hoy la lista corta del tablero va siempre a `outbox/` de la raíz, sin mirar `PUENTE_OUTBOX`, y los avisos del reacomodo sí la respetan. Si el servidor se arranca desde la raíz y sin `PUENTE_OUTBOX`, los dos caminos terminan en la misma carpeta. Eso cambia si se fusiona el #207, que hace que el tablero respete `PUENTE_OUTBOX`. Para repetir la demo desde cero se usa otra `PUENTE_DB` o se borran esos archivos.
+Desde el #207, el tablero respeta `PUENTE_OUTBOX` en la lista corta, el `.ics` que confirma la empresa y la cobertura por turnos, igual que los avisos del reacomodo. Para repetir la demo desde cero se usa otra `PUENTE_DB` o se borran esos archivos.
 
 ---
 
@@ -396,7 +396,7 @@ El registro completo está en [`decisiones.md`](decisiones.md). El horario y las
    - **Cómo se aplica:** el modelo es Claude Opus 5.5 (`claude-opus-5-5`) con el crédito del equipo, detrás de `puente/llm.py` (#45, #41), con Gemini como respaldo opcional (`LLM_PROVEEDOR=gemini`). Ningún agente crea su propio cliente.
 9. **Tablero en Starlette y Uvicorn, no en Streamlit.**
    - **Por qué:** Streamlit vuelve a ejecutar todo el programa en cada clic, y eso complica controlar la pausa del orientador (`interrupt()`) y probar el tablero de punta a punta por HTTP.
-   - **Cómo se aplica:** el tablero es un servidor web (Starlette y Uvicorn) con páginas en HTML, CSS y JavaScript sin framework (#11, #33). `app/streamlit_app.py` quedó vacío, con solo su docstring, pero la dependencia `streamlit` sigue en `pyproject.toml`.
+   - **Cómo se aplica:** el tablero es un servidor web (Starlette y Uvicorn) con páginas en HTML, CSS y JavaScript sin framework (#11, #33). `app/streamlit_app.py` quedó vacío, con solo su docstring, y la dependencia `streamlit` salió de `pyproject.toml` para que el despliegue de Vercel quepa en 500 MB (#252).
 
 ---
 
