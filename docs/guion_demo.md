@@ -26,7 +26,7 @@ PUENTE_DB="$DEMO/tablero.db" PUENTE_OUTBOX="$DEMO/outbox-tablero" uv run uvicorn
 
 Si el puerto 8000 está ocupado, usa `--port 8001` y la misma URL con 8001.
 
-Abre http://localhost:8000, pulsa **Reiniciar demo** y deja el navegador a pantalla completa. Al reiniciar, la consola escribe una línea `Lista corta de la empresa · distribuidora-el-progreso (…): /empresa/lista-corta#codigo=…`. Copia la **última** de esas líneas para el paso 7: cada reinicio cambia el código.
+Abre http://localhost:8000/orientador (en la raíz está la landing), pulsa **Reiniciar demo** y deja el navegador a pantalla completa. Al reiniciar, la consola escribe una línea `Lista corta de la empresa · distribuidora-el-progreso (…): /empresa/lista-corta#codigo=…`. Copia la **última** de esas líneas para el paso 7: cada reinicio cambia el código.
 
 **Terminal B · agentes con LLM.** Prepara la entrevista de Yaritza y **no** corras `cargar` antes de grabar: si ya cargó, dice «0 leídas con el LLM».
 

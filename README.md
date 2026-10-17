@@ -140,7 +140,11 @@ Los siete agentes mínimos que sugiere el documento del reto y dónde están en 
 
 LangGraph orquesta los agentes. Principio de diseño: **el LLM trabaja en los bordes y el código decide en el centro**. El LLM lee ofertas, CVs y entrevistas y redacta; el código normaliza, aplica las reglas legales, calcula traslados y horarios, asigna con CP-SAT, audita el sesgo y decide qué sale. El LLM nunca ordena candidatos, nunca calcula traslados y nunca decide si una oferta es legal. Metodología completa en [`docs/metodologia.md`](docs/metodologia.md).
 
-Diagrama del grafo real, generado sin red con `draw_mermaid()`:
+![Arquitectura de Puente: 14 nodos, regresos y aprobación humana](docs/arquitectura.png)
+
+*Diagrama de arquitectura: [`docs/arquitectura.png`](docs/arquitectura.png). Lo dibuja [`docs/generar_arquitectura.py`](docs/generar_arquitectura.py) con los mismos nodos y aristas que `construir_grafo()`, y `tests/test_arquitectura.py` falla si dejan de coincidir o si el PNG no se regeneró.*
+
+El mismo grafo, como texto, generado sin red con `draw_mermaid()`:
 
 ```bash
 uv run python -c "from puente.graph import construir_grafo; print(construir_grafo().get_graph().draw_mermaid())"
@@ -302,7 +306,7 @@ El CV ciego, el `.ics` y los mensajes quedan en `outbox/` (o en `PUENTE_OUTBOX`)
 uv run python -m puente.cargar
 ```
 
-**3. El tablero.** Se abre en http://127.0.0.1:8000.
+**3. El tablero.** Se abre en http://127.0.0.1:8000/orientador; en la raíz está la landing.
 
 ```bash
 uv run python -m app.server
@@ -311,6 +315,7 @@ uv run python -m app.server
 - **`/`**: tablero del orientador. Muestra la lista corta por vacante, las ofertas bloqueadas con su motivo, el reporte del Auditor, las métricas de impacto y las trazas.
 - **`/joven`**: el joven llena el formulario, hace la entrevista de una vez o por chat, sube su tirilla de matrícula, da su consentimiento y sigue sus postulaciones. Detalle en [Vista del joven](#vista-del-joven-joven).
 - **`/empresa/lista-corta`**: la empresa ve su lista corta ciega y puede aceptar, rechazar o dar la vacante por cubierta; rechazar o cubrir dispara el reacomodo.
+- **Mensajes del joven a la empresa (#289)**: cuando su CV ya llegó, el joven le escribe desde `/joven` y la empresa lo ve como «Nuevo mensaje de Candidato N»; el texto sale sin cédula, teléfono, dirección ni datos que identifican, y el aviso va por WhatsApp (Twilio, #253) al número `TWILIO_WHATSAPP_EMPRESA` o a `outbox/` si no hay credenciales.
 
 Los códigos de acceso de `/joven` y `/empresa/lista-corta` se imprimen en la consola al arrancar, en cada reinicio y cuando una empresa nueva publica su primera vacante.
 

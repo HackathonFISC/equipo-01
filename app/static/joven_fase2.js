@@ -613,6 +613,42 @@
     return el("div", { class: "consentir" }, boton, el("p", { class: "nota", text: "La fecha es una propuesta: la empresa la confirma." }));
   }
 
+  // Mensaje a la empresa (#289): solo cuando su CV ya llegó. El servidor le quita cédula, teléfono, dirección y los datos
+  // que identifican (edad, género, dónde vives, nombre) antes de guardarlo; la empresa lo lee como «Candidato N».
+  function cajaMensaje(p) {
+    const empresa = p.empresa || "la empresa";
+    const area = el("textarea", { class: "f2-mensaje-texto", rows: 3, maxlength: 500, "aria-label": `Mensaje para ${empresa}`, placeholder: "Escribe tu mensaje" });
+    const resultado = el("p", { class: "nota", role: "status" });
+    const boton = el("button", { type: "button", class: "btn btn-sec", text: "Enviar mensaje" });
+    boton.addEventListener("click", () => {
+      const texto = area.value.trim();
+      if (!texto) {
+        resultado.textContent = "Escribe tu mensaje.";
+        return;
+      }
+      conBoton(boton, "Enviando…", async () => {
+        try {
+          const r = await api(`/api/joven/${encodeURIComponent(perfilActual)}/mensaje`, { oferta_id: p.oferta_id, texto });
+          area.value = "";
+          resultado.textContent = r.se_limpio
+            ? "Mensaje enviado. Antes le quitamos datos personales."
+            : `Mensaje enviado a ${empresa}.`;
+        } catch (err) {
+          resultado.textContent = err.message;
+        }
+      });
+    });
+    return el(
+      "div",
+      { class: "f2-mensaje" },
+      el("h4", { text: `Escríbele a ${empresa}` }),
+      el("p", { class: "nota", text: "La empresa no ve tu nombre, tu edad ni dónde vives, y tu cédula, teléfono y dirección no salen." }),
+      area,
+      el("div", { class: "acciones" }, boton),
+      resultado,
+    );
+  }
+
   function tarjetaPostulacion(p) {
     const clave = p.estado === "preseleccionado" && p.no_del_joven ? "no_consentido" : p.estado;
     const partes = [
@@ -652,6 +688,7 @@
       partes.push(el("p", { class: "f2-no", text: "Dijiste que no: tu CV no se envía a esta empresa, aunque tu orientador/a lo apruebe. Tu decisión manda." }));
     }
     if (p.puede_consentir) partes.push(botonesDecision(p));
+    if (p.se_envio) partes.push(cajaMensaje(p));
     if (p.ics) partes.push(botonIcs(p));
     return el("article", { class: "tarjeta vacante f2-postulacion", "data-oferta": p.oferta_id }, partes);
   }
