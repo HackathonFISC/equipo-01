@@ -114,7 +114,7 @@ El chat corre sin red con la grabación de #209, verificada en `LLM_MODO=reprodu
 
 **Se dice:** «Si le falta Excel, Formación propone un curso del INADEH que no choca con sus clases. El Auditor repite el caso cambiando nombre y género: si el resultado cambia, se recalcula una vez y, si el sesgo sigue, el caso se detiene: no se puede aprobar.»
 
-**Cuidado:** restaura el sesgo **antes** del paso 6. Mientras esté activo no se puede aprobar: el botón queda bloqueado y la API responde 422 (#189). El banner dice «el caso volvió a Matching», pero la tarjeta sigue visible: no leas ese texto en voz alta ni lo enfoques de cerca (su arreglo va aparte).
+**Cuidado:** restaura el sesgo **antes** del paso 6. Mientras esté activo no se puede aprobar: el botón queda bloqueado y la API responde 422 (#189). El banner dice «El recálculo no quitó el sesgo: el caso queda con el orientador…» y el badge, «Auditor detectó sesgo: aprobación bloqueada» (#262).
 
 ### 6 · El orientador decide (2:05–2:30) · Humano en el ciclo · En vivo
 

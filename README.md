@@ -130,7 +130,7 @@ Los siete agentes mínimos que sugiere el documento del reto y dónde están en 
 - **Vista por rol y panel de operación (#168).** La cabecera del tablero tiene un selector de rol: «Orientador (Admin)», «Vista Aplicante» (`/joven`) y «Vista Empresa» (`/empresa/lista-corta`). El desplegable «Umbrales del solver editables y panel de operación (Admin)» hace dos cosas:
   - recalcula con otros topes (`POST /api/orientador/umbrales`), por ejemplo 95 min de traslado, con lo que Tocumen deja de quedar fuera para Yaritza, y deja una `Decision` firmada;
   - muestra el uso del LLM por agente y el estado de los canales (`GET /api/admin/operacion`).
-- **Ofertas y CV por archivo (#170).** En el tablero, «Subir oferta (PDF o foto con cámara)» y «Subir CV (PDF o foto con cámara)» (`POST /api/ofertas/archivo` y `POST /api/perfiles/archivo`).
+- **Ofertas y CV por archivo (#170).** En el tablero, «Subir oferta (PDF o foto con cámara)» y «Subir CV (PDF)» (`POST /api/ofertas/archivo` y `POST /api/perfiles/archivo`).
   - Los guardrails de tamaño (5 MB) y de tipo se aplican antes de leer el archivo, y el audio se rechaza.
   - La cédula y el teléfono se quitan antes del LLM.
   - Sin red solo funcionan los archivos de prueba, con grabaciones escritas a mano (#236): `tests/fixtures/volante_sintetico.jpg` y `tests/fixtures/cv_sintetico.pdf`.
