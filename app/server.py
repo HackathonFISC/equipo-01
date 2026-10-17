@@ -23,6 +23,8 @@ from typing import Any, Literal
 from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Mount, Route
@@ -95,7 +97,22 @@ def es_modo_demo_publica() -> bool:
 
 
 if es_modo_demo_publica():
-    os.environ.setdefault("LLM_MODO", "reproducir")
+    os.environ["LLM_MODO"] = "reproducir"
+
+
+class MiddlewareDemoPublicaReadOnly(BaseHTTPMiddleware):
+    """En modo demo pública (Vercel / PUENTE_DEMO_PUBLICA=1), bloquea mutaciones (POST, PUT, DELETE, PATCH) con 403 (#161)."""
+
+    async def dispatch(self, request: Request, call_next):
+        if es_modo_demo_publica() and request.method not in ("GET", "HEAD", "OPTIONS"):
+            return JSONResponse(
+                {
+                    "detail": "Modo demostración pública en Vercel: el servidor opera en solo lectura para preservar la demo del hackathon (#161).",
+                    "modo_demo_publica": True,
+                },
+                status_code=403,
+            )
+        return await call_next(request)
 
 RUTA_APP = Path(__file__).resolve().parent
 RUTA_STATIC = RUTA_APP / "static"
@@ -3394,6 +3411,7 @@ async def _ciclo_de_vida(_app: Starlette):
 app = Starlette(
     debug=False,
     lifespan=_ciclo_de_vida,
+    middleware=[Middleware(MiddlewareDemoPublicaReadOnly)],
     routes=[
         Route("/", endpoint_index, methods=["GET"]),
         Route("/api/estado", endpoint_estado, methods=["GET"]),

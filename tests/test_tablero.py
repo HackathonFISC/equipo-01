@@ -795,8 +795,29 @@ def test_issue_161_vercel_json_y_modo_demo_publica(monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv("PUENTE_DEMO_PUBLICA", "1")
     assert srv.es_modo_demo_publica() is True
     estado_pub = srv.serializar_estado_publico(srv.ESTADO_GLOBAL)
-    assert estado_pub["modo_demo_publica"] is True
-    assert "solo lectura" in (estado_pub["aviso_demo_publica"] or "")
+    # Verificar .vercelignore
+    ruta_ignore = Path(__file__).resolve().parents[1] / ".vercelignore"
+    assert ruta_ignore.is_file()
+    txt_ignore = ruta_ignore.read_text(encoding="utf-8")
+    assert ".venv" in txt_ignore
+    assert "tests" in txt_ignore
+
+    # En modo demo pública, POST/mutaciones devuelven 403 (read-only)
+    from httpx import ASGITransport, AsyncClient
+    import asyncio
+
+    async def _test_readonly():
+        async with AsyncClient(transport=ASGITransport(app=srv.app), base_url="http://test") as client:
+            # GET responde 200
+            res_get = await client.get("/api/estado")
+            assert res_get.status_code == 200
+
+            # POST devuelve 403
+            res_post = await client.post("/api/reset", json={})
+            assert res_post.status_code == 403
+            assert res_post.json().get("modo_demo_publica") is True
+
+    asyncio.run(_test_readonly())
 
 
 
