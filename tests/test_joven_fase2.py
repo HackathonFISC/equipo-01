@@ -412,6 +412,8 @@ def test_bloque_mal_leido_se_muestra_por_bloque_y_no_se_guarda_hasta_corregirlo(
         (b"\x89PNG\r\n\x1a\n" + b"0" * (5 * 1024 * 1024), "tirilla.png", "5 MB"),
         (b"\x89PNG\r\n\x1a\n nota de voz", "audio.ogg", "notas de voz"),
     ],
+    # Ids cortos: sin ellos el id lleva los 5 MB de bytes y en Windows no cabe en PYTEST_CURRENT_TEST (#173).
+    ids=["texto", "firma-falsa", "mas-de-5mb", "audio"],
 )
 def test_tirilla_rechazada_no_llama_al_llm(entorno, monkeypatch, contenido, nombre, motivo) -> None:
     cliente, estado, _, tmp_path = entorno

@@ -31,6 +31,10 @@ const AGENTES = {
   auditor: { nombre: "Auditor", icono: "flask" },
   formacion: { nombre: "Formación", icono: "cap" },
   orientador_humano: { nombre: "Orientador", icono: "check" },
+  orientador: { nombre: "Orientador (Admin)", icono: "check" },
+  empresa: { nombre: "Empresa", icono: "briefcase" },
+  joven: { nombre: "Joven (Aplicante)", icono: "user" },
+  tablero: { nombre: "Tablero", icono: "list" },
   consentimiento: { nombre: "Consentimiento", icono: "check" },
   postulacion: { nombre: "Postulación", icono: "send" },
 };
@@ -227,6 +231,7 @@ function renderizarTodo() {
   renderizarTrazas();
   renderizarEmbudo();
   renderizarAuditoria();
+  renderizarOperacionYUmbrales();
 }
 
 function postulacionDe(perfilId, ofertaId) {
@@ -707,6 +712,76 @@ function renderizarPersona(perfil, matches) {
     </section>`;
 }
 
+function renderizarCoberturasTurnos() {
+  const coberturas = estadoActual.coberturas_turnos || [];
+  if (!coberturas.length) {
+    return `
+      <div class="banner banner--info" style="margin-top:1rem;display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap">
+        <div>
+          <strong>Cobertura por turnos (Job-Sharing CP-SAT · #165):</strong>
+          Cuando ningún estudiante individual puede cubrir un turno completo (08:00-17:00) por cruce con sus clases, el solver propone una dupla complementaria mañana/tarde.
+        </div>
+        <button type="button" class="btn btn--ghost btn-demo-cobertura-turnos">
+          ${icono("users")}Probar escenario cobertura por turnos
+        </button>
+      </div>`;
+  }
+  const tarjetas = coberturas
+    .map((c) => {
+      const segM = (c.segmentos || [])[0] || {};
+      const segT = (c.segmentos || [])[1] || {};
+      const oid = c.oferta_id || "";
+      const idCheckM = `consent-cob-m-${oid}`;
+      const idCheckT = `consent-cob-t-${oid}`;
+      const postM = postulacionDe(segM.perfil_id, oid);
+      const postT = postulacionDe(segT.perfil_id, oid);
+      const yaEnviada = postM?.estado === "enviado" && postT?.estado === "enviado";
+      return `
+        <section class="persona cobertura-turnos-card" data-cobertura-oferta="${escaparHtml(oid)}" style="border-left:4px solid var(--brand, #2563eb);margin-top:1rem">
+          <header class="persona__head">
+            <span class="avatar" aria-hidden="true">2×</span>
+            <div class="persona__titulo">
+              <h3>Cobertura por turnos · ${escaparHtml(c.puesto || oid)}</h3>
+              <span class="muted">${escaparHtml(c.empresa || "")} · ${escaparHtml(c.corregimiento || "")} · Jornada ${escaparHtml(c.horario_completo || "08:00-17:00")} (corte ${escaparHtml(c.hora_corte || "12:30")})</span>
+              <span class="persona__resumen">${pill(`Puntaje combinado: ${c.puntaje_combinado} pts`, "brand")}${yaEnviada ? pill("Dupla aprobada y enviada", "ok", "check") : pill("Sugerencia CP-SAT", "info")}</span>
+            </div>
+          </header>
+          <div class="persona__body">
+            <p class="muted" style="margin-bottom:0.75rem">${escaparHtml(c.motivo || "")}</p>
+            <div class="opciones" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:0.75rem">
+              <article class="opcion">
+                <h4>Turno Mañana (${escaparHtml(segM.inicio)}-${escaparHtml(segM.fin)}) · ${escaparHtml(segM.nombre_perfil || segM.perfil_id)}</h4>
+                <p class="muted">Puntaje: <strong>${escaparHtml(segM.puntaje)} pts</strong> · Traslado: ${escaparHtml(segM.desglose?.minutos_traslado ?? 15)} min · Pasaje: ${dinero(segM.desglose?.pasaje_diario ?? 1.0)}/día</p>
+                <label class="consent" for="${escaparHtml(idCheckM)}">
+                  <input type="checkbox" id="${escaparHtml(idCheckM)}" ${segM.consentimiento_joven ? "checked" : ""} ${yaEnviada ? "disabled" : ""} />
+                  <span><strong>${escaparHtml(segM.nombre_perfil || segM.perfil_id)}</strong> consintió enviar su CV para el segmento matutino</span>
+                </label>
+              </article>
+              <article class="opcion">
+                <h4>Turno Tarde (${escaparHtml(segT.inicio)}-${escaparHtml(segT.fin)}) · ${escaparHtml(segT.nombre_perfil || segT.perfil_id)}</h4>
+                <p class="muted">Puntaje: <strong>${escaparHtml(segT.puntaje)} pts</strong> · Traslado: ${escaparHtml(segT.desglose?.minutos_traslado ?? 15)} min · Pasaje: ${dinero(segT.desglose?.pasaje_diario ?? 1.0)}/día</p>
+                <label class="consent" for="${escaparHtml(idCheckT)}">
+                  <input type="checkbox" id="${escaparHtml(idCheckT)}" ${segT.consentimiento_joven ? "checked" : ""} ${yaEnviada ? "disabled" : ""} />
+                  <span><strong>${escaparHtml(segT.nombre_perfil || segT.perfil_id)}</strong> consintió enviar su CV para el segmento vespertino</span>
+                </label>
+              </article>
+            </div>
+            ${
+              yaEnviada
+                ? `<div class="cerrada" style="margin-top:0.75rem">${pill("2 postulaciones enviadas (mañana y tarde)", "ok", "check")}</div>`
+                : `<div class="hitl__botones" style="margin-top:0.75rem">
+                    <button type="button" class="btn btn--ok btn-aprobar-cobertura-turnos" data-oferta-id="${escaparHtml(oid)}">
+                      ${icono("send")}Aprobar cobertura por turnos (2 postulaciones)
+                    </button>
+                  </div>`
+            }
+          </div>
+        </section>`;
+    })
+    .join("");
+  return tarjetas;
+}
+
 function renderizarListaCorta() {
   const contenedor = document.getElementById("contenedor-matches");
   const filtro = document.getElementById("filtro-perfil").value;
@@ -732,9 +807,11 @@ function renderizarListaCorta() {
         ${enviadas} ${enviadas === 1 ? "postulación enviada" : "postulaciones enviadas"}; el detalle y los archivos están en la pestaña Postulaciones.</div></div>`
     : "";
 
-  contenedor.innerHTML = bloqueo + terminado + perfiles
-    .map((p) => renderizarPersona(p, matches.filter((m) => m.perfil_id === p.id)))
-    .join("");
+  contenedor.innerHTML =
+    bloqueo +
+    terminado +
+    perfiles.map((p) => renderizarPersona(p, matches.filter((m) => m.perfil_id === p.id))).join("") +
+    renderizarCoberturasTurnos();
 }
 
 // Al volver a dibujar la lista, el botón que se pulsó desaparece; el foco pasa a la
@@ -1193,9 +1270,42 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("filtro-agente").addEventListener("change", renderizarTrazas);
 
   // Delegación para los botones del orientador (data-* sin onclick inline)
-  document.getElementById("contenedor-matches").addEventListener("click", (ev) => {
+  document.getElementById("contenedor-matches").addEventListener("click", async (ev) => {
     const btn = ev.target.closest(".btn-accion-hitl");
-    if (btn) ejecutarAccionOrientador(btn);
+    if (btn) {
+      ejecutarAccionOrientador(btn);
+      return;
+    }
+    const btnDemoCob = ev.target.closest(".btn-demo-cobertura-turnos");
+    if (btnDemoCob) {
+      await conBoton(btnDemoCob, async () => {
+        if (aplicarEstado(await llamarApi("/api/orientador/cobertura-turnos/demo", {}))) {
+          mostrarToast("Escenario de cobertura por turnos cargado: Sofía (mañana) + Mateo (tarde).");
+        }
+      });
+      return;
+    }
+    const btnAprobarCob = ev.target.closest(".btn-aprobar-cobertura-turnos");
+    if (btnAprobarCob) {
+      const oid = btnAprobarCob.dataset.ofertaId;
+      const checkM = document.getElementById(`consent-cob-m-${oid}`);
+      const checkT = document.getElementById(`consent-cob-t-${oid}`);
+      const consentM = checkM ? Boolean(checkM.checked) : false;
+      const consentT = checkT ? Boolean(checkT.checked) : false;
+      await conBoton(btnAprobarCob, async () => {
+        if (
+          aplicarEstado(
+            await llamarApi("/api/orientador/cobertura-turnos/aprobar", {
+              oferta_id: oid,
+              consentimiento_manana: consentM,
+              consentimiento_tarde: consentT,
+            })
+          )
+        ) {
+          mostrarToast("Cobertura por turnos aprobada: 2 postulaciones registradas con consentimiento.");
+        }
+      });
+    }
   });
 
   document.getElementById("contenedor-ofertas-bloqueadas")?.addEventListener("click", async (ev) => {
@@ -1254,7 +1364,7 @@ document.addEventListener("DOMContentLoaded", () => {
         document.getElementById("no-puesto").value = "";
         document.getElementById("no-empresa").value = "";
         document.getElementById("no-requisitos").value = "";
-        mostrarToast("El agente Mercado analizó la oferta con la Ley 11 de 2005.");
+        mostrarToast("Oferta revisada con las reglas de la Ley 11 de 2005 y Matching recalculado.");
         senalarNuevo("ofertas", previas, "data-oferta");
       }
     });
@@ -1290,7 +1400,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const previos = idsActuales(clave);
     await conBoton(boton, async () => {
       if (aplicarEstado(await llamarApi("/api/cargar-data", { tipo, item_id: itemId }))) {
-        mostrarToast(`${tipo === "oferta" ? "Oferta cargada" : "Perfil cargado"} desde data/: ${itemId}`);
+        const origen = itemId.startsWith("data/") ? `desde ${itemId}` : "(ejemplo sintético)";
+        mostrarToast(`${tipo === "oferta" ? "Oferta cargada" : "Perfil cargado"} ${origen}`);
         if (tipo === "oferta") activarPestana("tab-ofertas-ley11");
         senalarNuevo(clave, previos, tipo === "oferta" ? "data-oferta" : "data-perfil");
       }
@@ -1299,5 +1410,102 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("btn-cargar-data-oferta")?.addEventListener("click", cargarDesdeData("oferta", "select-data-oferta"));
   document.getElementById("btn-cargar-data-perfil")?.addEventListener("click", cargarDesdeData("perfil", "select-data-perfil"));
 
+  const formUmbrales = document.getElementById("form-umbrales-solver");
+  if (formUmbrales) {
+    formUmbrales.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const boton = ev.currentTarget.querySelector("button[type=submit]");
+      const payload = {
+        max_minutos_traslado: parseInt(document.getElementById("umb-minutos").value || "60", 10),
+        max_porcentaje_salario_pasaje: parseFloat(document.getElementById("umb-pasaje-pct").value || "15") / 100.0,
+        max_vacantes_por_perfil: parseInt(document.getElementById("umb-max-ofertas").value || "3", 10),
+      };
+      await conBoton(boton, async () => {
+        if (aplicarEstado(await llamarApi("/api/orientador/umbrales", payload))) {
+          mostrarToast(
+            `Solver recalculado: traslado ≤ ${payload.max_minutos_traslado} min, pasaje ≤ ${Math.round(payload.max_porcentaje_salario_pasaje * 100)} %, máx. ${payload.max_vacantes_por_perfil} ofertas.`
+          );
+        }
+      });
+    });
+  }
+
+  const btnTocumen95 = document.getElementById("btn-umb-tocumen-95") || document.getElementById("btn-umb-tocumen-90");
+  if (btnTocumen95) {
+    btnTocumen95.addEventListener("click", async () => {
+      const inpMin = document.getElementById("umb-minutos");
+      if (inpMin) inpMin.value = "95";
+      await conBoton(btnTocumen95, async () => {
+        if (
+          aplicarEstado(
+            await llamarApi("/api/orientador/umbrales", {
+              max_minutos_traslado: 95,
+              max_porcentaje_salario_pasaje: 0.15,
+              max_vacantes_por_perfil: 3,
+            })
+          )
+        ) {
+          mostrarToast("Traslado máximo ajustado a 95 min: OF-TOCUMEN-03 ahora es viable para Yaritza y quedó trazado.");
+        }
+      });
+    });
+  }
+
   cargarEstado();
 });
+
+function renderizarOperacionYUmbrales() {
+  const bannerDemo = document.getElementById("banner-demo-publica");
+  if (bannerDemo) {
+    if (estadoActual?.modo_demo_publica) {
+      bannerDemo.className = "banner banner--warn";
+      bannerDemo.innerHTML = `${icono("info")}<div><strong>Demo pública de solo lectura (estado efímero):</strong> Los cambios en esta instancia usan <code>LLM_MODO=reproducir</code> sin claves y se reinician entre invocaciones.</div>`;
+    } else {
+      bannerDemo.className = "banner hidden";
+      bannerDemo.innerHTML = "";
+    }
+  }
+
+  const op = estadoActual?.operacion;
+  if (!op) return;
+  const umb = op.umbrales_solver || {};
+  const inpMin = document.getElementById("umb-minutos");
+  const inpPas = document.getElementById("umb-pasaje-pct");
+  const inpMax = document.getElementById("umb-max-ofertas");
+  if (inpMin && document.activeElement !== inpMin) {
+    inpMin.value = String(umb.max_minutos_traslado ?? 60);
+  }
+  if (inpPas && document.activeElement !== inpPas) {
+    inpPas.value = String(Math.round(Number(umb.max_porcentaje_salario_pasaje ?? 0.15) * 100));
+  }
+  if (inpMax && document.activeElement !== inpMax) {
+    inpMax.value = String(umb.max_vacantes_por_perfil ?? 2);
+  }
+
+  const cont = document.getElementById("contenedor-operacion-admin");
+  if (!cont) return;
+  const tot = op.uso_total || {};
+  const porAgente = op.uso_por_agente || {};
+  const filasAgentes = Object.entries(porAgente)
+    .map(
+      ([ag, u]) =>
+        `<tr><td><code>${escaparHtml(ag)}</code></td><td class="num">${Number(u.llamadas || 0)}</td><td class="num">${Number(u.tokens_entrada || 0)} / ${Number(u.tokens_salida || 0)}</td><td class="num">$${Number(u.costo_usd || 0).toFixed(4)}</td></tr>`
+    )
+    .join("");
+  const grab = op.grabaciones_disponibles || {};
+  cont.innerHTML = `
+    <div class="razon" style="display:grid;gap:0.65rem;">
+      <div style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:center;">
+        ${pill(`LLM_MODO=${op.llm_modo || "reproducir"}`, "neutral", "flask")}
+        ${pill(`Llamadas LLM: ${tot.llamadas ?? 0} · $${Number(tot.costo_usd || 0).toFixed(4)}`, "info")}
+        ${pill(`Grabaciones: ${grab.total ?? 0} JSON`, "ok", "database")}
+        ${pill(`Telegram: ${op.telegram_estado || "outbox_local"} · WhatsApp: ${op.whatsapp_estado || "sandbox_inactivo"}`, "neutral", "send")}
+      </div>
+      ${
+        filasAgentes
+          ? `<div class="table-card"><table class="table"><thead><tr><th>Agente</th><th>Llamadas</th><th>Tokens (E/S)</th><th>Costo USD</th></tr></thead><tbody>${filasAgentes}</tbody></table></div>`
+          : `<p class="muted" style="margin:0;">Modo determinista / fixture activo: 0 llamadas en vivo al LLM.</p>`
+      }
+    </div>`;
+}
+

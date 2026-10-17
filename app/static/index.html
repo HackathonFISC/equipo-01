@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="light dark" />
   <title>Puente · Tablero del orientador</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23e2a11b'/%3E%3Cg fill='none' stroke='%231d1604' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M5 23h22M8 23V10M24 23V10M8 12c2.6 3.4 5.3 5 8 5s5.4-1.6 8-5M12 23v-6M16 23v-5.5M20 23v-6'/%3E%3C/g%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="/static/styles.css?v=2" />
+  <link rel="stylesheet" href="/static/styles.css?v=3" />
 </head>
 <body>
   <!-- Íconos en línea: la demo debe funcionar sin conexión, así que nada se carga de fuera. -->
@@ -52,6 +52,11 @@
         </div>
       </div>
       <div class="appbar__actions">
+        <nav aria-label="Selector de vista por rol" style="display:flex;gap:0.35rem;align-items:center;">
+          <a href="/" class="btn btn--on-dark" aria-current="page" title="Vista Admin / Orientador (control completo)">Orientador (Admin)</a>
+          <a href="/joven" class="btn btn--on-dark" style="opacity:0.85;" title="Vista Aplicante (Yaritza)">Vista Aplicante</a>
+          <a href="/empresa" class="btn btn--on-dark" style="opacity:0.85;" title="Vista Empresa (publicar oferta y reportar contratación)">Vista Empresa</a>
+        </nav>
         <span id="badge-grafo" class="status-pill status-paused">Esperando tu aprobación</span>
         <button id="btn-reset" class="btn btn--on-dark" type="button" title="Vuelve a los datos iniciales del caso Yaritza">
           <svg class="icon"><use href="#i-refresh"/></svg><span>Reiniciar demo</span>
@@ -61,6 +66,7 @@
   </header>
 
   <main id="principal" class="container">
+    <div id="banner-demo-publica" class="banner hidden" role="status"></div>
     <!-- Recorrido del caso por los agentes del sistema -->
     <section class="flujo" aria-labelledby="flujo-titulo">
       <h2 id="flujo-titulo" class="visually-hidden">Recorrido por los agentes</h2>
@@ -229,9 +235,35 @@
               />
             </label>
             <div class="form-actions full-width">
-              <button type="submit" class="btn btn--primary">Extraer habilidades y recalcular</button>
+              <button type="submit" class="btn btn--primary">Registrar perfil y recalcular</button>
             </div>
           </form>
+        </details>
+
+        <details class="drawer" id="drawer-admin-operacion">
+          <summary><svg class="icon"><use href="#i-activity"/></svg><span>Umbrales del solver editables y panel de operación (Admin)</span><svg class="icon drawer__chev"><use href="#i-chevron"/></svg></summary>
+          <div class="drawer__body">
+            <p class="drawer__hint">Ajusta los umbrales de CP-SAT en caliente (ej. subir traslado máximo a 90 min habilita Tocumen para Yaritza con traza firmada) y audita el estado técnico de operación.</p>
+            <form id="form-umbrales-solver" class="form-grid" style="margin-bottom:1rem;">
+              <label class="field">
+                <span>Traslado máximo por trayecto (min)</span>
+                <input type="number" id="umb-minutos" class="input" min="15" max="180" step="5" value="60" required />
+              </label>
+              <label class="field">
+                <span>Tope pasaje mensual (% del salario)</span>
+                <input type="number" id="umb-pasaje-pct" class="input" min="5" max="50" step="1" value="15" required />
+              </label>
+              <label class="field">
+                <span>Máximo de ofertas por joven</span>
+                <input type="number" id="umb-max-ofertas" class="input" min="1" max="10" step="1" value="3" required />
+              </label>
+              <div class="form-actions full-width" style="display:flex;gap:0.5rem;align-items:center;">
+                <button type="submit" class="btn btn--primary">Recalcular solver con estos umbrales</button>
+                <button type="button" id="btn-umb-tocumen-95" class="btn btn--secondary">Probar 95 min (habilitar Tocumen)</button>
+              </div>
+            </form>
+            <div id="contenedor-operacion-admin"></div>
+          </div>
         </details>
       </div>
     </section>
@@ -242,8 +274,8 @@
         <div>
           <h2>Ofertas revisadas con la Ley 11 de 2005</h2>
           <p>
-            El agente Mercado bloquea las ofertas que discriminan por edad o sexo y marca con una alerta
-            «buena presencia», foto o estado civil. La frase exacta queda resaltada en el texto original.
+            Las reglas de la Ley 11 en código, las mismas que aplica el agente Mercado, bloquean las ofertas
+            que discriminan por edad o sexo y marcan con una alerta «buena presencia», foto o estado civil. La frase exacta queda resaltada en el texto original.
           </p>
         </div>
       </div>
@@ -285,7 +317,7 @@
             <small class="field__hint">Prueba con «18 a 25 años», «solo hombres» o «buena presencia».</small>
           </label>
           <div class="form-actions full-width">
-            <button type="submit" class="btn btn--primary">Analizar con el agente Mercado</button>
+            <button type="submit" class="btn btn--primary">Revisar con la Ley 11 y recalcular</button>
           </div>
         </form>
       </details>
@@ -397,6 +429,7 @@
               <option value="auditor">Auditor</option>
               <option value="formacion">Formación</option>
               <option value="orientador_humano">Orientador</option>
+              <option value="tablero">Tablero</option>
               <option value="consentimiento">Consentimiento</option>
               <option value="postulacion">Postulación</option>
             </select>
@@ -421,6 +454,6 @@
 
   <div id="toast-msg" class="toast hidden" role="status" aria-live="polite"></div>
 
-  <script src="/static/app.js?v=2"></script>
+  <script src="/static/app.js?v=3"></script>
 </body>
 </html>

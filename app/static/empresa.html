@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light dark" />
+  <title>Puente · Vista Empresa</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23e2a11b'/%3E%3Cg fill='none' stroke='%231d1604' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M5 23h22M8 23V10M24 23V10M8 12c2.6 3.4 5.3 5 8 5s5.4-1.6 8-5M12 23v-6M16 23v-5.5M20 23v-6'/%3E%3C/g%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/static/joven.css?v=1" />
+</head>
+<body>
+  <header class="barra">
+    <div class="barra-in">
+      <a class="marca" href="/empresa">
+        <svg class="marca-icono" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 18h20"/><path d="M4 18V7"/><path d="M20 18V7"/><path d="M4 8.5c2.5 3.2 5.2 4.8 8 4.8s5.5-1.6 8-4.8"/><path d="M8 18v-5"/><path d="M12 18v-4.6"/><path d="M16 18v-5"/></svg>
+        Puente · Vista Empresa
+      </a>
+      <nav aria-label="Cambiar rol" style="display:flex;gap:0.75rem;">
+        <a class="barra-enlace" href="/">Orientador (Admin)</a>
+        <a class="barra-enlace" href="/joven">Vista Aplicante</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="pagina">
+    <section class="intro">
+      <h1>Publica una vacante y reporta contrataciones</h1>
+      <p>El agente Mercado revisa automáticamente cada oferta según la Ley 11 de 2005 antes de que entre al Matching. Cada acción queda firmada con <code>agente="empresa"</code> en la tabla de decisiones.</p>
+    </section>
+
+    <form id="form-empresa-oferta" class="tarjeta" style="margin-bottom:1.25rem;">
+      <fieldset>
+        <legend>Publicar vacante nueva</legend>
+        <div class="campos">
+          <label class="campo">
+            <span>Puesto</span>
+            <input id="emp-puesto" required placeholder="Ej. Auxiliar de Atención y Caja" value="Auxiliar de Caja y Despacho" />
+          </label>
+          <label class="campo">
+            <span>Empresa</span>
+            <input id="emp-empresa" required placeholder="Ej. Mini Súper El Progreso (Ficticia)" value="Comercial Oeste (Ficticia)" />
+          </label>
+          <label class="campo">
+            <span>Corregimiento</span>
+            <select id="emp-corregimiento">
+              <option value="La Chorrera">La Chorrera</option>
+              <option value="Vista Alegre">Vista Alegre</option>
+              <option value="Arraiján">Arraiján</option>
+              <option value="Juan Díaz">Juan Díaz</option>
+              <option value="Tocumen">Tocumen</option>
+            </select>
+          </label>
+          <label class="campo campo-corto">
+            <span>Salario mensual (USD)</span>
+            <input id="emp-salario" type="number" min="450" max="2500" step="10" value="650" required />
+          </label>
+          <label class="campo campo-ancho">
+            <span>Requisitos del puesto (se auditan con Ley 11 de 2005)</span>
+            <input id="emp-requisitos" required value="Atención amable a clientes, cobro en caja y apoyo en inventario." />
+          </label>
+        </div>
+        <div style="margin-top:0.75rem;">
+          <button type="submit" class="boton boton-primario">Publicar y validar con Ley 11</button>
+        </div>
+      </fieldset>
+    </form>
+
+    <section class="tarjeta">
+      <h2 style="margin-top:0;">Candidatos postulados y seguimiento</h2>
+      <p>Reporta el resultado de entrevista (<code>contratado</code> o <code>no_seleccionado</code>) para cerrar el ciclo del embudo.</p>
+      <div id="lista-postulaciones-empresa">Cargando postulaciones...</div>
+    </section>
+    <p id="msg-empresa" class="aviso" hidden></p>
+  </main>
+
+  <script>
+    "use strict";
+    function esc(texto) {
+      if (texto == null) return "";
+      const div = document.createElement("div");
+      div.textContent = String(texto);
+      return div.innerHTML;
+    }
+
+    async function cargarPostulaciones() {
+      const resp = await fetch("/api/empresa/postulaciones");
+      const data = await resp.json();
+      const cont = document.getElementById("lista-postulaciones-empresa");
+      const posts = data.postulaciones || [];
+      if (!posts.length) {
+        cont.innerHTML = "<p>No hay postulaciones activas enviadas a la empresa.</p>";
+        return;
+      }
+      cont.innerHTML = posts.map((p) => `
+        <div style="border-top:1px solid #d8d2c5;padding:0.75rem 0;display:flex;justify-content:space-between;align-items:center;gap:0.75rem;flex-wrap:wrap;">
+          <div>
+            <strong>${esc(p.nombre_perfil || "Candidato ciego")}</strong> → <span>${esc(p.puesto)} (${esc(p.empresa)})</span>
+            <div><small>Estado actual: <code>${esc(p.estado)}</code></small></div>
+          </div>
+          <div style="display:flex;gap:0.4rem;">
+            <button type="button" class="boton" data-perfil="${esc(p.perfil_id)}" data-oferta="${esc(p.oferta_id)}" data-empresa="${esc(p.empresa)}" data-tipo="acepta">Citar a entrevista</button>
+            <button type="button" class="boton" data-perfil="${esc(p.perfil_id)}" data-oferta="${esc(p.oferta_id)}" data-empresa="${esc(p.empresa)}" data-tipo="cubierta">Contratar (vacante cubierta)</button>
+            <button type="button" class="boton" data-perfil="${esc(p.perfil_id)}" data-oferta="${esc(p.oferta_id)}" data-empresa="${esc(p.empresa)}" data-tipo="rechaza">Rechazar</button>
+          </div>
+        </div>
+      `).join("");
+    }
+
+    document.getElementById("form-empresa-oferta").addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const payload = {
+        puesto: document.getElementById("emp-puesto").value,
+        empresa: document.getElementById("emp-empresa").value,
+        corregimiento: document.getElementById("emp-corregimiento").value,
+        salario_mensual: parseFloat(document.getElementById("emp-salario").value || "650"),
+        requisitos_texto: document.getElementById("emp-requisitos").value,
+        habilidades: ["atencion_cliente", "manejo_caja"],
+      };
+      const resp = await fetch("/api/ofertas", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const msg = document.getElementById("msg-empresa");
+      msg.hidden = false;
+      msg.textContent = resp.ok
+        ? "Vacante procesada por el agente Mercado (Ley 11 de 2005). Revisa el resultado en el Tablero del Orientador."
+        : "Error al publicar la vacante.";
+      await cargarPostulaciones();
+    });
+
+    document.getElementById("lista-postulaciones-empresa").addEventListener("click", async (ev) => {
+      const btn = ev.target.closest("button[data-tipo]");
+      if (!btn) return;
+      const payload = {
+        tipo: btn.dataset.tipo,
+        perfil_id: btn.dataset.perfil,
+        oferta_id: btn.dataset.oferta,
+        empresa: btn.dataset.empresa || "Empresa",
+        nota: `Acción '${btn.dataset.tipo}' reportada desde /empresa`,
+      };
+      const resp = await fetch("/api/empresa/evento", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const msg = document.getElementById("msg-empresa");
+      msg.hidden = false;
+      msg.textContent = resp.ok
+        ? `Evento '${payload.tipo}' registrado con agente='empresa'.`
+        : "No se pudo actualizar el estado.";
+      await cargarPostulaciones();
+    });
+
+    cargarPostulaciones();
+  </script>
+</body>
+</html>
