@@ -76,4 +76,4 @@ Protocolo completo para humanos y agentes de IA (Claude Code, Codex, Antigravity
 
 ---
 
-Entrega: tag de git `final-24h` sobre el último commit válido, al cumplirse la hora 24.
+Entrega: tag de git `final-24h` sobre el último commit válido, a las 11:45 del 17 de octubre, antes de la hora límite de las 13:00 (horario en #41).
