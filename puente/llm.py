@@ -4,7 +4,8 @@ Ningún agente instancia un cliente por su cuenta: llama a `generar_estructurado
 esquema Pydantic) o a `generar_texto`. El proveedor principal es Claude (SDK `anthropic`); Gemini queda de
 respaldo y se elige por entorno, sin tocar código.
 
-Configuración (se lee en cada llamada; cambiar `.env` basta):
+Configuración por variables de entorno, sin tocar código. Se leen en cada llamada, pero `.env` se carga una sola vez
+por proceso y el cliente queda en caché: tras editar `.env`, reinicie el tablero o la CLI.
 - `LLM_PROVEEDOR`: `anthropic` (por defecto) o `gemini`.
 - `PUENTE_MODELO_LLM`: `claude-opus-5-5` con anthropic, `gemini-2.5-flash` con gemini.
 - `LLM_MODO`: `vivo` (por defecto), `grabar` (llama y guarda la respuesta) o `reproducir` (solo lee grabaciones;
@@ -47,7 +48,8 @@ Archivo = Path | str | tuple[str, bytes]
 PROVEEDORES = ("anthropic", "gemini")
 MODOS = ("vivo", "grabar", "reproducir")
 MODELO_POR_DEFECTO = {"anthropic": "claude-opus-5-5", "gemini": "gemini-2.5-flash"}
-DIR_GRABACIONES_POR_DEFECTO = Path(__file__).resolve().parent.parent / "data" / "grabaciones"
+RAIZ_REPO = Path(__file__).resolve().parent.parent
+DIR_GRABACIONES_POR_DEFECTO = RAIZ_REPO / "data" / "grabaciones"
 
 # US$ por millón de tokens (entrada, salida). Modelos sin precio conocido cuentan costo 0.
 PRECIOS: dict[str, tuple[float, float]] = {
@@ -61,8 +63,10 @@ PRECIOS: dict[str, tuple[float, float]] = {
 FALLBACKS_SERVIDOR_ACTIVO = False
 BETA_FALLBACKS = "server-side-fallback-2026-07-01"
 
-TIMEOUT_SEGUNDOS = 60.0
-MAX_REINTENTOS = 2
+# Cortos para no colgar la demo: en el peor caso (2 intentos de 40 s) un nodo espera menos de 90 s.
+TIMEOUT_SEGUNDOS = 40.0
+TIMEOUT_CONEXION_SEGUNDOS = 5.0
+MAX_REINTENTOS = 1
 
 MIME_IMAGEN = {
     ".jpg": "image/jpeg",
@@ -79,7 +83,8 @@ class ErrorLLM(RuntimeError):
     """Fallo de la capa de LLM, con el mensaje listo para mostrar al orientador.
 
     `causa`: refusal, max_tokens, timeout, conexion, limite, estado_http, salida_invalida, sin_salida,
-    sin_clave, grabacion_faltante, grabacion_invalida, proveedor_desconocido, modo_desconocido, archivo, mime, error_proveedor.
+    sin_clave, grabacion_faltante, grabacion_invalida, proveedor_desconocido, modo_desconocido, archivo, mime, esquema,
+    error_proveedor.
     """
 
     def __init__(self, mensaje: str, *, causa: str = "error_proveedor", proveedor: str = "", modelo: str = "", agente: str = ""):
@@ -185,35 +190,40 @@ def reiniciar_uso() -> None:
 
 def _leer_archivos(archivos: Sequence[Archivo] | None, *, proveedor: str, modelo: str, agente: str) -> list[tuple[str, bytes]]:
     """Resuelve cada archivo a (mime, bytes) y rechaza lo que el modelo no recibe (audio u otros)."""
+    lista = list(archivos or [])
+    contexto = {"proveedor": proveedor, "modelo": modelo, "agente": agente}
     resueltos: list[tuple[str, bytes]] = []
-    for archivo in archivos or []:
+    for i, archivo in enumerate(lista, start=1):
+        # El nombre del archivo puede traer datos personales (CV_Nombre_Apellido.pdf): los mensajes usan la posición.
+        cual = f"archivo {i} de {len(lista)}"
         if isinstance(archivo, tuple):
-            mime, datos = archivo
-            mime = str(mime).lower()
-        else:
-            ruta = Path(archivo)
-            sufijo = ruta.suffix.lower()
-            mime = MIME_IMAGEN.get(sufijo) or (MIME_PDF if sufijo == ".pdf" else (mimetypes.guess_type(ruta.name)[0] or ""))
-            try:
-                datos = ruta.read_bytes()
-            except OSError as exc:
+            if len(archivo) != 2 or not isinstance(archivo[1], (bytes, bytearray, memoryview)):
                 raise ErrorLLM(
-                    f"No se pudo leer el archivo '{ruta.name}' para el agente {agente}: {type(exc).__name__}.",
+                    f"El {cual} para el agente {agente} debe ser una ruta o una tupla (mime, bytes).",
                     causa="archivo",
-                    proveedor=proveedor,
-                    modelo=modelo,
-                    agente=agente,
+                    **contexto,
+                )
+            mime, datos = str(archivo[0]).lower(), bytes(archivo[1])
+        else:
+            try:
+                ruta = Path(archivo)
+                sufijo = ruta.suffix.lower()
+                mime = MIME_IMAGEN.get(sufijo) or (MIME_PDF if sufijo == ".pdf" else (mimetypes.guess_type(ruta.name)[0] or ""))
+                datos = ruta.read_bytes()
+            except (OSError, TypeError, ValueError) as exc:
+                raise ErrorLLM(
+                    f"No se pudo leer el {cual} para el agente {agente}: {type(exc).__name__}.",
+                    causa="archivo",
+                    **contexto,
                 ) from exc
         if mime not in MIME_IMAGENES_VALIDOS and mime != MIME_PDF:
             motivo = "Claude no recibe audio, ver #55" if mime.startswith("audio/") else "solo se aceptan imágenes y PDF"
             raise ErrorLLM(
-                f"Archivo de tipo '{mime or 'desconocido'}' no admitido para el agente {agente}: {motivo}.",
+                f"El {cual} es de tipo '{mime or 'desconocido'}', no admitido para el agente {agente}: {motivo}.",
                 causa="mime",
-                proveedor=proveedor,
-                modelo=modelo,
-                agente=agente,
+                **contexto,
             )
-        resueltos.append((mime, bytes(datos)))
+        resueltos.append((mime, datos))
     return resueltos
 
 
@@ -281,6 +291,14 @@ def _ruta_grabacion(directorio: str, clave: str) -> Path:
     return Path(directorio) / f"{clave}.json"
 
 
+def _ruta_visible(ruta: Path) -> str:
+    """Ruta para mensajes: relativa al repo si está dentro; si no, solo el nombre (sin la ruta absoluta local)."""
+    try:
+        return ruta.resolve().relative_to(RAIZ_REPO).as_posix()
+    except (OSError, ValueError):
+        return ruta.name
+
+
 def _guardar_grabacion(
     directorio: str,
     clave: str,
@@ -308,10 +326,25 @@ def _guardar_grabacion(
     if atendido_por:
         registro["atendido_por"] = atendido_por
     ruta = _ruta_grabacion(directorio, clave)
-    ruta.parent.mkdir(parents=True, exist_ok=True)
     temporal = ruta.with_suffix(".json.tmp")
-    temporal.write_text(json.dumps(registro, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
-    temporal.replace(ruta)
+    try:
+        texto = json.dumps(registro, ensure_ascii=False, indent=2) + "\n"
+        ruta.parent.mkdir(parents=True, exist_ok=True)
+        temporal.write_text(texto, encoding="utf-8", newline="\n")
+        temporal.replace(ruta)
+    except (OSError, TypeError, ValueError) as exc:
+        try:
+            temporal.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise ErrorLLM(
+            f"No se pudo guardar la grabación {clave}.json para el agente {agente} ({type(exc).__name__}). "
+            "La respuesta ya se cobró: revise LLM_DIR_GRABACIONES y vuelva a grabar.",
+            causa="grabacion_invalida",
+            proveedor=proveedor,
+            modelo=modelo,
+            agente=agente,
+        ) from exc
 
 
 def _leer_grabacion(directorio: str, clave: str, esquema: type[T] | None, *, proveedor: str, modelo: str, agente: str) -> Any:
@@ -319,7 +352,7 @@ def _leer_grabacion(directorio: str, clave: str, esquema: type[T] | None, *, pro
     contexto = {"proveedor": proveedor, "modelo": modelo, "agente": agente}
     if not ruta.is_file():
         raise ErrorLLM(
-            f"Falta la grabación {clave} para el agente {agente} ({proveedor}/{modelo}). Esperada en {ruta}. "
+            f"Falta la grabación {clave} para el agente {agente} ({proveedor}/{modelo}). Esperada en {_ruta_visible(ruta)}. "
             "Grábela con LLM_MODO=grabar y una clave, o use LLM_MODO=vivo.",
             causa="grabacion_faltante",
             **contexto,
@@ -334,7 +367,7 @@ def _leer_grabacion(directorio: str, clave: str, esquema: type[T] | None, *, pro
         return salida
     except (OSError, ValueError, KeyError, TypeError, ValidationError) as exc:
         raise ErrorLLM(
-            f"La grabación {ruta} está dañada o no coincide con el esquema ({type(exc).__name__}).",
+            f"La grabación {_ruta_visible(ruta)} está dañada o no coincide con el esquema ({type(exc).__name__}).",
             causa="grabacion_invalida",
             **contexto,
         ) from exc
@@ -382,7 +415,10 @@ def _cliente_por_defecto(proveedor: str, modelo: str, agente: str = "") -> Any:
             if "anthropic" not in _clientes:
                 import anthropic
 
-                _clientes["anthropic"] = anthropic.Anthropic(max_retries=MAX_REINTENTOS, timeout=TIMEOUT_SEGUNDOS)
+                _clientes["anthropic"] = anthropic.Anthropic(
+                    max_retries=MAX_REINTENTOS,
+                    timeout=anthropic.Timeout(TIMEOUT_SEGUNDOS, connect=TIMEOUT_CONEXION_SEGUNDOS),
+                )
             return _clientes["anthropic"]
     from langchain_google_genai import ChatGoogleGenerativeAI
 
@@ -566,7 +602,17 @@ def _despachar(
     proveedor, modelo, modo, directorio = cfg["proveedor"], cfg["modelo"], cfg["modo"], cfg["directorio"]
     datos = _leer_archivos(archivos, proveedor=proveedor, modelo=modelo, agente=agente)
     bytes_archivos = [contenido for _, contenido in datos]
-    clave = clave_grabacion(proveedor, modelo, sistema, prompt, esquema, bytes_archivos)
+    try:
+        clave = clave_grabacion(proveedor, modelo, sistema, prompt, esquema, bytes_archivos)
+    except Exception as exc:  # noqa: BLE001 - un esquema que no da JSON Schema no debe salir como error crudo
+        raise ErrorLLM(
+            f"El esquema {getattr(esquema, '__name__', esquema)!s} no se puede usar con el modelo (agente {agente}): "
+            f"{type(exc).__name__}.",
+            causa="esquema",
+            proveedor=proveedor,
+            modelo=modelo,
+            agente=agente,
+        ) from exc
 
     if modo == "reproducir":
         resultado = _leer_grabacion(directorio, clave, esquema, proveedor=proveedor, modelo=modelo, agente=agente)

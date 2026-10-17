@@ -9,13 +9,13 @@ cédula, teléfono y dirección. Nunca claves: la API key la lee el SDK del ento
 
 ## Modos
 
-`LLM_MODO` en `.env` (se lee en cada llamada):
+`LLM_MODO` en `.env`. `.env` se carga una sola vez por proceso: después de editarlo, reinicie el tablero o la CLI.
 
 | Valor | Qué hace |
 |---|---|
 | `vivo` (por defecto) | Llama al modelo, no guarda nada. |
 | `grabar` | Llama al modelo y escribe `<hash>.json` en esta carpeta. |
-| `reproducir` | Solo lee `<hash>.json`. No usa red ni claves. Si falta, `ErrorLLM` con el hash y la ruta esperada. |
+| `reproducir` | Solo lee `<hash>.json`. No usa red ni claves. Si falta, `ErrorLLM` con el hash y la ruta esperada (relativa al repo). |
 
 `LLM_DIR_GRABACIONES` cambia la carpeta (por defecto `data/grabaciones`, relativa a la raíz del repo).
 

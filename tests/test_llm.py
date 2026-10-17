@@ -199,6 +199,31 @@ def test_audio_y_otros_tipos_dan_error(tmp_path):
     assert info.value.causa == "archivo"
 
 
+def test_archivos_mal_formados_dan_error_llm_sin_nombre_del_archivo(tmp_path):
+    for malo in [("image/png", "no son bytes"), ("image/png", 5), ("image/png",), 42]:
+        with pytest.raises(ErrorLLM) as info:
+            generar_estructurado("x", Salida, [malo], cliente=ClienteProhibido())
+        assert info.value.causa == "archivo"
+    # El nombre puede traer datos personales: el mensaje usa la posición, no el nombre ni la ruta.
+    with pytest.raises(ErrorLLM) as info:
+        generar_estructurado("x", Salida, [tmp_path / "CV_Nombre_Apellido.pdf"], cliente=ClienteProhibido())
+    assert "archivo 1 de 1" in str(info.value)
+    assert "Nombre_Apellido" not in str(info.value) and str(tmp_path) not in str(info.value)
+
+
+def test_grabar_en_carpeta_invalida_da_error_llm_y_avisa_que_se_cobro(monkeypatch, tmp_path):
+    ocupado = tmp_path / "es_un_archivo"
+    ocupado.write_text("no es carpeta", encoding="utf-8")
+    monkeypatch.setenv("LLM_MODO", "grabar")
+    monkeypatch.setenv("LLM_DIR_GRABACIONES", str(ocupado / "grabaciones"))
+    with pytest.raises(ErrorLLM) as info:
+        generar_estructurado(
+            "x", Salida, agente="mercado", cliente=ClienteAnthropic(respuesta(parsed=Salida(respuesta="ok")))
+        )
+    assert info.value.causa == "grabacion_invalida" and "cobró" in str(info.value)
+    assert llm.uso_por_agente()["mercado"]["llamadas"] == 1  # la llamada cobrada sí quedó contada
+
+
 def test_extraccion_oferta_con_doble_y_costo():
     oferta = OfertaExtraida(puesto="Cajera", empresa="Comercial Ejemplo (sintético)", salario_mensual=650.0)
     cliente = ClienteAnthropic(respuesta(parsed=oferta, entrada=2000, salida=500))
@@ -365,7 +390,9 @@ def test_cliente_real_se_crea_perezoso_con_reintentos_y_timeout(monkeypatch):
     assert creados == []  # importar y configurar no crea clientes
     generar_estructurado("a", Salida)
     generar_estructurado("b", Salida)
-    assert creados == [{"max_retries": 2, "timeout": 60.0}]
+    assert len(creados) == 1 and creados[0]["max_retries"] == 1
+    timeout = creados[0]["timeout"]
+    assert timeout.read == 40.0 and timeout.connect == 5.0  # corto: la demo no se cuelga minutos
 
 
 def test_fallbacks_del_servidor_apagado_por_defecto_y_activable(monkeypatch):
@@ -566,7 +593,8 @@ def test_reproducir_grabacion_faltante(monkeypatch, tmp_path):
         generar_estructurado("no grabado", Salida, agente="perfil", cliente=ClienteProhibido())
     assert info.value.causa == "grabacion_faltante"
     mensaje = str(info.value)
-    assert clave in mensaje and str(tmp_path / "grabaciones" / f"{clave}.json") in mensaje and "perfil" in mensaje
+    assert clave in mensaje and f"{clave}.json" in mensaje and "perfil" in mensaje
+    assert str(tmp_path) not in mensaje  # sin la ruta absoluta local: el mensaje llega al tablero
 
 
 def test_reproducir_grabacion_danada(monkeypatch, tmp_path):
