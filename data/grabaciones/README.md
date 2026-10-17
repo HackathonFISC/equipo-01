@@ -73,6 +73,31 @@ si cambia cualquiera de ellos, `tests/test_horario.py` falla con «falta la grab
 y copiar el `<hash>.json` nuevo a `evals/grabaciones/`. La grabación del 17 de octubre de 2026 costó US$0.026 (3,937 tokens de
 entrada y 535 de salida).
 
+## Volante y CV sintéticos (#170, #236): escritas a mano
+
+Dos grabaciones de esta carpeta **no las produjo el modelo**. Las escribió una persona, con ayuda de IA, en
+`scripts/grabar_fixtures_ingesta.py`, y las guardó con el mismo mecanismo de `puente/llm.py`:
+
+| Archivo | Agente | Documento de prueba |
+|---|---|---|
+| `0a5cf3a90eb5c0bf81eb73819ab88366ed944d34e719c27aba80ab734c1d2398.json` | perfil | `tests/fixtures/cv_sintetico.pdf` |
+| `e5c2dc2506f0a71790843cb52a92b00d30af6c7d6d862ed911665bc45d50192c.json` | mercado | `tests/fixtures/volante_sintetico.jpg` |
+
+- «proveedor» y «modelo» (`anthropic`, `claude-opus-5-5`) identifican la clave del hash, no quién respondió: son los
+  valores con los que se calcula, para que `LLM_MODO=reproducir` las encuentre.
+- El uso `0/0` es la señal de que no hubo llamada. Todas las demás grabaciones traen el uso real de su llamada.
+- Cada archivo lo dice en su campo `nota`, y `tests/test_grabaciones_a_mano.py` exige esa nota a cualquier grabación sin
+  uso, la explicación en este archivo y que el script siga generando exactamente estas dos (salvo la hora).
+- La salida es la que un extractor fiel daría para esos documentos. No se midió con el modelo.
+- Si se suben en una demo (`POST /api/ofertas/archivo` y `POST /api/perfiles/archivo` con esos archivos), hay que decir
+  que esa extracción es una grabación escrita a mano para la prueba, o no mostrarla. Para la demo en vivo, los
+  ejemplos con extracción real del modelo son las 20 ofertas de `data/ofertas/` y el chat de Yaritza en `/joven`.
+
+Para volver a generarlas, sin red ni clave: `uv run python scripts/grabar_fixtures_ingesta.py`. Ese script rehace también
+el JPG y el PDF: si cambian sus bytes, cambia el hash y hay que revisar `git status` y las pruebas. Para tener la respuesta
+real del modelo hay que subir los mismos archivos con `LLM_MODO=grabar` y la clave; la salida puede no coincidir con la
+escrita a mano, y `tests/test_tablero.py -k issue_170` depende de ella.
+
 ## Video (#194)
 
 Tres llamadas que el video muestra y que no estaban grabadas: el chat de Yaritza en `/joven` (agente Perfil), el

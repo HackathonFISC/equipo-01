@@ -156,6 +156,82 @@ function pintar(datos) {
   vaciar($("vacantes"), vacantes.length ? vacantes : el("p", { class: "vacio", text: "No hay vacantes de tu empresa en Puente." }));
 }
 
+async function descargarIcs(v, c) {
+  let respuesta;
+  try {
+    respuesta = await fetch(rutaEmpresa(`ics/${encodeURIComponent(v.oferta_id)}/${encodeURIComponent(c.ref)}`), {
+      headers: { "X-Token-Empresa": tokenActual },
+    });
+  } catch (err) {
+    mostrarAviso(`Sin respuesta del servidor: ${err.message}`, "error");
+    return;
+  }
+  if (!respuesta.ok) {
+    let datos = null;
+    try {
+      datos = await respuesta.json();
+    } catch {
+      datos = null;
+    }
+    mostrarAviso(mensajeDeError(respuesta.status, datos), "error");
+    return;
+  }
+  const url = URL.createObjectURL(await respuesta.blob());
+  const enlace = el("a", { href: url, download: `entrevista_${c.alias.replace(/\s+/g, "_").toLowerCase()}.ics` });
+  document.body.append(enlace);
+  enlace.click();
+  enlace.remove();
+  URL.revokeObjectURL(url);
+}
+
+// La versión legal que propone el Redactor (#157): informa, no cambia el aviso. Publicar otra versión es de la empresa.
+function panelOfertaCorregida(v) {
+  const p = v.propuestas && v.propuestas.oferta_corregida;
+  if (!p) return null;
+  const cambios = p.cambios.map((c) =>
+    el(
+      "li",
+      {},
+      el("q", { text: c.frase }),
+      c.reemplazo ? ` → «${c.reemplazo}»` : " → se quita",
+      el("span", { class: "dato", text: ` · ${c.fundamento}` }),
+    ),
+  );
+  const cifra = p.queda_bloqueada
+    ? "Con este texto la vacante seguiría bloqueada: la revisa el orientador."
+    : `Con esta versión pasan de ${p.viables_antes} a ${p.viables_despues} las personas que Puente puede proponerte.`;
+  return el(
+    "section",
+    { class: "propuesta", "aria-label": "Versión legal sugerida" },
+    el("h4", { text: "Versión legal sugerida" }),
+    el("p", { text: "Puente no cambia tu aviso: si quieres usar esta versión, publícala de nuevo en «Publicar vacante»." }),
+    cambios.length ? el("ul", { class: "datos" }, cambios) : null,
+    el("p", {}, el("span", { class: "dato", text: "Puesto: " }), p.puesto),
+    // El texto del Redactor suele empezar con su propia etiqueta («Requisitos: …»): no se repite.
+    el("p", {}, /^\s*requisitos\s*:/i.test(p.requisitos) ? null : el("span", { class: "dato", text: "Requisitos: " }), p.requisitos),
+    el("p", { class: "nota", text: cifra }),
+    p.nota ? el("p", { class: "nota", text: p.nota }) : null,
+  );
+}
+
+// La cobertura por turnos (#165) que el orientador aprobó: qué candidato cubre cada franja de la jornada.
+function panelCoberturaTurnos(v) {
+  const c = v.propuestas && v.propuestas.cobertura_turnos;
+  if (!c) return null;
+  const alias = Object.fromEntries(v.candidatos.map((x) => [x.ref, x.alias]));
+  return el(
+    "section",
+    { class: "propuesta", "aria-label": "Cobertura por turnos" },
+    el("h4", { text: "Cobertura por turnos" }),
+    el("p", { text: `Nadie cubre la jornada completa (${c.horario_completo}) por sí solo: dos candidatos la cubren juntos.` }),
+    el(
+      "ul",
+      { class: "datos" },
+      c.turnos.map((t) => el("li", { text: `${alias[t.ref] || "Candidato"}: turno de la ${t.turno}, de ${t.inicio} a ${t.fin}` })),
+    ),
+  );
+}
+
 function tarjetaVacante(v, nombres) {
   let estado = etiqueta("Abierta", "info");
   if (v.cubierta) estado = etiqueta("Cubierta", "ok");
@@ -189,8 +265,6 @@ function tarjetaVacante(v, nombres) {
         )
       : null;
 
-  // TODO(#157, #165): aquí van la oferta corregida y la cobertura por turnos (`v.propuestas`) cuando se conecten.
-
   const cierre =
     !v.cubierta && !v.bloqueada
       ? el(
@@ -212,6 +286,8 @@ function tarjetaVacante(v, nombres) {
     datos,
     candidatos,
     revision,
+    panelOfertaCorregida(v),
+    panelCoberturaTurnos(v),
     cierre,
   );
 }
@@ -256,8 +332,10 @@ function tarjetaCandidato(v, c) {
     acciones.append(aceptar);
   }
   if (c.ics) {
-    const enlace = `${rutaEmpresa(`ics/${encodeURIComponent(v.oferta_id)}/${encodeURIComponent(c.ref)}`)}?token=${encodeURIComponent(tokenActual)}`;
-    acciones.append(el("a", { class: "btn btn-sec", href: enlace, download: "" }, "Descargar .ics"));
+    // El código va en el encabezado, no en la URL: se descarga con fetch y se guarda desde un enlace temporal.
+    const ics = el("button", { type: "button", class: "btn btn-sec", text: "Descargar .ics" });
+    ics.addEventListener("click", () => conBoton(ics, "Descargando…", () => descargarIcs(v, c)));
+    acciones.append(ics);
   }
 
   const respuestas = [];

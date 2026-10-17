@@ -163,9 +163,9 @@ def test_aceptar_genera_el_ics_y_deja_la_postulacion_en_entrevista(entorno) -> N
     assert "yaritza" not in ics.text.lower() and "yaritza" not in ics.headers["content-disposition"].lower()
     inicio_utc = datetime.fromisoformat(aceptado["entrevista"]["inicio"]).astimezone(timezone.utc)
     assert inicio_utc.strftime("%Y%m%dT%H%M") in ics.text  # la hora que dejó Postulación en `entrevistas`
-    # El enlace de descarga lleva el token en la URL, como el .ics del joven.
+    # El código va solo en el encabezado: en la URL quedaría en el registro del servidor (#258).
     token = estado["_tokens_empresa"][SUPER]
-    assert cliente.get(f"/api/empresa/{SUPER}/ics/{CHORRERA}/{ref}?token={token}").status_code == 200
+    assert cliente.get(f"/api/empresa/{SUPER}/ics/{CHORRERA}/{ref}?token={token}").status_code == 401
     assert any(a.startswith("entrevista_confirmada_") for a in post["archivos_generados"])
 
     # Una Decision de la empresa, sin datos personales.
@@ -468,7 +468,8 @@ def test_la_pagina_empresa_solo_publica_y_no_muestra_a_nadie(entorno) -> None:
         "perfil_id",
     ):
         assert viejo not in html, viejo
-    assert "/api/ofertas" in html and 'href="/empresa/lista-corta"' in html
+    assert "/api/empresa/ofertas" in html and 'href="/empresa/lista-corta"' in html
+    assert 'fetch("/api/ofertas"' not in html  # esa ruta devuelve el estado del tablero: es del orientador
     assert 'class="boton' not in html  # esas clases no existen en joven.css: los botones son .btn
 
 
@@ -479,3 +480,70 @@ def test_las_habilidades_de_publicar_no_van_fijas_en_el_codigo(entorno) -> None:
     assert 'habilidades: ["atencion_cliente", "manejo_caja"]' not in html
     assert html.count('name="habilidad"') >= 4
     assert "Elige al menos una habilidad" in html
+
+
+# ---------------------------------------------------------------- #258: el .ics por encabezado y lo que Puente ya sabe proponer
+
+
+def test_el_ics_se_descarga_con_encabezado_y_la_pagina_no_pone_el_codigo_en_la_url(entorno) -> None:
+    cliente, estado, _ = entorno
+    _aprobar(cliente, YARITZA, CHORRERA)
+    [candidato] = _vacante(_lista(cliente, estado), CHORRERA)["candidatos"]
+    ref = candidato["ref"]
+    assert _accion(cliente, estado, accion="aceptar", oferta_id=CHORRERA, ref=ref).status_code == 200
+    assert cliente.get(f"/api/empresa/{SUPER}/ics/{CHORRERA}/{ref}", headers=_cred(estado)).status_code == 200
+    token = estado["_tokens_empresa"][SUPER]
+    assert cliente.get(f"/api/empresa/{SUPER}/ics/{CHORRERA}/{ref}?token={token}").status_code == 401
+    js = (empresa.RUTA_STATIC / "empresa_lista.js").read_text(encoding="utf-8")
+    assert "?token=" not in js and 'headers: { "X-Token-Empresa": tokenActual }' in js
+
+
+def _empresa_de(estado: dict, oferta_id: str) -> str:
+    return empresa.id_empresa(next(o["empresa"] for o in estado["ofertas"] if o["id"] == oferta_id))
+
+
+def test_una_vacante_bloqueada_trae_la_version_legal_del_redactor(entorno) -> None:
+    """`propuestas.oferta_corregida` ya no va fija en None: con el Redactor (plantilla, sin LLM) trae el texto
+    corregido, las frases que cambian y solo la cifra de viables, nunca quiénes son (#258, #157)."""
+    cliente, estado, _ = entorno
+    bloqueada = "OF-BLOQ-EDAD-04"
+    empresa_id = _empresa_de(estado, bloqueada)
+    lista = _lista(cliente, estado, empresa_id)
+    vacante = _vacante(lista, bloqueada)
+    assert vacante["bloqueada"] is True
+    p = vacante["propuestas"]["oferta_corregida"]
+    assert p is not None and p["queda_bloqueada"] is False
+    assert p["cambios"] and all(c["frase"] and c["regla"] and c["fundamento"] for c in p["cambios"])
+    assert isinstance(p["viables_antes"], int) and isinstance(p["viables_despues"], int)
+    assert p["viables_despues"] >= p["viables_antes"]
+    frases = " ".join(c["frase"].lower() for c in p["cambios"])
+    assert frases and frases not in p["requisitos"].lower()  # lo que se cambió ya no está en el texto nuevo
+    texto = json.dumps(lista, ensure_ascii=False)
+    for dato in ("PERFIL-", "perfil_id", "viables_antes_ids", "Yaritza", "Kevin", "Daniela"):
+        assert dato not in texto, dato
+    # Una vacante que no está bloqueada no lleva propuesta de texto.
+    abierta = _vacante(_lista(cliente, estado), CHORRERA)
+    assert abierta["bloqueada"] is False and abierta["propuestas"]["oferta_corregida"] is None
+
+
+def test_la_cobertura_por_turnos_aprobada_sale_en_la_lista_con_las_refs_de_los_dos(entorno) -> None:
+    cliente, estado, _ = entorno
+    assert cliente.post("/api/orientador/cobertura-turnos/demo", json={}).status_code == 200
+    oferta = estado["coberturas_turnos"][0]["oferta_id"]
+    empresa_id = _empresa_de(estado, oferta)
+    empresa.anunciar_codigos_empresa(estado)  # la empresa del escenario recibe su código en la primera visita
+    # Mientras nadie esté enviado, no hay nada que mostrar: la propuesta es del orientador.
+    assert _vacante(_lista(cliente, estado, empresa_id), oferta)["propuestas"]["cobertura_turnos"] is None
+    r = cliente.post(
+        "/api/orientador/cobertura-turnos/aprobar",
+        json={"oferta_id": oferta, "consentimiento_manana": True, "consentimiento_tarde": True},
+    )
+    assert r.status_code == 200, r.text
+    vacante = _vacante(_lista(cliente, estado, empresa_id), oferta)
+    cobertura = vacante["propuestas"]["cobertura_turnos"]
+    assert cobertura is not None and [t["turno"] for t in cobertura["turnos"]] == ["mañana", "tarde"]
+    assert cobertura["horario_completo"] and all(t["inicio"] and t["fin"] for t in cobertura["turnos"])
+    # Cada turno apunta al candidato de la lista con su referencia opaca, sin perfil ni nombre.
+    assert {t["ref"] for t in cobertura["turnos"]} == {c["ref"] for c in vacante["candidatos"]}
+    texto = json.dumps(vacante, ensure_ascii=False)
+    assert "PERFIL-" not in texto and "Sofía" not in texto

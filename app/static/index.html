@@ -68,6 +68,8 @@
 
   <main id="principal" class="container">
     <div id="banner-demo-publica" class="banner hidden" role="status"></div>
+    <!-- Avisos que deja el grafo para el orientador, p. ej. cuando la empresa rechaza o cubre una vacante (#256) -->
+    <section id="avisos-orientador" class="avisos" aria-label="Avisos para el orientador" aria-live="polite"></section>
     <!-- Recorrido del caso por los agentes del sistema -->
     <section class="flujo" aria-labelledby="flujo-titulo">
       <h2 id="flujo-titulo" class="visually-hidden">Recorrido por los agentes</h2>
@@ -242,9 +244,9 @@
         </details>
 
         <details class="drawer">
-          <summary><svg class="icon"><use href="#i-upload"/></svg><span>Subir CV (PDF o foto con cámara)</span><svg class="icon drawer__chev"><use href="#i-chevron"/></svg></summary>
+          <summary><svg class="icon"><use href="#i-upload"/></svg><span>Subir CV (PDF)</span><svg class="icon drawer__chev"><use href="#i-chevron"/></svg></summary>
           <form id="form-subir-cv" class="form-grid drawer__body">
-            <p class="drawer__hint full-width">Sube un CV en PDF (con capa de texto) o foto (máximo 5 MB). La cédula, teléfono y dirección exacta se eliminan automáticamente por regex antes de cualquier procesamiento.</p>
+            <p class="drawer__hint full-width">Sube un CV en PDF con capa de texto (máximo 5 MB; esta máquina no lee fotos de CV). La cédula, teléfono y dirección exacta se eliminan automáticamente por regex antes de cualquier procesamiento.</p>
             <label class="field">
               <span>Nombre (opcional)</span>
               <input type="text" id="scv-nombre" class="input" placeholder="Ej. Daniela Pérez" autocomplete="off" />
@@ -278,8 +280,8 @@
               </span>
             </label>
             <label class="field full-width">
-              <span>Archivo de CV (PDF o foto)</span>
-              <input type="file" id="scv-archivo" class="input" accept="image/*,application/pdf" capture="environment" required />
+              <span>Archivo de CV (PDF)</span>
+              <input type="file" id="scv-archivo" class="input" accept="application/pdf" required />
             </label>
             <div id="scv-preview" class="full-width" style="display:none;margin-top:0.5rem;"></div>
             <div class="form-actions full-width">
