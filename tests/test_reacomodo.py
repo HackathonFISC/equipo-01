@@ -1,11 +1,14 @@
-"""Reacomodo (#54), fase 1: la empresa responde y el grafo recalcula sobre el mismo caso.
+"""Reacomodo (#54): la empresa responde y el grafo recalcula sobre el mismo caso.
 
-Sin red ni claves: la mecánica se prueba con los stubs de la Fase 1 y el criterio del issue
-(«La empresa rechazó a Yaritza») con los agentes reales y un LLM falso. Los avisos solo se
-guardan en `avisos_pendientes`; enviarlos es la fase 2, con #12/#84.
+Sin red ni claves: la mecánica se prueba con los stubs de la Fase 1, que dejan los avisos en
+`avisos_pendientes`, y el criterio del issue («La empresa rechazó a Yaritza») con los agentes
+reales, Postulación de #84 incluida, y un LLM falso. Con los agentes reales el nodo `avisos`
+manda el aviso al joven por outbox/ (Telegram apagado) y lo saca de `avisos_pendientes`.
 """
 
 import json
+import os
+from pathlib import Path
 
 import pytest
 from langgraph.types import Command
@@ -43,8 +46,22 @@ def _grafo(ruta_cp, **nodos):
 
 
 def _grafo_real(ruta_cp, estado):
+    """Agentes reales; Postulación escribe en PUENTE_DB (temporal, ver conftest) y en el outbox junto a ruta_cp."""
     llm = json.dumps({"habilidades": estado["entradas_perfil"][0]["habilidades"]}, ensure_ascii=False)
-    return construir_grafo(nodos=nodos_fase_2(llm_perfil=lambda _prompt: llm), checkpointer=checkpointer_sqlite(ruta_cp))
+    nodos = nodos_fase_2(llm_perfil=lambda _prompt: llm, outbox=ruta_cp.parent / "outbox")
+    return construir_grafo(nodos=nodos, checkpointer=checkpointer_sqlite(ruta_cp))
+
+
+def _tramos(estado):
+    """Agentes de las decisiones, con las repeticiones seguidas juntas (Postulación real deja varias)."""
+    agentes = [d.agente for d in estado["decisiones"]]
+    return [a for i, a in enumerate(agentes) if i == 0 or agentes[i - 1] != a]
+
+
+def _avisos_en_outbox(carpeta):
+    """Textos de los avisos del reacomodo que quedaron en outbox/joven_*.txt."""
+    textos = [p.read_text(encoding="utf-8") for p in sorted(Path(carpeta).glob("joven_*.txt"))]
+    return [t for t in textos if "no siguió con tu postulación" in t or "ya se cubrió" in t]
 
 
 def _aprobar(grafo, config, **extra):
@@ -88,7 +105,7 @@ def test_la_empresa_rechazo_a_yaritza_y_el_orientador_aprueba_la_lista_nueva(rut
     _aprobar(grafo, config)
     _aprobar(grafo, config)  # cocina
     assert aprobacion_pendiente(grafo, config) is None
-    assert _valores(grafo, config)["postulaciones"][clave_postulacion("yaritza", CAJERO)] == EstadoPostulacion.CONSENTIDO
+    assert _valores(grafo, config)["postulaciones"][clave_postulacion("yaritza", CAJERO)] == EstadoPostulacion.ENVIADO
 
     final = evento_empresa(grafo, config, CAJERO, "yaritza", tipo="rechaza", nota="eligió otro perfil", orientador="Orientadora Ficticia")
 
@@ -97,10 +114,10 @@ def test_la_empresa_rechazo_a_yaritza_y_el_orientador_aprueba_la_lista_nueva(rut
     assert grafo.get_state(config).next == ("aprobacion",)
     assert solicitud["oferta_id"] == CAJERO
     assert _candidatos(grafo, config) == ["carlos", "maria"]  # su lugar lo ocupa la siguiente viable
-    assert {c["perfil_id"]: c["estado_postulacion"] for c in solicitud["candidatos"]} == {"carlos": "consentido", "maria": None}
+    assert {c["perfil_id"]: c["estado_postulacion"] for c in solicitud["candidatos"]} == {"carlos": "enviado", "maria": None}
     valores = _valores(grafo, config)
     assert valores["postulaciones"][clave_postulacion("yaritza", CAJERO)] == NO_SELECCIONADO
-    assert valores["postulaciones"][clave_postulacion("yaritza", COCINA)] == EstadoPostulacion.CONSENTIDO  # solo sale de esa vacante
+    assert valores["postulaciones"][clave_postulacion("yaritza", COCINA)] == EstadoPostulacion.ENVIADO  # solo sale de esa vacante
     [exclusion] = valores["excluidos"]
     assert exclusion["perfil_id"] == "yaritza" and exclusion["oferta_id"] == CAJERO and exclusion["origen"] == "empresa"
     assert "eligió otro perfil" in exclusion["motivo"]
@@ -114,16 +131,20 @@ def test_la_empresa_rechazo_a_yaritza_y_el_orientador_aprueba_la_lista_nueva(rut
     assert "Orientadora Ficticia" in decision.razon and "eligió otro perfil" in decision.razon
     assert "yaritza → " + CAJERO + " (empresa)" in next(d for d in reversed(valores["decisiones"]) if d.agente == "matching").razon
 
-    # Aviso al joven y al orientador, guardado para la fase 2 (#12/#84); nada sale por red
-    avisos = valores["avisos_pendientes"]
-    assert [(a["para"], a["perfil_id"]) for a in avisos] == [("joven", "yaritza"), ("orientador", None)]
-    assert "Yaritza Ficticia" in avisos[0]["texto"] and "Cajero(a) de minisúper" in avisos[0]["texto"]
+    # El aviso al joven sale en seguida por outbox/ (Telegram apagado); el del orientador queda para el tablero
+    [aviso] = _avisos_en_outbox(ruta_cp.parent / "outbox")
+    assert "Yaritza Ficticia" in aviso and "Cajero(a) de minisúper" in aviso
+    assert [(a["para"], a["perfil_id"]) for a in valores["avisos_pendientes"]] == [("orientador", None)]
+    [enviado] = [d for d in valores["decisiones"] if d.agente == "avisos"]
+    assert "yaritza" in enviado.entrada_resumen and enviado.salida_resumen.startswith("canal outbox, ok=True")
 
     final = _aprobar(grafo, config)
     assert aprobacion_pendiente(grafo, config) is None
-    assert final["postulaciones"][clave_postulacion("maria", CAJERO)] == EstadoPostulacion.CONSENTIDO
+    assert final["postulaciones"][clave_postulacion("maria", CAJERO)] == EstadoPostulacion.ENVIADO
     assert final["postulaciones"][clave_postulacion("yaritza", CAJERO)] == NO_SELECCIONADO
-    assert [d.agente for d in final["decisiones"]][-6:] == ["evento_empresa", "matching", "auditor", "formacion", "aprobacion", "postulacion"]
+    assert (ruta_cp.parent / "outbox" / f"cv_maria_{CAJERO}.pdf").exists()  # la que entra sí se postula
+    esperado = ["evento_empresa", "avisos", "matching", "auditor", "formacion", "aprobacion", "postulacion"]
+    assert _tramos(final)[-7:] == esperado
 
 
 def test_el_rechazo_llega_con_otra_vacante_esperando_aprobacion(ruta_cp, caso):
@@ -313,10 +334,13 @@ def test_demo_por_consola_con_el_rechazo_de_la_empresa(tmp_path, capsys):
     final = g.main(["--checkpoints", str(tmp_path / "cp.db"), "--auto", pasos])
     salida = capsys.readouterr().out
     assert "Evento de la empresa · rechaza · yaritza en " + CAJERO in salida
-    assert "Aviso pendiente para joven: Hola, Yaritza Ficticia" in salida
-    assert "postulación: consentido" in salida  # la lista nueva marca a quien ya se postuló
+    assert f"Aviso enviado · aviso de reacomodo para yaritza: rechaza en {CAJERO} · canal outbox, ok=True" in salida
+    assert "Aviso pendiente para orientador: " in salida and "Aviso pendiente para joven" not in salida
+    assert "postulación: enviado" in salida  # la lista nueva marca a quien ya se postuló
     assert salida.count("Aprobación pendiente · " + CAJERO) == 2
-    assert salida.rstrip().splitlines()[-4] == "Flujo terminado."
+    assert "Flujo terminado." in salida and "Sin más decisiones automáticas" not in salida
+    [aviso] = _avisos_en_outbox(os.environ["PUENTE_OUTBOX"])  # la demo usa PUENTE_OUTBOX (temporal, ver conftest)
+    assert "Hola, Yaritza Ficticia" in aviso
     assert final["postulaciones"][clave_postulacion("yaritza", CAJERO)] == NO_SELECCIONADO
     assert [(e["perfil_id"], e["origen"]) for e in final["excluidos"]] == [("yaritza", "empresa")]
 
@@ -327,6 +351,29 @@ def test_demo_por_consola_con_vacante_cubierta_mientras_espera(tmp_path, capsys)
     assert "Evento de la empresa · cubierta · " + COCINA in salida
     assert "Flujo terminado." in salida
     assert final["vacantes_cubiertas"] == [COCINA]
+
+
+def test_nodo_avisos_manda_los_del_joven_y_deja_los_del_orientador(tmp_path, monkeypatch, caso):
+    _, estado = caso
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token-ficticio")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID_JOVEN", "chat-joven-ficticio")
+    enviados = []
+
+    def transporte(token, chat_id, texto, adjuntos):
+        enviados.append((chat_id, texto))
+        return {"ok": True}
+
+    pendientes = g.aviso_reacomodo(estado, {"tipo": "cubierta", "oferta_id": COCINA}, ["carlos", "maria"], "yaritza")
+    nodo = g.crear_nodo_avisos(outbox=tmp_path / "outbox", enviar_joven=transporte)
+    cambios = nodo({**estado, "avisos_pendientes": pendientes})
+
+    assert [chat for chat, _ in enviados] == ["chat-joven-ficticio"] * 2
+    assert "Carlos Ficticio" in enviados[0][1] and "María Ficticia" in enviados[1][1]
+    assert [a["para"] for a in cambios["avisos_pendientes"]] == ["orientador"]
+    decisiones = [d for d in cambios["decisiones"] if d.agente == "avisos"]
+    assert [d.salida_resumen for d in decisiones] == ["canal telegram, ok=True"] * 2
+    assert not (tmp_path / "outbox").exists()  # salió por Telegram (el doble): nada en outbox/
+    assert nodo({**estado, **cambios}) == {}  # ya no queda nada para jóvenes
 
 
 def test_el_no_del_joven_manda_sobre_la_confirmacion_del_orientador(ruta_cp, caso):
