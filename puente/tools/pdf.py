@@ -138,11 +138,14 @@ _EN_PAREJA = re.compile(r"\b(vivo|vive|estoy|est[aá]|estado civil\s*:?)\s+en pa
 # Pareja e hijos (#148): "su esposo me apoya", "unida con su pareja", "tengo 2 hijos", "mamá de dos
 # niñas". "mi mamá" o "la fonda de mi mamá" no se tocan: solo cuenta con hijos o pareja detrás.
 _CANTIDAD = r"(?:\d+|un[oa]?|dos|tres|cuatro|cinco)"
+_HIJOS = r"(?:hij[oa]s?|beb[eé]s?|nen[eao]s?)"
 _FAMILIA = re.compile(
     r"\bunid[oa]\s+(?:con|a)\s+(?:mi|su)\s+(?:pareja|esposo|esposa|marido|novio|novia)\b"
     r"|\b(?:mi|su)\s+(?:esposo|esposa|marido|pareja|novio|novia)\b"
-    rf"|\b(?:tengo|tiene)\s+{_CANTIDAD}\s+(?:hij|niñ|nen)[oa]s?\b"
-    rf"|\b(?:mam[aá]|madre|pap[aá]|padre)\s+de\s+{_CANTIDAD}\s+(?:hij|niñ|nen)[oa]s?\b",
+    rf"|\b(?:mis?|sus?)\s+{_HIJOS}\b"  # "cuidar a mis hijos", "y mi hija"
+    rf"|\b(?:tengo|tiene)\s+(?:{_CANTIDAD}\s+|\w+\s+)?(?:{_HIJOS}|niñ[oa]s)\b"  # "tengo hijos pequeños", "tengo un bebé"
+    rf"|\b(?:mam[aá]|madre|pap[aá]|padre)\s+de\s+{_CANTIDAD}\s+(?:hij|niñ|nen)[oa]s?\b"
+    r"|\b(?:madre|padre)\s+de\s+familia\b",
     re.IGNORECASE,
 )
 _EMBARAZO = re.compile(r"\b(?:embarazad[oa]s?|embarazos?|encinta|gestante)\b", re.IGNORECASE)
@@ -162,6 +165,8 @@ _FECHA_NUM = r"(?:\d{1,2}[/.-]\d{1,2}[/.-](?:19|20)?\d{2}|(?:19|20)\d{2}[/.-]\d{
 _NACIMIENTO = re.compile(
     r"\bnac(?:id[oa]s?|i[oó]|í)\s+(?:en|el)\s+(?:el\s+)?(?:a[nñ]o\s+)?"
     rf"(?:{_FECHA_NUM}|(?:(?:\d{{1,2}}\s+de\s+)?[a-záéíóú]+\s+del?\s+)?(?:19|20)\d{{2}}\b)"
+    # "Nací en La Chorrera en 2006": el lugar entre medio también sale (dice de dónde es).
+    r"|\bnac(?:id[oa]s?|i[oó]|í)\s+en\s+[^.,;\n]{0,40}?\b(?:19|20)\d{2}\b"
     r"|\b(?:a[nñ]o|fecha)\s+de\s+nacimiento\b(?:\s*(?::|es|fue)?\s*"
     r"(?:(?:\d{1,2}\s+de\s+)?[a-záéíóú]+\s+del?\s+(?:19|20)\d{2}\b|\d[\d/.-]*\d))?",
     re.IGNORECASE,
