@@ -1,12 +1,12 @@
 # Resultados de los evals de Puente
 
-Generado por `uv run python -m evals.run` el 2026-10-16 23:10 (hora de Panamá, UTC-5). No lo edites a mano: se regenera en cada corrida.
+Generado por `uv run python -m evals.run` el 2026-10-16 23:13 (hora de Panamá, UTC-5). No lo edites a mano: se regenera en cada corrida.
 
 Estados: 24 ok · 0 fallo · 0 pendiente · 9 omitido (de 33 casos).
 
 **Esta corrida no mide todo el sistema:** 9 casos con LLM omitidos (sin grabación); no se miden hasta grabar sus respuestas con `LLM_MODO=grabar` y la clave del LLM (ver evals/grabaciones/README.md). Una categoría sin medir no es una categoría aprobada.
 
-Los casos con LLM se corren 3 veces y la tasa es aciertos sobre corridas. Las metas son propuestas provisionales hasta que el equipo las confirme con el plan. Todos los datos de los casos son sintéticos.
+En modo reproducir cada caso con LLM usa una sola grabación; no se mide variación entre corridas. Las metas son propuestas provisionales hasta que el equipo las confirme con el plan. Todos los datos de los casos son sintéticos.
 
 Taxonomía usada en esta corrida: `data/taxonomia.csv`, el mismo catálogo que usa la demo.
 
