@@ -56,7 +56,7 @@ Los siete agentes mínimos que sugiere el documento del reto y dónde están en 
 
 | Agente sugerido | En Puente | Issues | Estado |
 |---|---|---|---|
-| 1. Inteligencia de mercado: normalizar ofertas a una taxonomía, detectar requisitos, extraer tendencias | Mercado: extracción con Claude, habilidades normalizadas a la taxonomía enlazada a ESCO, reglas de la Ley 11 de 2005 en código, duplicados por similitud; el Redactor propone una versión legal de una oferta bloqueada | #5, #43, #157, #198 | Completo; tendencias en curso (#198) |
+| 1. Inteligencia de mercado: normalizar ofertas a una taxonomía, detectar requisitos, extraer tendencias | Mercado: extracción con Claude, habilidades normalizadas a la taxonomía enlazada a ESCO, reglas de la Ley 11 de 2005 en código, duplicados por similitud; el Redactor propone una versión legal de una oferta bloqueada | #5, #43, #157, #198 | Completo; tendencias con `uv run python -m puente.metricas --tendencias` (#198) |
 | 2. Perfil: leer el CV y entrevistar para descubrir habilidades no declaradas | Perfil: CV o entrevista de 5 preguntas, cada habilidad con su frase literal de evidencia; vista `/joven`; la tirilla de matrícula da el horario de clases | #6, #44, #52, #164, #166 | Completo, con preguntas fijas |
 | 3. Matching: asignación con capacidades y restricciones de transporte, horario y salario | Solver OR-Tools CP-SAT con restricciones duras, hasta 3 candidatos por plaza (no por vacante) y hasta 2 vacantes por joven | #4, #48 | Completo |
 | 4. Ruta de formación: plan de cursos con cupos, horarios, costo y transporte | Formación: set cover voraz (no óptimo) sobre cursos del INADEH con cupo, horario, costo y traslado | #14, #53 | Completo; cupos y horarios son datos de prueba |
@@ -66,7 +66,7 @@ Los siete agentes mínimos que sugiere el documento del reto y dónde están en 
 
 **Fuera de alcance, y por qué.** La entrevista simulada daría como resultado la opinión de un LLM sobre una conversación, y no hay forma de verificarla en código en 24 horas. Priorizamos lo que sí se puede verificar: que nada salga sin aprobación y consentimiento.
 
-**En curso.** Las tendencias del mercado se están implementando en #198, en `puente/metricas.py`.
+**Tendencias del mercado (#198).** `puente/metricas.py` calcula en código las habilidades más pedidas, el salario por zona y los bloqueos de la Ley 11 sobre las ofertas de la base: `uv run python -m puente.cargar` y después `uv run python -m puente.metricas --tendencias`. Con las 20 ofertas de `data/`, atención al cliente es la más pedida (6).
 
 ## Arquitectura de agentes
 
@@ -330,8 +330,7 @@ Cada afirmación de diseño tiene una prueba que cualquiera puede repetir:
 
 ## Lo que todavía no hace
 
-- **El tablero no usa Mercado ni Perfil con LLM.** `_compilar_grafo_tablero()` en [`app/server.py`](app/server.py) arma el grafo real con los stubs de Mercado y Perfil: las ofertas entran ya estructuradas. Matching, Auditor, Formación y Postulación sí son los reales. La extracción real de Mercado se muestra con `uv run python -m puente.cargar`.
-- **«Cargar desde data/» no lee el archivo.** El botón del tablero valida que el id esté en el catálogo y mete ofertas y perfiles sintéticos fijos.
+- **En el tablero, Mercado con LLM solo entra por «Cargar un ejemplo desde `data/`».** Ese botón pasa los anuncios de `data/ofertas/` por Mercado con sus grabaciones, sin red: CT02, CT24 y CT40 quedan bloqueadas por la Ley 11 (#205). Los perfiles de `data/perfiles/` entran tal cual, con su evidencia y su horario. «Analizar una oferta nueva», el registro de perfiles y las 5 ofertas iniciales siguen con los stubs de `_compilar_grafo_tablero()` en [`app/server.py`](app/server.py), y las entradas rotuladas «ejemplo sintético (no es un archivo)» son de prueba. Matching, Auditor, Formación y Postulación sí son los reales.
 - **`/joven` sí llama a Perfil y a Horario con el LLM.** En modo reproducir solo lee lo que tiene grabación: la respuesta de Yaritza y la tirilla sintética. Con texto nuevo hace falta `LLM_MODO=vivo` y `ANTHROPIC_API_KEY`; sin eso responde con un error claro y no inventa el perfil.
 - **Telegram en el tablero.** El tablero no tiene un interruptor de Telegram como el `--telegram` de la terminal: si el entorno trae `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID_EMPRESA`, la lista corta sale de verdad.
 - **Variación del LLM.** Los evals en modo reproducir usan una grabación por caso; no miden la variación entre corridas del LLM.
