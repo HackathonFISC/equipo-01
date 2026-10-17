@@ -348,7 +348,7 @@ def generar_cv(perfil: Perfil, oferta: Oferta, destino_dir: Path) -> Path:
     linea(contenido[-1], estilo="B")
     pdf.ln(4)
     linea(
-        "CV generado por Puente a partir de lo que la persona contó; "
+        "CV generado por SkillMatch a partir de lo que la persona contó; "
         "solo incluye habilidades con evidencia.",
         estilo="I",
         tamano=8,
