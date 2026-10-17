@@ -272,6 +272,11 @@ class UmbralesSolverRequest(BaseModel):
     orientador: str = Field(default="Orientadora Ana Gómez", min_length=2, max_length=120)
 
 
+MENSAJE_RESPUESTA_SOLO_EN_LISTA_CORTA = (
+    "Rechazar o cubrir una vacante se hace desde /empresa/lista-corta, con el código de la empresa."
+)
+
+
 class EventoEmpresaTableroRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -468,6 +473,46 @@ def _leer_decisiones_db(estado: dict[str, Any]) -> list[dict[str, Any]]:
         return [dict(f) for f in filas]
     finally:
         conn.close()
+
+
+def _cobertura_aprobada(estado: dict[str, Any], cobertura: dict[str, Any]) -> bool:
+    """Una cobertura por turnos está aprobada cuando las postulaciones de sus dos jóvenes están «enviado» (#165, #256)."""
+    segmentos = cobertura.get("segmentos") or []
+    if len(segmentos) < 2:
+        return False
+    return all(
+        (_buscar_postulacion(estado, seg.get("perfil_id", ""), cobertura.get("oferta_id", "")) or {}).get("estado")
+        == EstadoPostulacion.ENVIADO.value
+        for seg in segmentos[:2]
+    )
+
+
+def _marca_de_tiempo(decision: dict[str, Any]) -> float:
+    """Segundos desde la época de `timestamp` (ISO con Z o con huso); una marca ilegible queda al principio."""
+    try:
+        marca = datetime.fromisoformat(str(decision.get("timestamp") or "").replace("Z", "+00:00"))
+    except ValueError:
+        return 0.0
+    return (marca if marca.tzinfo else marca.replace(tzinfo=timezone.utc)).timestamp()
+
+
+def _historial_de_trazas(estado: dict[str, Any]) -> list[dict[str, Any]]:
+    """Todas las decisiones del caso, en orden: lo guardado en SQLite más lo que solo está en memoria (#256).
+
+    La pestaña «Trazas» dibujaba `decisiones`, que cada recálculo reemplaza por la corrida actual de Matching, Auditor
+    y Formación; el historial completo estaba en `decisiones_db` y nadie lo dibujaba. Las decisiones que solo viven
+    en memoria (por ejemplo la del nodo de aprobación del grafo) se suman, sin repetir las que ya están en SQLite.
+    """
+    guardadas = _leer_decisiones_db(estado)
+    claves = {(d["agente"], d["entrada_resumen"], d["salida_resumen"]) for d in guardadas}
+    solo_memoria = [
+        {campo: str(_serializar_decision(d).get(campo) or "") for campo in
+         ("agente", "entrada_resumen", "salida_resumen", "razon", "timestamp")}
+        for d in estado.get("decisiones") or []
+        if (_serializar_decision(d).get("agente"), _serializar_decision(d).get("entrada_resumen"),
+            _serializar_decision(d).get("salida_resumen")) not in claves
+    ]
+    return sorted([*guardadas, *solo_memoria], key=_marca_de_tiempo)  # estable: a igual hora, el orden en que llegaron
 
 
 def _evaluar_reglas_discriminacion(requisitos_texto: str, puesto: str = "") -> tuple[bool, list[dict[str, str]]]:
@@ -1054,7 +1099,11 @@ def recalcular_pipeline_tablero(
                 estado, seg["perfil_id"], cob_dict["oferta_id"]
             )
         coberturas_ui.append(cob_dict)
-    estado["coberturas_turnos"] = coberturas_ui
+    # Las duplas ya aprobadas (sus dos postulaciones están «enviado») se conservan: el solver ya no las propone porque
+    # pasaron a ser historial, y sin esto la tarjeta aprobada desaparecía en el siguiente recálculo (#256).
+    aprobadas = [c for c in (estado.get("coberturas_turnos") or []) if _cobertura_aprobada(estado, c)]
+    ya_aprobadas = {c.get("oferta_id") for c in aprobadas}
+    estado["coberturas_turnos"] = aprobadas + [c for c in coberturas_ui if c.get("oferta_id") not in ya_aprobadas]
 
     # Registrar las decisiones de los nodos centrales en puente.tools.db en orden cronológico real (#124)
     if registrar_trazas:
@@ -1143,6 +1192,16 @@ def recalcular_pipeline_tablero(
     finally:
         conn.close()
 
+    # Una postulación que sigue «preseleccionado» pero ya no está en la lista corta (el solver eligió otras opciones
+    # al desbloquear una oferta o cambiar un umbral) no tiene tarjeta: se quita para que el embudo cuente lo que se
+    # ve (#256). Si la pareja vuelve a la lista, se vuelve a crear desde SQLite. Las enviadas, rechazadas o
+    # contratadas son historial y se quedan.
+    en_lista_corta = {(m["perfil_id"], m["oferta_id"]) for m in matches_ui}
+    nuevas_postulaciones = [
+        post for post in nuevas_postulaciones
+        if post.get("estado") != EstadoPostulacion.PRESELECCIONADO.value
+        or (post["perfil_id"], post["oferta_id"]) in en_lista_corta
+    ]
     estado["postulaciones"] = nuevas_postulaciones
     estado["metricas"] = _calcular_metricas_impacto(estado)
     if registrar_trazas:
@@ -2751,6 +2810,7 @@ def serializar_estado_publico(estado: dict[str, Any]) -> dict[str, Any]:
     payload["conteo_embudo"] = conteo_embudo
     payload["catalogo_data"] = listar_catalogo_data()
     payload["decisiones_db"] = _leer_decisiones_db(estado)
+    payload["trazas"] = _historial_de_trazas(estado)
     payload["metricas"] = _calcular_metricas_impacto(estado)
     payload["operacion"] = obtener_panel_operacion(estado)
     payload["modo_demo_publica"] = es_publica
@@ -2990,22 +3050,19 @@ async def endpoint_empresa_pagina(_request: Request) -> FileResponse:
     return FileResponse(RUTA_STATIC / "empresa.html")
 
 
-async def endpoint_empresa_postulaciones(_request: Request) -> JSONResponse:
-    """Devuelve las postulaciones enviadas a la empresa sin exponer datos internos del orientador (#168)."""
-    postulaciones_empresa = [
-        {
-            "id": p.get("id"),
-            "perfil_id": p.get("perfil_id"),
-            "nombre_perfil": p.get("nombre_perfil"),
-            "oferta_id": p.get("oferta_id"),
-            "puesto": p.get("puesto"),
-            "empresa": p.get("empresa"),
-            "estado": p.get("estado"),
-        }
-        for p in ESTADO_GLOBAL.get("postulaciones", [])
-        if p.get("estado") in (db.ENVIADO, db.ENTREVISTA, db.CONTRATADO, db.NO_SELECCIONADO)
-    ]
-    return JSONResponse({"postulaciones": postulaciones_empresa})
+async def endpoint_empresa_postulaciones(request: Request) -> JSONResponse:
+    """Las postulaciones enviadas a la empresa dueña del código, ciegas y solo de sus vacantes (#235).
+
+    Antes no pedía código y mezclaba las de todas las empresas con el nombre de cada joven.
+    """
+    estado = empresa._estado_actual()
+    empresa_id = empresa.empresa_del_token(estado, empresa._token_de(request))
+    if empresa_id is None:
+        return JSONResponse(
+            {"detail": "Falta el código de la empresa o no es correcto. Usa el enlace que te dio Puente."},
+            status_code=401,
+        )
+    return JSONResponse({"postulaciones": empresa.postulaciones_ciegas(estado, empresa_id)})
 
 
 async def endpoint_empresa_evento(request: Request) -> JSONResponse:
@@ -3014,6 +3071,9 @@ async def endpoint_empresa_evento(request: Request) -> JSONResponse:
         return err_resp  # type: ignore[return-value]
     try:
         req = EventoEmpresaTableroRequest.model_validate(datos)
+        if req.tipo in ("rechaza", "cubierta"):
+            # Sin código de empresa y sin `evento_empresa` (que avisa al joven y recalcula) solo cambiaba el estado.
+            return JSONResponse({"detail": MENSAJE_RESPUESTA_SOLO_EN_LISTA_CORTA}, status_code=409)
         if req.perfil_id and not _buscar_perfil(ESTADO_GLOBAL, req.perfil_id):
             return JSONResponse({"detail": f"Perfil '{req.perfil_id}' no encontrado."}, status_code=404)
         registrar_evento_empresa_tablero(
