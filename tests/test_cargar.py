@@ -236,7 +236,7 @@ def test_taxonomia_que_llega_despues_se_aplica_sin_llamar_al_llm(conn, carpetas)
 
 
 def test_oferta_invalida_tras_extraer_se_reporta_en_cada_corrida(conn, carpetas):
-    hora_mal = {"cajera_discriminatoria.txt": {"horario": {"dias": ["lunes"], "hora_inicio": "8:00", "hora_fin": "16:00"}}}
+    hora_mal = {"cajera_discriminatoria.txt": {"horario": {"dias": ["lunes"], "hora_inicio": "14", "hora_fin": "22"}}}
     primera, _ = _cargar(conn, carpetas, ExtractorFalso(cambios=hora_mal))
     segunda, _ = _cargar(conn, carpetas, ExtractorFalso())
 
