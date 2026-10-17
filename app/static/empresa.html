@@ -11,6 +11,32 @@
     .habilidades { display: flex; gap: 0.5rem 1.25rem; flex-wrap: wrap; }
     .habilidades label { display: inline-flex; align-items: center; gap: 0.4rem; }
     .habilidades input { width: 1.1rem; height: 1.1rem; min-height: 0; margin: 0; }
+    .simulacion { display: flex; gap: 0.75rem 1rem; align-items: end; flex-wrap: wrap; }
+    .simulacion .campo { flex: 1 1 18rem; margin: 0; }
+    .nota-sim { margin: 0.6rem 0 0; font-size: 0.9rem; color: var(--text-2); }
+    .volantes { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr)); margin-top: 0.75rem; }
+    .volante { display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border-strong);
+      border-top: 6px solid var(--accent); border-radius: var(--radio); box-shadow: var(--sombra); overflow: hidden; }
+    .volante.nueva { outline: 3px solid var(--accent); outline-offset: 2px; }
+    .volante-cabecera { padding: 0.9rem 1rem 0.5rem; }
+    .volante-sello { display: inline-block; font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase;
+      font-weight: 700; color: var(--warn); background: var(--warn-soft); border-radius: 999px; padding: 0.1rem 0.6rem; }
+    .volante-cabecera h3 { margin: 0.5rem 0 0.15rem; font-size: 1.15rem; line-height: 1.25; }
+    .volante-empresa { margin: 0; color: var(--text-2); font-size: 0.92rem; }
+    .volante-cuerpo { padding: 0 1rem 0.75rem; flex: 1; }
+    .volante-req { margin: 0.4rem 0 0.6rem; font-size: 0.95rem; }
+    .volante-habs { display: flex; flex-wrap: wrap; gap: 0.35rem; list-style: none; margin: 0 0 0.6rem; padding: 0; }
+    .volante-habs li { font-size: 0.8rem; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 0.1rem 0.6rem; }
+    .volante-datos { display: grid; grid-template-columns: auto 1fr; gap: 0.2rem 0.75rem; margin: 0; font-size: 0.92rem; }
+    .volante-datos dt { color: var(--text-2); }
+    .volante-datos dd { margin: 0; font-weight: 600; }
+    .volante-ley { padding: 0.65rem 1rem; font-size: 0.9rem; border-top: 1px dashed var(--border-strong); }
+    .volante-ley strong { display: block; }
+    .volante-ley p { margin: 0.25rem 0 0; }
+    .volante-ley.ok { background: var(--ok-soft); color: var(--ok); }
+    .volante-ley.alertas { background: var(--warn-soft); color: var(--warn); }
+    .volante-ley.bloqueada { background: var(--bad-soft); color: var(--bad); }
+    .volante-reciente { font-size: 0.75rem; font-weight: 700; color: var(--on-brand); background: var(--brand); border-radius: 999px; padding: 0.1rem 0.6rem; margin-left: 0.4rem; }
   </style>
   <link rel="stylesheet" href="/static/mobile.css?v=2026101703" />
 </head>
@@ -35,6 +61,24 @@
       <h1>Publica una vacante</h1>
       <p>SkillMatch revisa cada oferta con las reglas de la Ley 11 de 2005 antes de que entre al Matching.</p>
       <p>Los candidatos no se ven aquí. <a href="/empresa/lista-corta">Entra a la lista corta ciega con el código de tu empresa</a>: allí ves lo que sabe hacer cada persona, sin nombre, edad, género ni dónde vive, y respondes.</p>
+    </section>
+
+    <section class="tarjeta" style="margin-bottom:1.25rem;">
+      <div class="simulacion">
+        <label class="campo">
+          <span>Elige tu empresa (simulación de la demo)</span>
+          <select id="sel-empresa">
+            <option value="">Elige una empresa…</option>
+          </select>
+        </label>
+      </div>
+      <p class="nota-sim">Es una simulación: solo cambia lo que ves en esta página. No abre la lista corta de candidatos, que sigue pidiendo el código de la empresa.</p>
+    </section>
+
+    <section id="sec-volantes" class="tarjeta" style="margin-bottom:1.25rem;" aria-live="polite" hidden>
+      <h2 style="margin-top:0;">Tus volantes y vacantes</h2>
+      <p id="volantes-resumen" class="nota-sim"></p>
+      <div id="volantes" class="volantes"></div>
     </section>
 
     <form id="form-empresa-oferta" class="tarjeta" style="margin-bottom:1.25rem;">
@@ -91,8 +135,9 @@
           <span>Archivo del volante (PDF, JPG o PNG)</span>
           <input id="vol-archivo" type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" required />
         </label>
-        <div style="margin-top:0.75rem;">
+        <div style="margin-top:0.75rem;display:flex;gap:0.5rem;flex-wrap:wrap;">
           <button type="submit" class="btn btn-pri">Subir volante y validar con Ley 11</button>
+          <button type="button" id="btn-ejemplo" class="btn btn-sec">Probar con un volante de ejemplo</button>
         </div>
       </fieldset>
     </form>
@@ -177,21 +222,17 @@
       $("msg-empresa").hidden = true;
       // La respuesta es solo el resultado de la oferta publicada: el estado del tablero no llega a esta página.
       const nueva = datos && datos.oferta;
-      if (nueva) pintarResultado(nueva);
-      else mostrarAviso("Vacante procesada por SkillMatch (Ley 11 de 2005).");
+      if (nueva) {
+        pintarResultado(nueva);
+        await mostrarEmpresaDeOferta(nueva);
+      } else mostrarAviso("Vacante procesada por SkillMatch (Ley 11 de 2005).");
     });
 
     // Subir volante (#303): la misma respuesta que publicar, solo el resultado de la oferta.
-    $("form-empresa-volante").addEventListener("submit", async (ev) => {
-      ev.preventDefault();
-      const archivo = $("vol-archivo").files && $("vol-archivo").files[0];
-      if (!archivo) {
-        mostrarAviso("Elige el archivo del volante primero.");
-        return;
-      }
+    // Lo usan el formulario con archivo y el botón del volante de ejemplo (#310).
+    async function subirVolante(archivo, boton) {
       const cuerpo = new FormData();
-      cuerpo.append("archivo", archivo);
-      const boton = ev.submitter;
+      cuerpo.append("archivo", archivo, archivo.name || "volante.jpg");
       if (boton) boton.disabled = true;
       let resp;
       try {
@@ -210,14 +251,244 @@
       }
       if (!resp.ok) {
         const detalle = datos && datos.detail;
-        mostrarAviso(typeof detalle === "string" ? detalle : "No se pudo leer el volante.");
+        const texto = typeof detalle === "string" ? detalle : "No se pudo leer el volante.";
+        mostrarAviso(texto);
+        // Un volante repetido ya está en el tablero: se muestra su empresa y la lista queda al día.
+        const repetida = resp.status === 409 && /\(([A-Za-z0-9_-]+)\)/.exec(texto);
+        if (repetida) await mostrarEmpresaDeOferta({ id: repetida[1], empresa: "" });
         return;
       }
       $("msg-empresa").hidden = true;
       $("vol-archivo").value = "";
-      if (datos && datos.oferta) pintarResultado(datos.oferta);
-      else mostrarAviso("Volante procesado por SkillMatch (Ley 11 de 2005).");
+      if (datos && datos.oferta) {
+        pintarResultado(datos.oferta);
+        await mostrarEmpresaDeOferta(datos.oferta);
+      } else mostrarAviso("Volante procesado por SkillMatch (Ley 11 de 2005).");
+    }
+
+    $("form-empresa-volante").addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      const archivo = $("vol-archivo").files && $("vol-archivo").files[0];
+      if (!archivo) {
+        mostrarAviso("Elige el archivo del volante primero.");
+        return;
+      }
+      subirVolante(archivo, ev.submitter);
     });
+
+    // Volante de ejemplo (#310): el archivo sintético viaja por la misma ruta, y en la demo sin red el servidor lo
+    // lee con la respuesta grabada del modelo.
+    $("btn-ejemplo").addEventListener("click", async (ev) => {
+      const boton = ev.currentTarget;
+      let archivo;
+      try {
+        const resp = await fetch("/static/ejemplos/volante_sintetico.jpg");
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        archivo = new File([await resp.blob()], "volante_sintetico.jpg", { type: "image/jpeg" });
+      } catch (err) {
+        mostrarAviso(`No se pudo cargar el volante de ejemplo: ${err.message}`);
+        return;
+      }
+      subirVolante(archivo, boton);
+    });
+
+    // Simulación de empresa (#310): elegir una empresa solo cambia lo que se muestra aquí. Los datos salen de
+    // /api/empresa/empresas y /api/empresa/vacantes, que no traen jóvenes ni postulaciones.
+    const CLAVE_EMPRESA = "skillmatch.empresa";
+    let empresas = [];
+    let recienPublicada = "";
+
+    function empresaGuardada() {
+      try {
+        return localStorage.getItem(CLAVE_EMPRESA) || "";
+      } catch {
+        return "";
+      }
+    }
+
+    function guardarEmpresa(id) {
+      try {
+        if (id) localStorage.setItem(CLAVE_EMPRESA, id);
+        else localStorage.removeItem(CLAVE_EMPRESA);
+      } catch {
+        /* sin almacenamiento: la elección vale solo para esta visita */
+      }
+    }
+
+    function ponerEmpresaEnUrl(id) {
+      try {
+        const url = new URL(window.location.href);
+        if (id) url.searchParams.set("empresa", id);
+        else url.searchParams.delete("empresa");
+        window.history.replaceState(null, "", url);
+      } catch {
+        /* la URL no es imprescindible */
+      }
+    }
+
+    async function pedirJson(ruta) {
+      const resp = await fetch(ruta);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      return resp.json();
+    }
+
+    async function cargarEmpresas() {
+      empresas = await pedirJson("/api/empresa/empresas");
+      const sel = $("sel-empresa");
+      const actual = sel.value;
+      sel.replaceChildren(
+        new Option("Elige una empresa…", ""),
+        ...empresas.map((e) => new Option(`${e.nombre} · ${e.n_vacantes} ${e.n_vacantes === 1 ? "vacante" : "vacantes"}`, e.empresa_id)),
+      );
+      if (empresas.some((e) => e.empresa_id === actual)) sel.value = actual;
+    }
+
+    function dato(lista, etiqueta, valor) {
+      const dt = document.createElement("dt");
+      dt.textContent = etiqueta;
+      const dd = document.createElement("dd");
+      dd.textContent = valor;
+      lista.append(dt, dd);
+    }
+
+    function tarjetaVolante(v) {
+      const alertas = v.alertas || [];
+      const card = document.createElement("article");
+      card.className = "volante" + (v.id === recienPublicada ? " nueva" : "");
+
+      const cab = document.createElement("header");
+      cab.className = "volante-cabecera";
+      const sello = document.createElement("span");
+      sello.className = "volante-sello";
+      sello.textContent = "Se busca";
+      cab.append(sello);
+      if (v.id === recienPublicada) {
+        const nuevo = document.createElement("span");
+        nuevo.className = "volante-reciente";
+        nuevo.textContent = "Recién publicada";
+        cab.append(nuevo);
+      }
+      const h = document.createElement("h3");
+      h.textContent = v.puesto;
+      const emp = document.createElement("p");
+      emp.className = "volante-empresa";
+      emp.textContent = v.empresa;
+      cab.append(h, emp);
+
+      const cuerpo = document.createElement("div");
+      cuerpo.className = "volante-cuerpo";
+      if (v.requisitos_texto) {
+        const req = document.createElement("p");
+        req.className = "volante-req";
+        req.textContent = v.requisitos_texto;
+        cuerpo.append(req);
+      }
+      if ((v.habilidades || []).length) {
+        const habs = document.createElement("ul");
+        habs.className = "volante-habs";
+        habs.setAttribute("aria-label", "Habilidades que pide el puesto");
+        habs.replaceChildren(
+          ...v.habilidades.map((nombre) => {
+            const li = document.createElement("li");
+            li.textContent = nombre.replace(/_/g, " ");
+            return li;
+          }),
+        );
+        cuerpo.append(habs);
+      }
+      const datos = document.createElement("dl");
+      datos.className = "volante-datos";
+      if (v.salario_mensual) dato(datos, "Salario", `US$ ${Number(v.salario_mensual).toLocaleString("es-PA")} al mes`);
+      if (v.horario) dato(datos, "Horario", v.horario);
+      if (v.corregimiento) dato(datos, "Lugar", v.corregimiento);
+      cuerpo.append(datos);
+
+      const ley = document.createElement("footer");
+      ley.className = "volante-ley " + (v.bloqueada ? "bloqueada" : alertas.length ? "alertas" : "ok");
+      const titulo = document.createElement("strong");
+      titulo.textContent = v.bloqueada
+        ? "Ley 11 de 2005: bloqueada, no entra al Matching"
+        : alertas.length
+          ? "Ley 11 de 2005: con alertas para el orientador"
+          : "Ley 11 de 2005: sin alertas";
+      ley.append(titulo);
+      alertas.forEach((a) => {
+        const p = document.createElement("p");
+        p.textContent = `«${a.frase}» · ${a.regla}`;
+        ley.append(p);
+      });
+
+      card.append(cab, cuerpo, ley);
+      return card;
+    }
+
+    async function elegirEmpresa(id) {
+      const sel = $("sel-empresa");
+      const elegida = empresas.find((e) => e.empresa_id === id);
+      const seccion = $("sec-volantes");
+      if (!elegida) {
+        sel.value = "";
+        seccion.hidden = true;
+        guardarEmpresa("");
+        ponerEmpresaEnUrl("");
+        return;
+      }
+      let datos;
+      try {
+        datos = await pedirJson(`/api/empresa/vacantes?empresa=${encodeURIComponent(id)}`);
+      } catch (err) {
+        mostrarAviso(`No se pudieron cargar los volantes: ${err.message}`);
+        return;
+      }
+      sel.value = id;
+      guardarEmpresa(id);
+      ponerEmpresaEnUrl(id);
+      // El formulario de publicar sigue el nombre de la empresa elegida, para que su vacante nueva quede con ella.
+      $("emp-empresa").value = datos.nombre;
+      const n = datos.vacantes.length;
+      $("volantes-resumen").textContent = `${datos.nombre}: ${n} ${n === 1 ? "volante o vacante" : "volantes y vacantes"}, ya revisados con la Ley 11 de 2005.`;
+      $("volantes").replaceChildren(...datos.vacantes.map(tarjetaVolante));
+      seccion.hidden = false;
+    }
+
+    // Tras publicar o subir un volante: la lista se actualiza y se elige la empresa que salió de la oferta.
+    async function mostrarEmpresaDeOferta(oferta) {
+      recienPublicada = oferta.id;
+      try {
+        await cargarEmpresas();
+        let destino = empresas.find((e) => oferta.empresa && e.nombre === oferta.empresa);
+        if (!destino) {
+          for (const e of empresas) {
+            const datos = await pedirJson(`/api/empresa/vacantes?empresa=${encodeURIComponent(e.empresa_id)}`);
+            if (datos.vacantes.some((v) => v.id === oferta.id)) {
+              destino = e;
+              break;
+            }
+          }
+        }
+        await elegirEmpresa(destino ? destino.empresa_id : $("sel-empresa").value);
+      } catch (err) {
+        mostrarAviso(`No se pudo actualizar la lista de volantes: ${err.message}`);
+      }
+    }
+
+    $("sel-empresa").addEventListener("change", () => {
+      recienPublicada = "";
+      elegirEmpresa($("sel-empresa").value);
+    });
+
+    (async function iniciar() {
+      try {
+        await cargarEmpresas();
+      } catch (err) {
+        mostrarAviso(`No se pudo cargar la lista de empresas: ${err.message}`);
+        return;
+      }
+      const deUrl = new URLSearchParams(window.location.search).get("empresa") || "";
+      const existe = (id) => empresas.some((e) => e.empresa_id === id);
+      const inicial = existe(deUrl) ? deUrl : existe(empresaGuardada()) ? empresaGuardada() : "";
+      await elegirEmpresa(inicial);
+    })();
   </script>
 </body>
 </html>
