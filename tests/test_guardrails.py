@@ -521,3 +521,119 @@ def test_cedula_no_llega_al_sqlite_del_grafo_real(tmp_path):
     for dato in (CEDULA, TELEFONO, CALLE):
         assert dato.encode() not in crudo
     assert b"[CEDULA]" in crudo  # el checkpoint sí se escribió, con el texto limpio
+
+
+# --- #128: rutas de archivo como entrada y consultas legítimas de empleo -------------
+
+PNG_MINIMO = b"\x89PNG\r\n\x1a\n" + b"sintetico"
+
+
+def _archivo(tmp_path, nombre: str, contenido: bytes):
+    ruta = tmp_path / nombre
+    ruta.write_bytes(contenido)
+    return ruta
+
+
+def test_oferta_solo_con_ruta_de_imagen_no_es_entrada_vacia(tmp_path):
+    foto = _archivo(tmp_path, "oferta.png", PNG_MINIMO)
+    salida = nodo_guardrails({"ofertas_crudas": [{"ruta": str(foto)}], "decisiones": [], "errores": []})
+    assert salida["guardrails"]["ok"] is True
+    assert salida["errores"] == []
+    assert [d.entrada_resumen for d in salida["decisiones"]] == [f"archivo 'oferta.png' de {len(PNG_MINIMO)} bytes"]
+    assert str(tmp_path) not in salida["decisiones"][0].entrada_resumen  # solo el nombre, no la ruta
+
+
+def test_ejecutable_de_6_mb_renombrado_pdf_se_rechaza_aunque_traiga_texto(tmp_path):
+    exe = _archivo(tmp_path, "oferta.pdf", b"MZ" + b"\0" * (6 * MB))
+    estado = {"entrada": {"texto": "Cajero en La Chorrera"}, "ofertas_crudas": [{"ruta": str(exe), "texto": "Cajero"}]}
+    salida = nodo_guardrails(estado)
+    assert salida["guardrails"]["ok"] is False
+    assert "supera el límite de 5 MB" in salida["guardrails"]["motivos"][0]
+
+
+def test_ejecutable_chico_renombrado_pdf_se_rechaza_por_la_firma(tmp_path):
+    exe = _archivo(tmp_path, "cv.pdf", b"MZ\x90\x00" + b"\0" * 100)
+    salida = nodo_guardrails({"entradas_perfil": [{"id": "x", "edad": 20, "cv_ruta": str(exe)}]})
+    assert salida["guardrails"]["ok"] is False
+    assert salida["guardrails"]["motivos"] == ["el contenido no corresponde a un pdf"]
+
+
+@pytest.mark.parametrize(
+    "contenido, motivo",
+    [(b"", "archivo vacío"), (None, "no se encontró el archivo 'cv.pdf'")],
+)
+def test_ruta_vacia_o_inexistente_se_rechaza(tmp_path, contenido, motivo):
+    ruta = tmp_path / "cv.pdf"
+    if contenido is not None:
+        ruta.write_bytes(contenido)
+    resultados = evaluar_entrada({"cv_ruta": str(ruta)})
+    assert not resultados[-1].ok and resultados[-1].motivo == motivo
+
+
+def test_ruta_valida_en_la_entrada_y_en_archivo(tmp_path):
+    pdf = _archivo(tmp_path, "cv.pdf", PDF_MINIMO)
+    assert all(r.ok for r in evaluar_entrada({"ruta": str(pdf)}))
+    assert all(r.ok for r in evaluar_entrada({"archivo": {"ruta": str(pdf)}, "texto": "Busco trabajo"}))
+    # La misma ruta en la entrada y en ofertas_crudas se revisa una sola vez.
+    salida = nodo_guardrails({"entrada": {"ruta": str(pdf)}, "ofertas_crudas": [{"ruta": str(pdf)}]})
+    assert salida["guardrails"]["ok"] is True and len(salida["decisiones"]) == 1
+
+
+def test_ruta_de_nota_de_voz_responde_con_el_mensaje_de_audio(tmp_path):
+    audio = _archivo(tmp_path, "nota.ogg", b"OggS" + b"\0" * 50)
+    salida = nodo_guardrails({"ofertas_crudas": [{"ruta": str(audio)}]})
+    assert salida["guardrails"]["ok"] is False
+    assert salida["respuesta"] == MENSAJE_AUDIO
+
+
+def test_limpiar_entrada_no_toca_la_lista_de_rutas():
+    entrada = {"rutas": ["/tmp/cv 6123-4567.pdf"]}
+    assert limpiar_entrada(entrada) == entrada
+
+
+@pytest.mark.parametrize("texto", [12345, 3.5, ["Busco trabajo"], {"a": 1}])
+def test_texto_que_no_es_cadena_se_rechaza_sin_romper(texto):
+    resultados = evaluar_entrada({"texto": texto})
+    assert len(resultados) == 1 and not resultados[0].ok
+    assert "debe ser una cadena" in resultados[0].motivo
+    assert nodo_guardrails({"entrada": {"texto": texto}})["guardrails"]["ok"] is False
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "¿Hay vacantes de cajero en La Chorrera?",
+        "Fui entrenador de fútbol en mi barrio",
+        "Sé reparar aires de clima",
+        "Doy clases de religión los sábados",
+        "Ayudo a mi tío en el taller de mecánica",
+        "Ayúdame con mi trabajo nuevo, no sé cómo pedir vacaciones",
+        "Me encargo de cuidar a mis hermanos",
+        "Busco trabajo de profesor de inglés",
+    ],
+)
+def test_consultas_y_experiencia_legitimas_estan_en_alcance(texto):
+    assert fuera_de_alcance(texto) is False
+    assert nodo_guardrails({"entrada": {"texto": texto}})["guardrails"]["ok"] is True
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Hazme el trabajo de historia",
+        "Resuélveme la tarea de física",
+        "Ayúdame con mi tarea de inglés",
+        "Escríbeme un ensayo sobre la independencia",
+        "Necesito el proyecto de ciencias para mañana",
+    ],
+)
+def test_tareas_escolares_son_fuera_de_alcance_aunque_digan_trabajo(texto):
+    assert fuera_de_alcance(texto) is True
+
+
+def test_respuesta_fija_queda_registrada_en_el_estado():
+    salida = nodo_guardrails({"entrada": {"texto": "Hazme el trabajo de historia"}})
+    assert salida["guardrails"]["ok"] is False
+    assert salida["respuesta"] == RESPUESTA_FUERA_DE_ALCANCE
+    assert salida["decisiones"][-1].salida_resumen == RESPUESTA_FUERA_DE_ALCANCE
+    assert "respuesta" not in nodo_guardrails({"entrada": {"texto": "Busco trabajo"}})
