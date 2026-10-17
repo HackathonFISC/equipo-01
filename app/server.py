@@ -137,6 +137,7 @@ class MiddlewareDemoPublicaReadOnly(BaseHTTPMiddleware):
 
 from app import joven_fase2  # Vista del joven, fase 2 (#166): la lógica vive en app/joven_fase2.py
 from app import whatsapp  # Chatbot de WhatsApp del joven (#160): la lógica vive en app/whatsapp.py
+from app import telegram_bot  # El mismo chatbot por Telegram, con long polling (#160, #221)
 
 RUTA_APP = Path(__file__).resolve().parent
 RUTA_STATIC = RUTA_APP / "static"
@@ -3319,7 +3320,9 @@ def registrar_consentimiento_joven(
     )
     estado.setdefault("consentimientos", []).append(dict(consentimiento))
     empresa = post.get("empresa") or "la empresa"
-    donde, canal = ("WhatsApp", "WhatsApp") if medio == "whatsapp" else ("la vista del joven", "/joven")
+    donde, canal = {"whatsapp": ("WhatsApp", "WhatsApp"), "telegram": ("Telegram", "Telegram")}.get(
+        medio, ("la vista del joven", "/joven")
+    )
     _registrar_decision_db(
         estado,
         Decision(
@@ -3987,9 +3990,12 @@ def cargar_dotenv() -> bool:
 @contextlib.asynccontextmanager
 async def _ciclo_de_vida(_app: Starlette):
     cargar_dotenv()  # #160: antes de atender, para que el webhook vea TWILIO_AUTH_TOKEN
+    bot_telegram = telegram_bot.iniciar()  # solo con PUENTE_TELEGRAM_BOT=1 y TELEGRAM_BOT_TOKEN
     anunciar_codigos_joven(ESTADO_GLOBAL)
     empresa.anunciar_codigos_empresa(ESTADO_GLOBAL)  # #167
     yield
+    if bot_telegram is not None:
+        bot_telegram.cancel()
 
 
 app = Starlette(

@@ -268,6 +268,7 @@ def test_conversacion_completa_arma_el_perfil_por_el_camino_de_joven(entorno) ->
     _enviar(cliente, "hola")
     for texto in FORMULARIO:
         assert _enviar(cliente, texto).status_code == 200
+    assert "Pregunta 1 de 5" in _enviar(cliente, "no").text  # sin CV: las 5 preguntas
     for i, texto in enumerate(RESPUESTAS):
         r = _enviar(cliente, texto)
         assert r.status_code == 200
@@ -465,7 +466,7 @@ def test_meta_ignora_avisos_de_estado_y_mensajes_repetidos(meta) -> None:
 def test_meta_entrevista_completa_arma_el_perfil_y_avisa_por_meta(meta) -> None:
     cliente, estado, llm, tmp_path, enviados = meta
     perfiles_antes = len(estado["perfiles"])
-    for i, texto in enumerate(["hola", *FORMULARIO, *RESPUESTAS]):
+    for i, texto in enumerate(["hola", *FORMULARIO, "no", *RESPUESTAS]):
         assert _post_meta(cliente, _payload_meta(texto, f"wamid.{i}")).status_code == 200
     assert len(llm.prompts) == 1 and len(estado["perfiles"]) == perfiles_antes + 1
     assert estado["perfiles"][-1]["modalidad_ingreso"].startswith("WhatsApp")
@@ -501,3 +502,99 @@ def test_firma_meta_y_mensajes_meta() -> None:
     assert (m.numero, m.texto, m.id) == (WA_ID, "hola", "wamid.9")
     assert wa.mensajes_meta({"entry": [{"changes": [{"value": {"statuses": []}}]}]}) == []
     assert wa.mensajes_meta("basura") == []
+
+
+# ---------------------------------------------------------------- CV en vez de las 5 preguntas
+
+CV_TEXTO = (
+    "Yari Pérez. Experiencia: atiendo la fonda familiar desde 2023. Atiendo a los clientes y les tomo el pedido, "
+    "cobro y doy el vuelto, llevo la caja al cierre del día. Los sábados acomodo mercancía en una tienda del barrio. "
+    "Estudios: bachiller, estudio de noche en la universidad."
+)
+
+
+def _pdf_con_texto(texto: str) -> bytes:
+    from fpdf import FPDF
+
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Helvetica", size=11)
+    pdf.multi_cell(0, 6, texto.encode("latin-1", "replace").decode("latin-1"))
+    return bytes(pdf.output())
+
+
+def _hasta_el_cv(cliente: TestClient) -> str:
+    _enviar(cliente, "hola")
+    for texto in FORMULARIO:
+        r = _enviar(cliente, texto)
+    return r.text
+
+
+def test_el_bot_pregunta_por_el_cv_antes_de_las_preguntas(entorno) -> None:
+    cliente, *_ = entorno
+    assert "¿Tienes CV?" in _hasta_el_cv(cliente)
+    assert "No entendí" in _enviar(cliente, "tal vez").text
+    assert "Pregunta 1 de 5" in _enviar(cliente, "No tengo").text
+
+
+def test_cv_en_pdf_por_whatsapp_arma_el_perfil_sin_las_preguntas(entorno, monkeypatch: pytest.MonkeyPatch) -> None:
+    cliente, estado, llm, tmp_path = entorno
+    pdf = _pdf_con_texto(CV_TEXTO)
+    urls: list[str] = []
+    monkeypatch.setattr(bot, "descargar_adjunto", lambda url: urls.append(url) or pdf)
+    _hasta_el_cv(cliente)
+    url = "https://api.twilio.com/2010-04-01/Accounts/AC1/Messages/MM1/Media/ME1"
+    params = {**_params(""), "NumMedia": "1", "MediaUrl0": url, "MediaContentType0": "application/pdf"}
+    firma = wa.firma_twilio(f"{BASE}/api/whatsapp", params, TOKEN)
+    r = cliente.post("/api/whatsapp", data=params, headers={"X-Twilio-Signature": firma})
+    assert r.status_code == 200 and "Estoy leyendo tu CV" in r.text
+    # Perfil leyó el CV (sin preguntas) y el perfil entró al tablero.
+    assert urls == [url] and len(llm.prompts) == 1 and "cobro y doy el vuelto" in llm.prompts[0]
+    perfil = estado["perfiles"][-1]
+    assert perfil["modalidad_ingreso"].startswith("WhatsApp")
+    entrada = next(e for e in estado["entradas_perfil"] if e["id"] == perfil["id"])
+    assert "respuestas" not in entrada and "cobro y doy el vuelto" in entrada["cv_texto"]
+    avisos = [a for a in _archivos_outbox(tmp_path) if a.name.startswith("whatsapp_")]
+    assert avisos and "Tu perfil está listo, Yari" in avisos[0].read_text(encoding="utf-8")
+    # El número no queda en la base y el CV no queda en la conversación guardada.
+    assert b"60000160" not in (tmp_path / "wa.db").read_bytes()
+    conn = db.conectar(tmp_path / "wa.db")
+    try:
+        [datos] = [f[0] for f in conn.execute("SELECT datos_json FROM whatsapp_conversaciones")]
+    finally:
+        conn.close()
+    assert "vuelto" not in datos and "cv_adjunto" not in datos
+    # Y el joven recibe su código para verlo en Puente.
+    texto = avisos[0].read_text(encoding="utf-8")
+    assert f"/joven#codigo={perfil['id']}." in texto and estado["_tokens_joven"][perfil["id"]] in texto
+
+
+def test_cv_que_no_es_pdf_o_no_se_puede_leer_vuelve_a_la_pregunta(entorno, monkeypatch: pytest.MonkeyPatch) -> None:
+    cliente, estado, llm, tmp_path = entorno
+    _hasta_el_cv(cliente)
+    foto = {**_params(""), "NumMedia": "1", "MediaUrl0": "https://api.twilio.com/x", "MediaContentType0": "image/jpeg"}
+    r = cliente.post("/api/whatsapp", data=foto, headers={"X-Twilio-Signature": wa.firma_twilio(f"{BASE}/api/whatsapp", foto, TOKEN)})
+    assert "solo leo el CV en PDF" in r.text
+    monkeypatch.setattr(bot, "descargar_adjunto", lambda url: b"esto no es un pdf")
+    pdf = {**foto, "MediaContentType0": "application/pdf"}
+    cliente.post("/api/whatsapp", data=pdf, headers={"X-Twilio-Signature": wa.firma_twilio(f"{BASE}/api/whatsapp", pdf, TOKEN)})
+    assert llm.prompts == []
+    assert _conversaciones(tmp_path / "wa.db")[0][1] == "cv"  # puede mandar otro o escribir «no»
+    avisos = [a for a in _archivos_outbox(tmp_path) if a.name.startswith("whatsapp_")]
+    assert avisos and "No pude abrir tu PDF" in avisos[-1].read_text(encoding="utf-8")
+
+
+def test_cv_pegado_como_texto_tambien_sirve(entorno) -> None:
+    cliente, estado, llm, _ = entorno
+    _hasta_el_cv(cliente)
+    r = _enviar(cliente, CV_TEXTO)
+    assert "Estoy leyendo tu CV" in r.text
+    assert len(llm.prompts) == 1 and estado["perfiles"][-1]["nombre"] == "Yari"
+
+
+def test_un_archivo_fuera_del_paso_del_cv_pide_texto(entorno) -> None:
+    cliente, *_ = entorno
+    _enviar(cliente, "hola")
+    params = {**_params(""), "NumMedia": "1", "MediaUrl0": "https://api.twilio.com/x", "MediaContentType0": "application/pdf"}
+    r = cliente.post("/api/whatsapp", data=params, headers={"X-Twilio-Signature": wa.firma_twilio(f"{BASE}/api/whatsapp", params, TOKEN)})
+    assert "no puedo leer archivos" in r.text and bot.PREGUNTAS_FORMULARIO[0][1] in r.text
