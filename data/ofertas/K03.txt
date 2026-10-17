@@ -7,5 +7,5 @@ Zona publicada: 24 de Diciembre
 Salario mensual: no publicado en la página consultada
 Resumen de tareas: Cobros, facturación, órdenes de compra, reportes diarios de caja y atención a clientes.
 Requisitos publicados: Carné de salud blanco y verde; licenciatura completa; al menos un año como cajera.
-Frases a revisar: «Cajera» (sexo implícito; alerta para revisión)
+Frases a revisar: «Cajera» (puesto en femenino): alerta de sexo implícito; no bloquea.
 Nota: el anuncio se incluyó como entrada sin validar para el agente Mercado; no implica que sea apto para postular.
