@@ -735,3 +735,18 @@ def test_el_mensaje_que_edita_el_orientador_llega_a_la_empresa_cegado(
     texto = mensaje.read_text(encoding="utf-8")
     assert "Mensaje editado por la orientadora" in texto and "es puntual y atiende bien al público" in texto
     assert "20 años" not in texto and "soltera" not in texto
+
+
+def test_el_tablero_respeta_puente_outbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sin RUTA_OUTBOX fijada a mano, el CV y el .ics van a PUENTE_OUTBOX, no a outbox/ del repo."""
+    import app.server as srv
+
+    carpeta = tmp_path / "outbox_de_la_demo"
+    monkeypatch.setenv("PUENTE_OUTBOX", str(carpeta))
+    assert srv.RUTA_OUTBOX == srv._RUTA_OUTBOX_POR_DEFECTO  # nadie la fijó: manda la variable
+    estado = obtener_datos_iniciales_demo(db_path=tmp_path / "test_puente.db")
+    procesar_accion_orientador(
+        estado, accion="aprobar", perfil_id="PERFIL-YARITZA", oferta_id="OF-CHORRERA-01", consentimiento_joven=True,
+    )
+    assert (carpeta / "cv_PERFIL-YARITZA_OF-CHORRERA-01.pdf").exists()
+    assert (carpeta / "entrevista_PERFIL-YARITZA_OF-CHORRERA-01.ics").exists()

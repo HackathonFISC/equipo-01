@@ -92,6 +92,18 @@ RUTA_STATIC = RUTA_APP / "static"
 RUTA_RAIZ = RUTA_APP.parent
 RUTA_DATA = RUTA_RAIZ / "data"
 RUTA_OUTBOX = RUTA_RAIZ / "outbox"
+_RUTA_OUTBOX_POR_DEFECTO = RUTA_OUTBOX
+
+
+def _ruta_outbox() -> Path:
+    """Carpeta del CV, el .ics y los mensajes: PUENTE_OUTBOX si está definida, como PUENTE_DB.
+
+    Se lee en cada llamada. Si alguien fijó ``RUTA_OUTBOX`` a mano (las pruebas), manda esa;
+    sin ninguna de las dos, ``outbox/`` del repo.
+    """
+    if RUTA_OUTBOX != _RUTA_OUTBOX_POR_DEFECTO:
+        return RUTA_OUTBOX
+    return Path(os.getenv("PUENTE_OUTBOX") or RUTA_OUTBOX)
 RUTA_DB_TABLERO = Path(tempfile.gettempdir()) / "puente_tablero.db"
 
 PATRON_ID_SEGURO = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -618,7 +630,7 @@ def _compilar_grafo_tablero(
         perfiles_map = {p.id: p for p in modelos_perfiles}
         ofertas_map = {o.id: o for o in modelos_ofertas}
         matches_aprob = [m for m in matches_aprob if m.perfil_id in perfiles_map and m.oferta_id in ofertas_map]
-        RUTA_OUTBOX.mkdir(parents=True, exist_ok=True)
+        _ruta_outbox().mkdir(parents=True, exist_ok=True)
         conn = _conectar_db_estado(estado)
         try:
             # Cada candidato en su propia franja, con la agenda del nodo de Postulación (#186).
@@ -633,7 +645,7 @@ def _compilar_grafo_tablero(
                 ofertas_map,
                 aprobacion=aprobacion,
                 conn=conn,
-                outbox=RUTA_OUTBOX,
+                outbox=_ruta_outbox(),
                 consentimientos=consentimientos,
                 # El mensaje que editó el orientador llega a la empresa, cegado (#187).
                 mensaje_orientador=str(aprobacion.get("mensaje") or ""),
@@ -1381,7 +1393,7 @@ def procesar_accion_orientador(
 
         # Validación de ruta segura en outbox para el par antes de ejecutar
         _ = _ruta_segura_en_outbox(
-            RUTA_OUTBOX, f"cv_{req.perfil_id}_{req.oferta_id}.pdf"
+            _ruta_outbox(), f"cv_{req.perfil_id}_{req.oferta_id}.pdf"
         )
 
         # El orientador confirma solo si el joven no dejó su propio registro (el «sí» de /joven queda con su medio).
@@ -1463,7 +1475,7 @@ def procesar_accion_orientador(
             # Los del grafo primero y luego los del tablero; manda el último registro de la pareja (#52, #54).
             previos = _consentimientos_combinados(estado)
             consentimientos = consentimientos_para([(req.perfil_id, req.oferta_id)], previos, ahora)
-            RUTA_OUTBOX.mkdir(parents=True, exist_ok=True)
+            _ruta_outbox().mkdir(parents=True, exist_ok=True)
             conn = _conectar_db_estado(estado)
             try:
                 if req.perfil_id not in perfiles_map or req.oferta_id not in ofertas_map:
@@ -1484,7 +1496,7 @@ def procesar_accion_orientador(
                         "aprobados": [{"perfil_id": req.perfil_id, "oferta_id": req.oferta_id}],
                     },
                     conn=conn,
-                    outbox=RUTA_OUTBOX,
+                    outbox=_ruta_outbox(),
                     consentimientos=consentimientos,
                     # El mensaje que editó el orientador llega a la empresa, cegado (#187).
                     mensaje_orientador=req.mensaje_empresa or post_activo.get("mensaje_empresa") or "",
@@ -2627,7 +2639,7 @@ async def endpoint_joven_ics(request: Request) -> FileResponse | JSONResponse:
     if nombre is None:
         return JSONResponse({"detail": "Todavía no hay entrevista propuesta para esta vacante."}, status_code=404)
     try:
-        ruta = _ruta_segura_en_outbox(RUTA_OUTBOX, nombre)
+        ruta = _ruta_segura_en_outbox(_ruta_outbox(), nombre)
     except ErrorValidacionTablero as exc:
         return JSONResponse({"detail": str(exc)}, status_code=422)
     if not ruta.is_file():
