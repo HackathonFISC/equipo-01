@@ -3018,6 +3018,53 @@ def _oferta_para_empresa(nueva: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _vacante_publica(o: dict[str, Any]) -> dict[str, Any]:
+    """Lo que dice el volante de una oferta: los campos de `_oferta_para_empresa` más lugar, salario, horario y requisitos."""
+    return {
+        **_oferta_para_empresa(o),
+        "corregimiento": o.get("corregimiento"),
+        "salario_mensual": o.get("salario_mensual"),
+        "horario": o.get("horario"),
+        "habilidades": [str(h) for h in o.get("habilidades") or []],
+        "requisitos_texto": o.get("requisitos_texto") or "",
+    }
+
+
+async def endpoint_empresa_empresas(_request: Request) -> JSONResponse:
+    """Las empresas con ofertas en el estado de la demo, para el selector de /empresa (#310).
+
+    Es solo una simulación para elegir qué empresa se muestra: no abre la lista corta, que sigue pidiendo el
+    código de la empresa. Devuelve id, nombre y número de vacantes; nada de jóvenes ni de postulaciones.
+    """
+    cuentas: dict[str, dict[str, Any]] = {}
+    for o in ESTADO_GLOBAL["ofertas"]:
+        if not o.get("empresa"):
+            continue
+        fila = cuentas.setdefault(empresa.id_empresa(o["empresa"]), {"nombre": o["empresa"], "n_vacantes": 0})
+        fila["n_vacantes"] += 1
+    return JSONResponse(
+        [{"empresa_id": eid, "nombre": f["nombre"], "n_vacantes": f["n_vacantes"]} for eid, f in cuentas.items()]
+    )
+
+
+async def endpoint_empresa_vacantes(request: Request) -> JSONResponse:
+    """Las ofertas públicas de una empresa, con lo que lleva su volante y el resultado de la Ley 11 (#310).
+
+    Solo campos de la oferta: sin jóvenes, perfiles, postulaciones, candidatos ni estado del tablero.
+    """
+    empresa_id = (request.query_params.get("empresa") or "").strip()
+    ofertas = [o for o in ESTADO_GLOBAL["ofertas"] if o.get("empresa") and empresa.id_empresa(o["empresa"]) == empresa_id]
+    if not empresa_id or not ofertas:
+        return JSONResponse({"detail": "No hay una empresa con ese identificador."}, status_code=404)
+    return JSONResponse(
+        {
+            "empresa_id": empresa_id,
+            "nombre": ofertas[0]["empresa"],
+            "vacantes": [_vacante_publica(o) for o in ofertas],
+        }
+    )
+
+
 async def endpoint_empresa_volante(request: Request) -> JSONResponse:
     """La empresa sube el volante de su vacante (PDF o foto) y recibe solo el resultado de esa oferta (#303).
 
@@ -4287,6 +4334,8 @@ app = Starlette(
         Route("/api/orientador/accion", endpoint_accion_orientador, methods=["POST"]),
         Route("/api/ofertas/desbloquear", endpoint_desbloquear_oferta, methods=["POST"]),
         Route("/api/ofertas", endpoint_nueva_oferta, methods=["POST"]),
+        Route("/api/empresa/empresas", endpoint_empresa_empresas, methods=["GET"]),
+        Route("/api/empresa/vacantes", endpoint_empresa_vacantes, methods=["GET"]),
         Route("/api/empresa/ofertas", endpoint_empresa_publicar_oferta, methods=["POST"]),
         Route("/api/empresa/volante", endpoint_empresa_volante, methods=["POST"]),
         Route("/api/ofertas/archivo", endpoint_oferta_archivo, methods=["POST"]),
