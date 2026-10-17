@@ -77,7 +77,7 @@ Cada nodo deja una `Decision` en la lista `decisiones` del estado, que guarda el
 | `puente/graph.py` completo | #10 | Router, `interrupt()`, checkpointer, trazas |
 | `app/server.py` (Starlette) y `app/static/` | #11 | Tablero del orientador: lista corta, bloqueadas, trazas, embudo, Auditor. `uv run uvicorn app.server:app --port 8000`; reemplazó a `app/streamlit_app.py` (`docs/decisiones.md`) |
 | Nodo `postulacion` y lecturas en `db.py` | #12 | La aprobación dispara las acciones |
-| `evals/casos.yaml`, `evals/run.py`, `evals/resultados.md` | #13 | 42 casos en 10 categorías, resultado esperado escrito antes de correr |
+| `evals/casos.yaml`, `evals/run.py`, `evals/resultados.md` | #13, #225 | 48 casos en 14 categorías, resultado esperado escrito antes de correr |
 | `puente/agents/formacion.py` | #14 | Set cover voraz sobre `cursos.csv` (stretch) |
 | `README.md`, `docs/arquitectura.png`, `docs/metodologia.md`, `docs/bitacora_ia.md` | #15 | Entrega escrita |
 | Video | #16 | Guion de 7 pasos, caso Yaritza, grabar en la hora 21 |
