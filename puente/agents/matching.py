@@ -168,6 +168,25 @@ def _cargar_contexto_db(
     return perfiles, ofertas, parejas_fijas
 
 
+def ordenar_lista_corta(lista_corta: list[Any], ofertas: Sequence[Any]) -> list[Any]:
+    """Ordena la lista corta por vacante (en el orden de `ofertas`) y, dentro de cada una, por puntaje de mayor a menor
+    y, a igual puntaje, por id del perfil (#238).
+
+    El solver arma los matches perfil por perfil, así que sin esto cada vacante quedaba ordenada por id del perfil: el
+    orientador veía primero a quien tenía menos puntaje y el mensaje a la empresa presentaba a los candidatos en ese
+    orden. Los minutos de traslado no entran: solo desempatan entre las vacantes de un mismo joven (metodología).
+    La asignación no cambia; cambia el orden en que se ven y se presentan.
+    """
+    orden: dict[str, int] = {}
+    for i, o in enumerate(ofertas):
+        oid = o.get("id") if isinstance(o, dict) else getattr(o, "id", None)
+        orden.setdefault(str(oid), i)
+    return sorted(
+        lista_corta,
+        key=lambda m: (orden.get(str(m.oferta_id), len(orden)), str(m.oferta_id), -m.puntaje, str(m.perfil_id)),
+    )
+
+
 def nodo_matching(state: dict[str, Any]) -> dict[str, Any]:
     """Nodo compatible con LangGraph (EstadoPuente) que ejecuta el solver determinístico y registra la Decision."""
     perfiles = list(state.get("perfiles") or [])
@@ -193,13 +212,16 @@ def nodo_matching(state: dict[str, Any]) -> dict[str, Any]:
     )
 
     sin_oferta = getattr(_schemas_mod, "SIN_OFERTA", "SIN_OFERTA")
-    lista_corta = [
-        m
-        for m in resultados
-        if m.desglose.get("viable", bool(m.oferta_id))
-        and m.oferta_id
-        and m.oferta_id != sin_oferta
-    ]
+    lista_corta = ordenar_lista_corta(
+        [
+            m
+            for m in resultados
+            if m.desglose.get("viable", bool(m.oferta_id))
+            and m.oferta_id
+            and m.oferta_id != sin_oferta
+        ],
+        ofertas,
+    )
 
     decisiones = list(state.get("decisiones", []))
     decisiones.append(
