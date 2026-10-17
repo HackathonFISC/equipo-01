@@ -3965,15 +3965,20 @@ RUTA_STATIC.mkdir(parents=True, exist_ok=True)
 
 
 def cargar_dotenv() -> bool:
-    """Lee `.env` al arrancar el servidor sin pisar el entorno (`override=False`), como `puente/llm.py`.
+    """Lee `.env` sin pisar lo que el entorno ya trae con valor, como `puente/llm.py` (`override=False`).
 
     Sin esto, lo que se lee en cada solicitud (TWILIO_*, PUBLIC_BASE_URL) solo existía si se exportaba a mano o con
     `uv run --env-file .env`, y el webhook de WhatsApp respondía 503 a todo (#160). Lo que este módulo lee al
     importarse (PUENTE_DB del estado inicial, PUENTE_DEMO_PUBLICA para el LLM y el outbox) sigue saliendo del
     entorno, como antes. Se llama por `dotenv.load_dotenv`: así el conftest de las pruebas lo anula.
     """
+    # Una variable vacía cuenta como no definida: si al arrancar `.env` traía `TWILIO_AUTH_TOKEN=` y luego se llenó,
+    # `override=False` dejaría la cadena vacía para siempre. Se carga con override y se devuelven las no vacías.
+    previas = {clave: valor for clave, valor in os.environ.items() if valor}
     try:
-        return bool(dotenv.load_dotenv(RUTA_DOTENV, override=False))
+        cargado = bool(dotenv.load_dotenv(RUTA_DOTENV, override=True))
+        os.environ.update(previas)
+        return cargado
     except Exception:  # noqa: BLE001 - un .env ilegible no tumba el servidor; faltarán las claves y se avisa
         _registro.exception("No se pudo leer %s", RUTA_DOTENV)
         return False

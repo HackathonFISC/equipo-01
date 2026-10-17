@@ -7,6 +7,7 @@ usa su propio estado del tablero, su SQLite y su outbox en `tmp_path`. El númer
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import dotenv
@@ -196,18 +197,24 @@ def test_token_puesto_en_env_con_el_servidor_corriendo(tmp_path: Path, monkeypat
     monkeypatch.setattr(srv, "ESTADO_GLOBAL", srv.obtener_datos_iniciales_demo(db_path=tmp_path / "wa.db"))
     monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path / "outbox")
     archivo = tmp_path / ".env"
+    # Como el .env de la prueba en vivo: las líneas de Twilio existen, vacías, cuando arranca el servidor.
+    archivo.write_text("TWILIO_ACCOUNT_SID=\nTWILIO_AUTH_TOKEN=\n", encoding="utf-8")
     monkeypatch.setattr(srv, "RUTA_DOTENV", archivo)
     monkeypatch.setattr(dotenv, "load_dotenv", dotenv.main.load_dotenv)
-    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "temporal")
-    monkeypatch.delenv("TWILIO_AUTH_TOKEN")
-    monkeypatch.delenv("TWILIO_ACCOUNT_SID", raising=False)
+    for variable in ("TWILIO_AUTH_TOKEN", "TWILIO_ACCOUNT_SID"):
+        monkeypatch.setenv(variable, "temporal")  # setenv y delenv: pytest devuelve el entorno a como estaba
+        monkeypatch.delenv(variable)
     monkeypatch.setenv("PUBLIC_BASE_URL", BASE)
     monkeypatch.delenv("PUENTE_DEMO_PUBLICA", raising=False)
     monkeypatch.delenv("VERCEL", raising=False)
     with TestClient(srv.app) as cliente:
-        assert _enviar(cliente, "hola").status_code == 503  # aún no hay .env
-        archivo.write_text(f"TWILIO_AUTH_TOKEN={TOKEN}\n", encoding="utf-8")
+        assert _enviar(cliente, "hola").status_code == 503  # token vacío en .env
+        archivo.write_text(f"TWILIO_ACCOUNT_SID=\nTWILIO_AUTH_TOKEN={TOKEN}\n", encoding="utf-8")
         assert _enviar(cliente, "hola").status_code == 200
+    # Lo que el entorno ya traía con valor no se pisa.
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "exportado")
+    srv.cargar_dotenv()
+    assert os.environ["TWILIO_AUTH_TOKEN"] == "exportado"
 
 
 def test_sin_public_base_url_reconstruye_la_url_del_tunel(entorno, monkeypatch: pytest.MonkeyPatch) -> None:
