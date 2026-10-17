@@ -2903,6 +2903,13 @@ async def endpoint_index(_request: Request) -> FileResponse:
     return FileResponse(RUTA_STATIC / "index.html")
 
 
+async def endpoint_whatsapp_contacto(_request: Request) -> JSONResponse:
+    """Número del bot de WhatsApp para la burbuja de la web (#304); sin número configurado, la burbuja no sale."""
+    numero = "".join(ch for ch in os.getenv("TWILIO_WHATSAPP_FROM", "") if ch.isdigit())
+    join = os.getenv("TWILIO_SANDBOX_JOIN", "").strip() or None
+    return JSONResponse({"activo": bool(numero), "numero": numero or None, "join": join})
+
+
 async def endpoint_landing(_request: Request) -> FileResponse:
     """Página de entrada (#281): lleva al joven a /joven, a la empresa a /empresa y al orientador a /orientador (#293)."""
     return FileResponse(RUTA_STATIC / "landing.html")
@@ -4284,6 +4291,7 @@ app = Starlette(
         # La landing es la entrada (#293); el tablero del orientador vive en /orientador.
         Route("/", endpoint_landing, methods=["GET"]),
         Route("/inicio", endpoint_landing, methods=["GET"]),
+        Route("/api/whatsapp/contacto", endpoint_whatsapp_contacto, methods=["GET"]),
         Route("/orientador", endpoint_index, methods=["GET"]),
         Route("/api/estado", endpoint_estado, methods=["GET"]),
         Route("/api/orientador/accion", endpoint_accion_orientador, methods=["POST"]),
