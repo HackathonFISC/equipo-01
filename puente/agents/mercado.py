@@ -4,8 +4,9 @@ Reparto de trabajo (AGENTS.md, sección 2):
 - El LLM (Claude vía `puente.llm`, salida estructurada) solo lee la oferta y llena
   `OfertaExtraida` del contrato. El texto de la oferta va como dato entre delimitadores,
   nunca como instrucción; imágenes y PDF van como bloques nativos.
-- El código decide todo lo demás: habilidades contra la taxonomía, legalidad con
-  `puente.rules.discriminacion` sobre el texto original, salario y horario verificados
+- El código decide todo lo demás: habilidades contra la taxonomía (exactas o por raíces, #153-#155),
+  el corregimiento que falta si la ubicación copiada nombra un solo nodo de `data/traslados.csv` (#152),
+  legalidad con `puente.rules.discriminacion` sobre el texto original, salario y horario verificados
   contra el texto (nunca inventados: lo que falta queda `no_publicado` y por confirmar),
   deduplicación por similitud con el mismo corregimiento (#75), sin fusionar empresas distintas ni
   una bloqueada con una que no lo está (#94), y una `Decision` por cada oferta procesada, por cada
@@ -21,7 +22,9 @@ El extractor es inyectable (`Extractor`) para que los tests no dependan de red n
 
 from __future__ import annotations
 
+import csv
 import difflib
+import functools
 import hashlib
 import mimetypes
 import os
@@ -35,7 +38,14 @@ from pydantic import ValidationError
 from pypdf import PdfReader
 
 from puente.rules.discriminacion import Hallazgo, esta_bloqueada, revisar_texto
-from puente.rules.taxonomia import RUTA_TAXONOMIA, cargar_taxonomia, normalizar_habilidad, normalizar_texto
+from puente.rules.taxonomia import (
+    RUTA_TAXONOMIA,
+    buscar_habilidades,
+    cargar_taxonomia,
+    normalizar_habilidad,
+    normalizar_texto,
+)
+from puente.rules.traslados import RUTA_TRASLADOS_DEFAULT, TABLA_ALIAS_LUGARES, normalizar_corregimiento
 from puente.schemas import REQUIERE_CONFIRMACION, Decision, EstadoPuente, HorarioExtraido, Oferta, OfertaExtraida
 
 AGENTE = "mercado"
@@ -263,16 +273,84 @@ def frases_no_verificadas(hallazgos: list[Hallazgo], transcripcion: str) -> list
 
 
 def mapear_habilidades(nombres: list[str], taxonomia: dict[str, dict]) -> tuple[list[str], list[str]]:
-    """Devuelve (skill_id encontrados sin repetir, nombres descartados por no estar en la taxonomía)."""
+    """Devuelve (skill_id encontrados sin repetir, nombres descartados por no estar en la taxonomía).
+
+    Primero la coincidencia exacta; si no hay, la aproximada por raíces de `buscar_habilidades` (#153-#155):
+    «venta de mostrador» es ventas_mostrador aunque la taxonomía diga «ventas de mostrador».
+    """
     encontrados: list[str] = []
     descartados: list[str] = []
     for nombre in nombres:
-        skill_id = normalizar_habilidad(nombre, taxonomia)
-        if skill_id is None:
+        exacta = normalizar_habilidad(nombre, taxonomia)
+        ids = [exacta] if exacta else buscar_habilidades(nombre, taxonomia)
+        if not ids:
             descartados.append(nombre)
-        elif skill_id not in encontrados:
-            encontrados.append(skill_id)
+        encontrados += [skill_id for skill_id in ids if skill_id not in encontrados]
     return encontrados, descartados
+
+
+def habilidades_aproximadas(nombres: list[str], taxonomia: dict[str, dict]) -> dict[str, list[str]]:
+    """Las frases que solo se mapearon por raíces, con sus skill_id: quedan en la Decision para el orientador."""
+    aproximadas = {n: buscar_habilidades(n, taxonomia) for n in nombres if normalizar_habilidad(n, taxonomia) is None}
+    return {nombre: ids for nombre, ids in aproximadas.items() if ids}
+
+
+# Provincias sin nodos en data/traslados.csv. Un alias que se llama igual que una provincia no basta solo:
+# «Herrera» es corregimiento de La Chorrera en la tabla de #51, pero en «Chitré, Herrera» es la provincia.
+_PROVINCIAS = frozenset({"bocas del toro", "cocle", "colon", "chiriqui", "darien", "herrera", "los santos", "veraguas"})
+
+
+@functools.lru_cache(maxsize=4)
+def lugares_conocidos(ruta: Path = RUTA_TRASLADOS_DEFAULT) -> dict[str, str]:
+    """Nombre normalizado -> corregimiento tal como lo escribe `data/traslados.csv` (#51).
+
+    Son los nodos del archivo y los alias de `TABLA_ALIAS_LUGARES` que apuntan a uno de ellos («Albrook» ->
+    «Ancón»), menos los que también son nombre de provincia. Sin el archivo devuelve {}: no se deduce
+    ningún corregimiento. No se modifica el resultado.
+    """
+    try:
+        with open(ruta, encoding="utf-8-sig", newline="") as archivo:
+            filas = list(csv.DictReader(archivo))
+    except FileNotFoundError:
+        return {}
+    nodos: dict[str, str] = {}
+    for fila in filas:
+        for nombre in (fila.get("origen") or "", fila.get("destino") or ""):
+            if nombre.strip():
+                nodos.setdefault(normalizar_corregimiento(nombre), nombre.strip())
+    alias = {n: nodos[nodo] for n, nodo in TABLA_ALIAS_LUGARES.items() if nodo in nodos and n not in _PROVINCIAS}
+    return {**alias, **nodos}
+
+
+def lugares_en(texto: str, lugares: dict[str, str]) -> set[str]:
+    """Corregimientos de `lugares` que el texto nombra (por su nombre o un alias), como palabras completas."""
+    plano = normalizar_corregimiento(texto)
+    return {lugar for nombre, lugar in lugares.items() if re.search(rf"(?<!\w){re.escape(nombre)}(?!\w)", plano)}
+
+
+def inferir_corregimiento(ubicacion: str, texto: str, lugares: dict[str, str] | None = None) -> tuple[str, str]:
+    """(corregimiento, nota) cuando el extractor dejó vacío el corregimiento pero copió la ubicación (#152).
+
+    El modelo deja null el corregimiento si la oferta da un distrito («La Chorrera», «San Miguelito») y no un
+    corregimiento; pero esos nombres son nodos de `data/traslados.csv`, y sin corregimiento no hay traslado
+    medible y el solver deja fuera la oferta. Se acepta solo si `ubicacion_texto` nombra exactamente un lugar
+    conocido (nodo o alias, palabras completas) y ese lugar también aparece en el texto de la oferta; sin
+    texto (imagen sin transcripción) basta la ubicación, igual que se acepta el corregimiento del extractor.
+    Si nombra varios, no se elige ninguno. Nunca se busca fuera de la ubicación: un lugar citado por otro
+    motivo («bus desde Albrook») no es dónde está la vacante.
+    """
+    lugares = lugares_conocidos() if lugares is None else lugares
+    candidatos = lugares_en(ubicacion, lugares)
+    if texto.strip():
+        candidatos &= lugares_en(texto, lugares)
+    if len(candidatos) > 1:
+        varios = ", ".join(sorted(candidatos))
+        return "", f"corregimiento sin determinar: «{ubicacion}» nombra varios lugares conocidos ({varios}); no se elige uno"
+    if not candidatos:
+        return "", ""
+    [lugar] = candidatos
+    return lugar, (f"corregimiento «{lugar}» tomado de la ubicación que copia la oferta («{ubicacion}»), "
+                   "nodo de data/traslados.csv; el extractor lo dejó vacío")
 
 
 def _resumen(texto: str, largo: int = 80) -> str:
@@ -352,16 +430,23 @@ def _procesar_entrada(
         texto, notas = entrada.texto, []
         alertas, bloqueada = _aplicar_reglas(texto)
     habilidades, descartadas = mapear_habilidades(extraida.habilidades, taxonomia)
+    aproximadas = habilidades_aproximadas(extraida.habilidades, taxonomia)
     salario, nota_salario = verificar_salario(extraida.salario_mensual, texto)
     horario, nota_horario = verificar_horario(extraida.horario, texto)
     puesto, empresa = extraida.puesto or "", extraida.empresa or ""
-    id_oferta = "of-" + huella(texto, empresa, puesto, extraida.corregimiento or "")[:10]
+    corregimiento, nota_corregimiento = (extraida.corregimiento or "").strip(), ""
+    if not corregimiento and extraida.ubicacion_texto:
+        corregimiento, nota_corregimiento = inferir_corregimiento(extraida.ubicacion_texto, texto)
+    # El id lleva el corregimiento final (#75): dos sucursales sin texto, cada una con su ubicación, no comparten id.
+    id_oferta = "of-" + huella(texto, empresa, puesto, corregimiento)[:10]
 
     razones = [_razon_reglas(alertas, bloqueada)]
+    if aproximadas:
+        razones.append(f"habilidades por coincidencia aproximada con la taxonomía: {aproximadas}")
     if descartadas:
         razones.append(f"habilidades descartadas por no estar en la taxonomía: {descartadas}")
-    razones += [n for n in (nota_salario, nota_horario) if n]
-    if not extraida.corregimiento and extraida.ubicacion_texto:
+    razones += [n for n in (nota_salario, nota_horario, nota_corregimiento) if n]
+    if not corregimiento and extraida.ubicacion_texto and not nota_corregimiento:
         razones.append(f"corregimiento sin determinar; la oferta dice «{extraida.ubicacion_texto}»")
     if capa_de_texto:
         razones.append("PDF con capa de texto: leído con pypdf antes del LLM; reglas sobre ese texto")
@@ -372,7 +457,7 @@ def _procesar_entrada(
             id=id_oferta,
             puesto=puesto,
             empresa=empresa,
-            corregimiento=extraida.corregimiento or "",
+            corregimiento=corregimiento,
             # Lo que la oferta no publica queda en None y por confirmar, no se descarta (#42).
             salario_mensual=salario,
             salario_tipo=_salario_tipo(extraida, salario),

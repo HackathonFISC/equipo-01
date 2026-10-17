@@ -126,9 +126,9 @@ casos:
         nueva_ejecucion: "2026-10-16 23:22: ya responde tras #140; nuevo fallo #152"
       - fecha: "2026-10-16"
         observado: "Mercado dejó corregimiento vacío aunque la oferta dice La Chorrera."
-        cambio_hecho: "Pendiente de corregir en #152; esperado original conservado"
+        cambio_hecho: "Causa: Claude deja null el corregimiento cuando la oferta da un distrito (La Chorrera) y lo copia en ubicacion_texto («La Chorrera, calle 5ta»); Mercado no lo resolvía. puente/agents/mercado.py (inferir_corregimiento) toma el corregimiento de ubicacion_texto si nombra un solo nodo o alias de traslados.csv, como palabra completa, y también aparece en el texto; si nombra varios no elige y no busca fuera de la ubicación. «Cajero/a» y «S.A.» no causaban el fallo (el comparador ya usa contención); evals/run.py los normaliza igual en los dos lados. Sin cambiar prompt, esquema, taxonomía ni grabación (#152); esperado original conservado"
         issue: "#152"
-        nueva_ejecucion: "pendiente"
+        nueva_ejecucion: "2026-10-17 00:30, evals.run en modo reproducir con la grabación de Claude: ok, corregimiento La Chorrera"
 
   - id: EXT-02
     categoria: extraccion_ofertas
@@ -154,9 +154,9 @@ casos:
         nueva_ejecucion: "2026-10-16 23:22: ya responde tras #140; nuevo fallo #153"
       - fecha: "2026-10-16"
         observado: "Mercado solo conservó inventario; faltan reposición y recepción de mercancía."
-        cambio_hecho: "Pendiente de corregir en #153; esperado original conservado"
+        cambio_hecho: "Causa: la extracción sí traía las tres («acomodar productos en estantes», «recibir mercancía», «control de inventario»), pero la normalización a la taxonomía era solo exacta y descartó las dos primeras («acomodar productos», «recibir mercancías»). Mercado usa ahora, si no hay coincidencia exacta, buscar_habilidades de puente/rules/taxonomia.py: compara raíces (sin palabras vacías, plural, infinitivo ni -ción) y acepta una frase que contiene un nombre de dos o más palabras. Perfil sigue con la coincidencia exacta. Sin cambiar taxonomia.csv, prompt ni grabación (#153); esperado original conservado"
         issue: "#153"
-        nueva_ejecucion: "pendiente"
+        nueva_ejecucion: "2026-10-17 00:30, evals.run en modo reproducir con la grabación de Claude: ok, habilidades [reposicion_productos, recepcion_mercancia, inventario]"
 
   - id: EXT-03
     categoria: extraccion_ofertas
@@ -182,9 +182,9 @@ casos:
         nueva_ejecucion: "2026-10-16 23:22: ya responde tras #140; nuevo fallo #154"
       - fecha: "2026-10-16"
         observado: "Mercado dejó corregimiento vacío y solo conservó Excel; faltan registro y archivo."
-        cambio_hecho: "Pendiente de corregir en #154; esperado original conservado"
+        cambio_hecho: "Causas: (1) como EXT-01, la oferta da el distrito San Miguelito, Claude deja null el corregimiento y lo copia en ubicacion_texto; Mercado lo toma ahora de ahí si es un nodo de traslados.csv (#152). (2) La extracción sí traía «registro de datos de facturas» y «archivo de documentos», pero la normalización exacta no las unía a «registro de datos» y «archivar documentos»; ahora Mercado usa buscar_habilidades por raíces (#153). Sin cambiar prompt, esquema, taxonomía ni grabación (#154); esperado original conservado"
         issue: "#154"
-        nueva_ejecucion: "pendiente"
+        nueva_ejecucion: "2026-10-17 00:30, evals.run en modo reproducir con la grabación de Claude: ok, corregimiento San Miguelito y habilidades [excel_basico, registro_datos, archivo_documentos]"
 
   - id: EXT-04
     categoria: extraccion_ofertas
@@ -209,9 +209,9 @@ casos:
         nueva_ejecucion: "2026-10-16 23:22: ya responde tras #140; nuevo fallo #155"
       - fecha: "2026-10-16"
         observado: "Mercado omitió ventas de mostrador y solo conservó atención al cliente."
-        cambio_hecho: "Pendiente de corregir en #155; esperado original conservado"
+        cambio_hecho: "Causa: la extracción sí traía «venta de mostrador», pero la normalización exacta no la unía a «ventas de mostrador» (plural) y la descartó. Mercado usa ahora buscar_habilidades por raíces cuando no hay coincidencia exacta (#153). Sin cambiar prompt, esquema, taxonomía ni grabación (#155); esperado original conservado"
         issue: "#155"
-        nueva_ejecucion: "pendiente"
+        nueva_ejecucion: "2026-10-17 00:30, evals.run en modo reproducir con la grabación de Claude: ok, habilidades [ventas_mostrador, atencion_cliente]"
 
   - id: EXT-05
     categoria: extraccion_ofertas
