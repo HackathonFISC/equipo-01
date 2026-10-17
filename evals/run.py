@@ -29,7 +29,7 @@ import sys
 import unicodedata
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +55,10 @@ PERFIL_LLM = ("puente.agents.perfil", "llm_puente", 6)  # (prompt) -> PerfilExtr
 GUARDRAILS_EVALUAR = ("puente.guardrails", "evaluar_entrada", 9)  # (entrada) -> list[ResultadoGuardrail]
 SOLVER_ASIGNAR = ("puente.solver.asignacion", "asignar", 4)
 AUDITOR_AUDITAR = ("puente.agents.auditor", "auditar_lista_corta", 8)
+HORARIO_LEER = ("puente.agents.horario", "leer_tirilla", 164)  # (archivo, *, hoy) -> RevisionTirilla (usa puente.llm)
+HORARIO_VALIDAR = ("puente.agents.horario", "validar_bloques", 164)  # (bloques) -> ValidacionBloques
+HORARIO_CONVERTIR = ("puente.agents.horario", "a_horario_clases", 164)  # (bloques válidos) -> list[Horario]
+RAIZ_REPO = Path(__file__).resolve().parent.parent
 
 # Reglas de discriminación -> artículo de la Ley 11 de 2005 (solo las que bloquean) o alerta (las que no).
 ARTICULO_POR_REGLA = {"edad": "art. 2", "sexo": "art. 1"}
@@ -400,6 +404,31 @@ def _diferencias_guardrails(esperado: dict, observado: dict) -> list[str]:
     return malos
 
 
+def _franjas(valor: Any) -> list[tuple[tuple[str, ...], str, str]]:
+    return sorted(
+        (tuple(_a_dict(h).get("dias") or ()), str(_a_dict(h).get("hora_inicio")), str(_a_dict(h).get("hora_fin")))
+        for h in _lista(valor or [])
+    )
+
+
+def _diferencias_horario(esperado: dict, observado: dict) -> list[str]:
+    """#164: horario_clases idéntico; problemas iguales por (índice, campo); vigencia y excepciones si se esperan."""
+    malos = []
+    if "horario_clases" in esperado and _franjas(esperado["horario_clases"]) != _franjas(observado.get("horario_clases")):
+        malos.append("horario_clases")
+    if "problemas" in esperado:
+        clave = lambda p: (int(_a_dict(p).get("indice") or 0), str(_a_dict(p).get("campo")))  # noqa: E731
+        if sorted(map(clave, esperado["problemas"] or [])) != sorted(map(clave, observado.get("problemas") or [])):
+            malos.append("problemas")
+    if "vigente_hasta" in esperado and esperado["vigente_hasta"] != observado.get("vigente_hasta"):
+        malos.append("vigente_hasta")
+    if "excepciones" in esperado:
+        rango = lambda e: (str(_a_dict(e).get("desde")), str(_a_dict(e).get("hasta")))  # noqa: E731
+        if sorted(map(rango, esperado["excepciones"] or [])) != sorted(map(rango, observado.get("excepciones") or [])):
+            malos.append("excepciones")
+    return malos
+
+
 _DIFERENCIAS: dict[str, Callable[[dict, dict], list[str]]] = {
     "extraccion_ofertas": _diferencias_extraccion,
     "requisitos_discriminatorios": _diferencias_discriminacion,
@@ -407,6 +436,8 @@ _DIFERENCIAS: dict[str, Callable[[dict, dict], list[str]]] = {
     "matching_factible": _diferencias_matching,
     "sesgo_contrafactual": _diferencias_sesgo,
     "guardrails": _diferencias_guardrails,
+    "horario_tirilla": _diferencias_horario,
+    "horario_validacion": _diferencias_horario,
 }
 
 
@@ -705,6 +736,26 @@ def _ejecutar_guardrails(caso: dict) -> dict:
     return {"veredicto": veredicto, "sigue_como_dato": not rechazos, "llamo_llm": espia["llamadas"] > 0}
 
 
+def _ejecutar_horario_tirilla(caso: dict) -> dict:
+    """#164: leer_tirilla(ruta, hoy=) -> RevisionTirilla. Claude con visión vía puente.llm (grabación en evals/grabaciones);
+    una grabación o clave faltante sube como ErrorLLM y el caso queda omitido."""
+    entrada = caso["entrada"]
+    argumentos: dict[str, Any] = {"hoy": date.fromisoformat(str(entrada["hoy"]))} if entrada.get("hoy") else {}
+    revision = _resolver(HORARIO_LEER)(RAIZ_REPO / entrada["ruta"], **argumentos)
+    datos = _a_dict(revision.como_dict() if hasattr(revision, "como_dict") else revision)
+    return {c: datos.get(c) for c in ("horario_clases", "problemas", "vigente_hasta", "excepciones", "confianza")}
+
+
+def _ejecutar_horario_validacion(caso: dict) -> dict:
+    """#164: validar_bloques(bloques) -> ValidacionBloques; a_horario_clases(válidos) -> list[Horario]. Sin LLM."""
+    validacion = _resolver(HORARIO_VALIDAR)(caso["entrada"]["bloques"])
+    horario = _resolver(HORARIO_CONVERTIR)(validacion.bloques)
+    return {
+        "problemas": [{"indice": p.indice, "campo": p.campo, "motivo": p.motivo} for p in validacion.problemas],
+        "horario_clases": [_a_dict(h) for h in _lista(horario)],
+    }
+
+
 def ejecutores_por_defecto(
     taxonomia: dict | None = None,
     *,
@@ -722,6 +773,8 @@ def ejecutores_por_defecto(
         "matching_factible": _ejecutar_matching,
         "sesgo_contrafactual": _ejecutar_sesgo,
         "guardrails": _ejecutar_guardrails,
+        "horario_tirilla": _ejecutar_horario_tirilla,
+        "horario_validacion": _ejecutar_horario_validacion,
     }
 
 
