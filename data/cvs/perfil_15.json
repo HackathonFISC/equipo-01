@@ -1,0 +1,44 @@
+{
+  "id": "P15",
+  "nombre": "Josué (ficticio)",
+  "edad": 18,
+  "corregimiento": "Ancón",
+  "horario_libre": [
+    {
+      "dias": [
+        "lunes",
+        "martes",
+        "miercoles",
+        "jueves",
+        "viernes",
+        "sabado",
+        "domingo"
+      ],
+      "hora_inicio": "06:00",
+      "hora_fin": "15:00"
+    }
+  ],
+  "salario_minimo": 600,
+  "presupuesto_pasaje_diario": 1.0,
+  "experiencia_texto": "Preparaba café espresso, capuchinos y chocolate caliente para los huéspedes. Rotulaba con fecha los envases de comida en la cámara fría. Seguía las normas de higiene: gorro, guantes y lavado de manos en cada turno. Inglés Básico (INADEH, 2025)",
+  "habilidades": [
+    {
+      "skill_id": "preparar_bebidas_calientes",
+      "evidencia": "Preparaba café espresso, capuchinos y chocolate caliente"
+    },
+    {
+      "skill_id": "etiquetar_alimentos",
+      "evidencia": "Rotulaba con fecha los envases de comida"
+    },
+    {
+      "skill_id": "seguridad_salud",
+      "evidencia": "Seguía las normas de higiene"
+    },
+    {
+      "skill_id": "ingles_basico",
+      "evidencia": "Inglés Básico (INADEH, 2025)"
+    }
+  ],
+  "datos_sinteticos": true,
+  "horario_clases": []
+}

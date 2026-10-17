@@ -163,9 +163,9 @@ def test_aceptar_genera_el_ics_y_deja_la_postulacion_en_entrevista(entorno) -> N
     assert "yaritza" not in ics.text.lower() and "yaritza" not in ics.headers["content-disposition"].lower()
     inicio_utc = datetime.fromisoformat(aceptado["entrevista"]["inicio"]).astimezone(timezone.utc)
     assert inicio_utc.strftime("%Y%m%dT%H%M") in ics.text  # la hora que dejó Postulación en `entrevistas`
-    # El enlace de descarga lleva el token en la URL, como el .ics del joven.
+    # El código va solo en el encabezado: en la URL quedaría en el registro del servidor (#258).
     token = estado["_tokens_empresa"][SUPER]
-    assert cliente.get(f"/api/empresa/{SUPER}/ics/{CHORRERA}/{ref}?token={token}").status_code == 200
+    assert cliente.get(f"/api/empresa/{SUPER}/ics/{CHORRERA}/{ref}?token={token}").status_code == 401
     assert any(a.startswith("entrevista_confirmada_") for a in post["archivos_generados"])
 
     # Una Decision de la empresa, sin datos personales.
@@ -374,3 +374,215 @@ def test_con_puente_outbox_el_ics_que_confirma_la_empresa_va_a_esa_carpeta(
         assert _accion(cliente, estado, accion="aceptar", oferta_id=CHORRERA, ref=ref).status_code == 200
         assert cliente.get(f"/api/empresa/{SUPER}/ics/{CHORRERA}/{ref}", headers=_cred(estado)).status_code == 200
     assert list(carpeta.glob(f"{empresa.PREFIJO_ICS}{CHORRERA}_*.ics"))  # el .ics confirmado quedó ahí
+
+
+# ---------------------------------------------------------------- #235: las rutas viejas ya no saltan el código de la empresa
+
+
+def _estado_y_avisos(cliente: TestClient, estado: dict, tmp_path: Path) -> tuple[str, int]:
+    """Estado de la postulación de Yaritza a la vacante del súper y cuántos avisos al joven hay en outbox."""
+    post = next(p for p in estado["postulaciones"] if p["perfil_id"] == YARITZA and p["oferta_id"] == CHORRERA)
+    avisos = len(list((tmp_path / "outbox").glob("joven_*"))) if (tmp_path / "outbox").exists() else 0
+    return post["estado"], avisos
+
+
+@pytest.mark.parametrize("tipo", ["rechaza", "cubierta"])
+def test_evento_de_empresa_sin_codigo_ya_no_rechaza_ni_cubre(entorno, tipo: str) -> None:
+    """`POST /api/empresa/evento` con rechaza o cubierta daba 200 sin código y dejaba la pareja en no_seleccionado sin
+    avisar al joven. Ahora responde 409 y no cambia nada (#235)."""
+    cliente, estado, tmp_path = entorno
+    _aprobar(cliente, YARITZA, CHORRERA)
+    antes = _estado_y_avisos(cliente, estado, tmp_path)
+    assert antes[0] == "enviado"
+
+    r = cliente.post(
+        "/api/empresa/evento",
+        json={"tipo": tipo, "perfil_id": YARITZA, "oferta_id": CHORRERA, "empresa": "Cualquiera", "nota": "x"},
+    )
+    assert r.status_code == 409
+    assert "/empresa/lista-corta" in r.json()["detail"] and "código" in r.json()["detail"]
+    assert _estado_y_avisos(cliente, estado, tmp_path) == antes  # ni estado ni avisos cambiaron
+    assert _estado_sqlite(tmp_path / "empresa.db", YARITZA, CHORRERA) == "enviado"
+
+
+def test_la_ruta_oficial_para_rechazar_sigue_funcionando_con_codigo(entorno) -> None:
+    """El 409 no toca el camino bueno: rechazar con el código de la empresa, por la lista corta, sigue dando 200."""
+    cliente, estado, _ = entorno
+    _aprobar(cliente, YARITZA, CHORRERA)
+    [candidato] = _vacante(_lista(cliente, estado), CHORRERA)["candidatos"]
+    r = _accion(cliente, estado, accion="rechazar", oferta_id=CHORRERA, ref=candidato["ref"], nota="eligió otro perfil")
+    assert r.status_code == 200, r.text
+
+
+def test_postulaciones_de_la_empresa_piden_codigo_y_son_ciegas(entorno) -> None:
+    """Sin código no hay lista; con el código, cada empresa ve solo lo suyo y sin `perfil_id` ni nombre (#235)."""
+    cliente, estado, _ = entorno
+    _aprobar(cliente, YARITZA, CHORRERA)
+    assert cliente.get("/api/empresa/postulaciones").status_code == 401
+    assert cliente.get("/api/empresa/postulaciones", headers={"X-Token-Empresa": "no-es-el-codigo"}).status_code == 401
+
+    r = cliente.get("/api/empresa/postulaciones", headers=_cred(estado, SUPER))
+    assert r.status_code == 200
+    [fila] = r.json()["postulaciones"]
+    assert fila["oferta_id"] == CHORRERA and fila["estado"] == "enviado"
+    texto = r.text
+    for dato in ("perfil_id", "nombre_perfil", "PERFIL-", "Yaritza", "yaritza"):
+        assert dato not in texto, dato
+    # La misma referencia opaca con que la empresa responde en la lista corta.
+    [candidato] = _vacante(_lista(cliente, estado), CHORRERA)["candidatos"]
+    assert fila["ref"] == candidato["ref"]
+
+    # Otra empresa, con su propio código, no ve las postulaciones del súper.
+    ajena = cliente.get("/api/empresa/postulaciones", headers=_cred(estado, PROGRESO))
+    assert ajena.status_code == 200 and ajena.json()["postulaciones"] == []
+
+
+# ---------------------------------------------------------------- #258: /empresa solo publica y el rol lleva a la lista ciega
+
+
+def test_el_selector_de_roles_lleva_a_la_lista_ciega(entorno) -> None:
+    """El menú del tablero y `roles_sistema` ya no llevan a la página vieja, que no es ciega (#258)."""
+    cliente, _estado, _ = entorno
+    roles = {r["rol"]: r for r in cliente.get("/api/admin/operacion").json()["roles_sistema"]}
+    assert roles["empresa"]["ruta"] == "/empresa/lista-corta"
+    menu = (empresa.RUTA_STATIC / "index.html").read_text(encoding="utf-8")
+    assert 'href="/empresa/lista-corta"' in menu and 'href="/empresa"' not in menu
+    assert cliente.get(roles["empresa"]["ruta"]).status_code == 200
+
+
+def test_la_pagina_empresa_solo_publica_y_no_muestra_a_nadie(entorno) -> None:
+    """/empresa ya no lista postulaciones ni deja citar, contratar o rechazar: eso es de la lista ciega (#258)."""
+    cliente, _estado, _ = entorno
+    r = cliente.get("/empresa")
+    assert r.status_code == 200
+    html = r.text
+    for viejo in (
+        "Citar a entrevista",
+        "Contratar",
+        "Rechazar",
+        "nombre_perfil",
+        "Candidato ciego",
+        "/api/empresa/evento",
+        "/api/empresa/postulaciones",
+        "lista-postulaciones-empresa",
+        "perfil_id",
+    ):
+        assert viejo not in html, viejo
+    assert "/api/empresa/ofertas" in html and 'href="/empresa/lista-corta"' in html
+    assert 'fetch("/api/ofertas"' not in html  # esa ruta devuelve el estado del tablero: es del orientador
+    assert 'class="boton' not in html  # esas clases no existen en joven.css: los botones son .btn
+
+
+def test_las_habilidades_de_publicar_no_van_fijas_en_el_codigo(entorno) -> None:
+    """La página manda las habilidades que la empresa marca; antes llevaban siempre las mismas dos (#258)."""
+    cliente, _estado, _ = entorno
+    html = cliente.get("/empresa").text
+    assert 'habilidades: ["atencion_cliente", "manejo_caja"]' not in html
+    assert html.count('name="habilidad"') >= 4
+    assert "Elige al menos una habilidad" in html
+
+
+def test_pasos_6_y_7_del_video_los_chips_de_yaritza_sobreviven_al_rechazo_y_al_reinicio(entorno) -> None:
+    """Paso 6 (aprobar tras «Reiniciar demo») y paso 7 (la empresa rechaza): los archivos siguen en la tarjeta.
+
+    Lo comprueba en tres lugares: /api/estado, el estado guardado en SQLite y el estado que se reconstruye
+    cuando el servidor arranca de nuevo (#227).
+    """
+    cliente, _, tmp_path = entorno
+    assert cliente.post("/api/reset").status_code == 200
+    estado = srv.ESTADO_GLOBAL  # el reinicio deja un estado nuevo, con sus propios códigos
+    _aprobar(cliente, YARITZA, VISTA_ALEGRE)
+
+    def archivos(publico: dict) -> list[str]:
+        post = next(p for p in publico["postulaciones"] if p["perfil_id"] == YARITZA and p["oferta_id"] == VISTA_ALEGRE)
+        return list(post.get("archivos_generados") or [])
+
+    def completos(nombres: list[str]) -> bool:
+        return (
+            any(n.startswith("cv_") for n in nombres)
+            and any(n.startswith("carta_") for n in nombres)
+            and any(n.endswith(".ics") for n in nombres)
+            and any(n.startswith("mensaje_") for n in nombres)
+        )
+
+    antes = archivos(cliente.get("/api/estado").json())
+    assert completos(antes), antes
+
+    [candidato] = _vacante(_lista(cliente, estado, PROGRESO), VISTA_ALEGRE)["candidatos"]
+    r = _accion(cliente, estado, PROGRESO, accion="rechazar", oferta_id=VISTA_ALEGRE, ref=candidato["ref"],
+                nota="Buscamos experiencia en inventario formal")
+    assert r.status_code == 200, r.text
+
+    despues = cliente.get("/api/estado").json()
+    assert archivos(despues) == antes  # la empresa rechazó, pero los archivos que ya salieron siguen en la tarjeta
+    guardado = srv._cargar_estado_tablero_db(tmp_path / "empresa.db")
+    assert guardado is not None and archivos(guardado) == antes  # y en lo que se guardó en SQLite
+    reconstruido = srv.obtener_datos_iniciales_demo(db_path=tmp_path / "empresa.db")
+    assert archivos(reconstruido) == antes  # y cuando el servidor arranca otra vez
+
+
+# ---------------------------------------------------------------- #258: el .ics por encabezado y lo que Puente ya sabe proponer
+
+
+def test_el_ics_se_descarga_con_encabezado_y_la_pagina_no_pone_el_codigo_en_la_url(entorno) -> None:
+    cliente, estado, _ = entorno
+    _aprobar(cliente, YARITZA, CHORRERA)
+    [candidato] = _vacante(_lista(cliente, estado), CHORRERA)["candidatos"]
+    ref = candidato["ref"]
+    assert _accion(cliente, estado, accion="aceptar", oferta_id=CHORRERA, ref=ref).status_code == 200
+    assert cliente.get(f"/api/empresa/{SUPER}/ics/{CHORRERA}/{ref}", headers=_cred(estado)).status_code == 200
+    token = estado["_tokens_empresa"][SUPER]
+    assert cliente.get(f"/api/empresa/{SUPER}/ics/{CHORRERA}/{ref}?token={token}").status_code == 401
+    js = (empresa.RUTA_STATIC / "empresa_lista.js").read_text(encoding="utf-8")
+    assert "?token=" not in js and 'headers: { "X-Token-Empresa": tokenActual }' in js
+
+
+def _empresa_de(estado: dict, oferta_id: str) -> str:
+    return empresa.id_empresa(next(o["empresa"] for o in estado["ofertas"] if o["id"] == oferta_id))
+
+
+def test_una_vacante_bloqueada_trae_la_version_legal_del_redactor(entorno) -> None:
+    """`propuestas.oferta_corregida` ya no va fija en None: con el Redactor (plantilla, sin LLM) trae el texto
+    corregido, las frases que cambian y solo la cifra de viables, nunca quiénes son (#258, #157)."""
+    cliente, estado, _ = entorno
+    bloqueada = "OF-BLOQ-EDAD-04"
+    empresa_id = _empresa_de(estado, bloqueada)
+    lista = _lista(cliente, estado, empresa_id)
+    vacante = _vacante(lista, bloqueada)
+    assert vacante["bloqueada"] is True
+    p = vacante["propuestas"]["oferta_corregida"]
+    assert p is not None and p["queda_bloqueada"] is False
+    assert p["cambios"] and all(c["frase"] and c["regla"] and c["fundamento"] for c in p["cambios"])
+    assert isinstance(p["viables_antes"], int) and isinstance(p["viables_despues"], int)
+    assert p["viables_despues"] >= p["viables_antes"]
+    frases = " ".join(c["frase"].lower() for c in p["cambios"])
+    assert frases and frases not in p["requisitos"].lower()  # lo que se cambió ya no está en el texto nuevo
+    texto = json.dumps(lista, ensure_ascii=False)
+    for dato in ("PERFIL-", "perfil_id", "viables_antes_ids", "Yaritza", "Kevin", "Daniela"):
+        assert dato not in texto, dato
+    # Una vacante que no está bloqueada no lleva propuesta de texto.
+    abierta = _vacante(_lista(cliente, estado), CHORRERA)
+    assert abierta["bloqueada"] is False and abierta["propuestas"]["oferta_corregida"] is None
+
+
+def test_la_cobertura_por_turnos_aprobada_sale_en_la_lista_con_las_refs_de_los_dos(entorno) -> None:
+    cliente, estado, _ = entorno
+    assert cliente.post("/api/orientador/cobertura-turnos/demo", json={}).status_code == 200
+    oferta = estado["coberturas_turnos"][0]["oferta_id"]
+    empresa_id = _empresa_de(estado, oferta)
+    empresa.anunciar_codigos_empresa(estado)  # la empresa del escenario recibe su código en la primera visita
+    # Mientras nadie esté enviado, no hay nada que mostrar: la propuesta es del orientador.
+    assert _vacante(_lista(cliente, estado, empresa_id), oferta)["propuestas"]["cobertura_turnos"] is None
+    r = cliente.post(
+        "/api/orientador/cobertura-turnos/aprobar",
+        json={"oferta_id": oferta, "consentimiento_manana": True, "consentimiento_tarde": True},
+    )
+    assert r.status_code == 200, r.text
+    vacante = _vacante(_lista(cliente, estado, empresa_id), oferta)
+    cobertura = vacante["propuestas"]["cobertura_turnos"]
+    assert cobertura is not None and [t["turno"] for t in cobertura["turnos"]] == ["mañana", "tarde"]
+    assert cobertura["horario_completo"] and all(t["inicio"] and t["fin"] for t in cobertura["turnos"])
+    # Cada turno apunta al candidato de la lista con su referencia opaca, sin perfil ni nombre.
+    assert {t["ref"] for t in cobertura["turnos"]} == {c["ref"] for c in vacante["candidatos"]}
+    texto = json.dumps(vacante, ensure_ascii=False)
+    assert "PERFIL-" not in texto and "Sofía" not in texto

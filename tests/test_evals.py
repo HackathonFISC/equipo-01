@@ -1227,7 +1227,7 @@ def test_diferencias_campos_respeta_el_orden_solo_donde_importa():
 
 def test_casos_del_225_corren_sin_llm_y_sin_tocar_la_raiz(casos, monkeypatch):
     """Los 6 casos con los ejecutores reales, en carpetas temporales: sin LLM, sin red y sin outbox ni base en la raíz.
-    E2E-01 puede fallar solo por el orden de la lista corta (#238) hasta que se arregle."""
+    E2E-01 pasa desde que la lista corta sale por puntaje y no por id (#238)."""
     import puente.llm as capa
 
     monkeypatch.setattr(capa, "_cliente_por_defecto", lambda *a, **k: pytest.fail("llamada real al modelo"))
@@ -1239,7 +1239,7 @@ def test_casos_del_225_corren_sin_llm_y_sin_tocar_la_raiz(casos, monkeypatch):
     for caso_id in ("POS-01", "POS-02", "REA-01", "FOR-01", "FOR-02"):
         assert resultados[caso_id].estado == "ok", resultados[caso_id].detalle
     e2e = resultados["E2E-01"]
-    assert e2e.estado == "ok" or e2e.detalle.startswith("0/1 corridas acertaron; difiere en listas_cortas;"), e2e.detalle
+    assert e2e.estado == "ok", e2e.detalle
     assert {p.name for p in RAIZ.iterdir()} == antes
 
 

@@ -31,7 +31,6 @@
     enviado: "CV enviado",
     entrevista: "Entrevista",
   };
-  const ETIQUETAS = { ...ESTADOS, no_seleccionado: "No seleccionado/a" };
 
   let chat = null; // { perfil_id, token } de la entrevista abierta
   let progreso = null; // lo último que dijo el servidor: { indice, pregunta, total, respondidas, completa }
@@ -316,9 +315,35 @@
 
   function construirTirilla() {
     lectura = null;
-    const archivo = el("input", { type: "file", id: "f2-tirilla-archivo", accept: "image/*,application/pdf", capture: "environment" });
+    // Dos botones: con `capture` el teléfono abre solo la cámara y no deja elegir un PDF (#257). Los campos de archivo
+    // van ocultos y cada botón abre el suyo; al elegir uno, el otro se vacía, y «Leer mi tirilla» lee el elegido.
+    const foto = el("input", { type: "file", id: "f2-tirilla-foto", accept: "image/*", capture: "environment", hidden: true });
+    const pdf = el("input", { type: "file", id: "f2-tirilla-pdf", accept: "application/pdf", hidden: true });
+    const elegido = el("p", { id: "f2-tirilla-elegido", class: "nota", role: "status", hidden: true });
+    const tomarFoto = el("button", { type: "button", class: "btn btn-sec", text: "Tomar foto" });
+    const subirPdf = el("button", { type: "button", class: "btn btn-sec", text: "Subir PDF" });
+    tomarFoto.addEventListener("click", () => foto.click());
+    subirPdf.addEventListener("click", () => pdf.click());
+    const alElegir = (propio, otro, que) => () => {
+      otro.value = "";
+      const archivo = propio.files && propio.files[0];
+      elegido.hidden = !archivo;
+      // Solo el tipo y el tamaño: el nombre del archivo puede traer datos del joven.
+      if (archivo) elegido.textContent = `Elegiste ${que} (${Math.max(1, Math.round(archivo.size / 1024))} KB).`;
+    };
+    foto.addEventListener("change", alElegir(foto, pdf, "una foto"));
+    pdf.addEventListener("change", alElegir(pdf, foto, "un PDF"));
+    const archivoElegido = {
+      actual: () => (foto.files && foto.files[0]) || (pdf.files && pdf.files[0]) || null,
+      limpiar: () => {
+        foto.value = "";
+        pdf.value = "";
+        elegido.hidden = true;
+      },
+      enfocar: () => tomarFoto.focus(),
+    };
     const leer = el("button", { type: "button", class: "btn btn-pri", text: "Leer mi tirilla" });
-    leer.addEventListener("click", () => leerTirilla(archivo, leer));
+    leer.addEventListener("click", () => leerTirilla(archivoElegido, leer));
     const aMano = el("button", { type: "button", class: "btn btn-sec", text: "Escribir mis clases a mano" });
     aMano.addEventListener("click", () =>
       editarBloques(
@@ -335,7 +360,7 @@
           "Toma una foto de tu tirilla de matrícula o sube el PDF (jpg, png o pdf de hasta 5 MB). Leemos solo los días y las horas de tus clases " +
           "y la imagen no se guarda. Antes de guardar, revisa cada clase: con tu horario buscamos trabajos que no se crucen con ellas.",
       }),
-      el("label", { class: "campo" }, el("span", { text: "Foto o PDF de tu tirilla" }), archivo),
+      el("div", { class: "campo" }, el("span", { text: "Foto o PDF de tu tirilla" }), el("div", { class: "acciones" }, tomarFoto, subirPdf), foto, pdf, elegido),
       el("div", { class: "acciones" }, aMano, leer),
       el("p", { id: "f2-tirilla-error", class: "error", role: "alert", hidden: true }),
       el("div", { id: "f2-tirilla-revision", class: "f2-revision", hidden: true }),
@@ -352,12 +377,12 @@
     });
   }
 
-  async function leerTirilla(input, boton) {
+  async function leerTirilla(elegido, boton) {
     ocultar("f2-tirilla-error");
-    const archivo = input.files && input.files[0];
+    const archivo = elegido.actual();
     if (!archivo) {
       mostrarErrorEn("f2-tirilla-error", "Elige la foto o el PDF de tu tirilla.");
-      input.focus();
+      elegido.enfocar();
       return;
     }
     if (archivo.size > MAX_BYTES_TIRILLA) {
@@ -370,7 +395,7 @@
       try {
         const contenido_base64 = await comoBase64(archivo);
         const r = await api(`/api/joven/${encodeURIComponent(perfilActual)}/tirilla`, { nombre: `tirilla${extension}`, contenido_base64 });
-        input.value = "";
+        elegido.limpiar();
         editarBloques(r.revision);
       } catch (err) {
         mostrarErrorEn("f2-tirilla-error", err.message);
@@ -406,6 +431,16 @@
     lista.hidden = !problemas.length;
   }
 
+  // «1830», «830», «6:30», «18.30» o «18h30» -> «18:30» / «08:30» / «06:30»; lo que no es una hora, "".
+  function normalizarHora(valor) {
+    const m = String(valor ?? "").trim().match(/^(\d{1,2})\s*[:.hH]?\s*(\d{2})?$/);
+    if (!m) return "";
+    const horas = Number(m[1]);
+    const minutos = m[2] === undefined ? 0 : Number(m[2]);
+    if (horas > 23 || minutos > 59) return "";
+    return `${String(horas).padStart(2, "0")}:${String(minutos).padStart(2, "0")}`;
+  }
+
   function filaBloque(bloque, problemas) {
     const leido = String(bloque.dia ?? "").trim();
     const dia = el(
@@ -417,20 +452,23 @@
     // Lo que se leyó y no es un día exacto ("Mié", "M") se deja a la vista: el servidor dice si sirve.
     if (leido && !DIAS.includes(leido)) dia.append(el("option", { value: leido, text: `«${leido}» (leído)` }));
     dia.value = leido;
-    const hora = (campo, titulo, ejemplo) =>
+    // `type="time"`: el teléfono muestra su selector de hora, que siempre trae los dos puntos (el teclado numérico de
+    // iPhone no los tiene y el servidor rechazaba «1830») (#257). Lo que se leyó ("1830", "6:30", "18.30") se lleva a
+    // «HH:MM»; si no se puede, el campo queda vacío para que lo elija.
+    const hora = (campo, titulo) =>
       el(
         "label",
         { class: "campo" },
         el("span", { text: titulo }),
-        el("input", { "data-campo": campo, inputmode: "numeric", maxlength: 5, placeholder: ejemplo, value: bloque[campo] ?? "", autocomplete: "off" }),
+        el("input", { "data-campo": campo, type: "time", step: 60, value: normalizarHora(bloque[campo]), autocomplete: "off" }),
       );
     const quitar = el("button", { type: "button", class: "btn btn-sec f2-quitar", text: "Quitar" });
     const fila = el(
       "li",
       { class: "f2-bloque" },
       el("label", { class: "campo" }, el("span", { text: "Día" }), dia),
-      hora("hora_inicio", "Desde", "18:30"),
-      hora("hora_fin", "Hasta", "20:00"),
+      hora("hora_inicio", "Desde"),
+      hora("hora_fin", "Hasta"),
       el(
         "label",
         { class: "campo f2-materia" },
@@ -533,25 +571,8 @@
 
   // ---------- Mis postulaciones ----------
 
-  async function bajarIcs(ofertaId) {
-    const url = `/api/joven/${encodeURIComponent(perfilActual)}/ics/${encodeURIComponent(ofertaId)}`;
-    const respuesta = await fetch(url, { headers: { "X-Token-Joven": tokenActual || "" } });
-    if (!respuesta.ok) {
-      let datos = null;
-      try {
-        datos = await respuesta.json();
-      } catch {
-        datos = null;
-      }
-      throw new Error(mensajeDeError(respuesta.status, datos));
-    }
-    const enlace = URL.createObjectURL(await respuesta.blob());
-    const a = el("a", { href: enlace, download: `entrevista_${ofertaId}.ics`, hidden: true });
-    document.body.append(a);
-    a.click();
-    a.remove();
-    window.setTimeout(() => URL.revokeObjectURL(enlace), 1000);
-  }
+  // La descarga con fetch (y el token en el encabezado) es la de joven.js; la tarjeta de Vacantes usa la misma.
+  const bajarIcs = (ofertaId) => bajarIcsDelJoven(perfilActual, ofertaId);
 
   function botonesDecision(p) {
     const decidir = (otorgado) => (e) => {
@@ -592,6 +613,42 @@
     return el("div", { class: "consentir" }, boton, el("p", { class: "nota", text: "La fecha es una propuesta: la empresa la confirma." }));
   }
 
+  // Mensaje a la empresa (#289): solo cuando su CV ya llegó. El servidor le quita cédula, teléfono, dirección y los datos
+  // que identifican (edad, género, dónde vives, nombre) antes de guardarlo; la empresa lo lee como «Candidato N».
+  function cajaMensaje(p) {
+    const empresa = p.empresa || "la empresa";
+    const area = el("textarea", { class: "f2-mensaje-texto", rows: 3, maxlength: 500, "aria-label": `Mensaje para ${empresa}`, placeholder: "Escribe tu mensaje" });
+    const resultado = el("p", { class: "nota", role: "status" });
+    const boton = el("button", { type: "button", class: "btn btn-sec", text: "Enviar mensaje" });
+    boton.addEventListener("click", () => {
+      const texto = area.value.trim();
+      if (!texto) {
+        resultado.textContent = "Escribe tu mensaje.";
+        return;
+      }
+      conBoton(boton, "Enviando…", async () => {
+        try {
+          const r = await api(`/api/joven/${encodeURIComponent(perfilActual)}/mensaje`, { oferta_id: p.oferta_id, texto });
+          area.value = "";
+          resultado.textContent = r.se_limpio
+            ? "Mensaje enviado. Antes le quitamos datos personales."
+            : `Mensaje enviado a ${empresa}.`;
+        } catch (err) {
+          resultado.textContent = err.message;
+        }
+      });
+    });
+    return el(
+      "div",
+      { class: "f2-mensaje" },
+      el("h4", { text: `Escríbele a ${empresa}` }),
+      el("p", { class: "nota", text: "La empresa no ve tu nombre, tu edad ni dónde vives, y tu cédula, teléfono y dirección no salen." }),
+      area,
+      el("div", { class: "acciones" }, boton),
+      resultado,
+    );
+  }
+
   function tarjetaPostulacion(p) {
     const clave = p.estado === "preseleccionado" && p.no_del_joven ? "no_consentido" : p.estado;
     const partes = [
@@ -599,7 +656,9 @@
         "div",
         { class: "vacante-cabeza" },
         el("h3", { text: p.puesto }),
-        el("span", { class: "etiqueta-estado", "data-estado": clave, text: ETIQUETAS[clave] || clave }),
+        // La misma etiqueta que la tarjeta de Vacantes (textoDeEstado, en joven.js): una postulación que la empresa
+        // rechazó después de recibir el CV no dice «no se envió» (#257).
+        el("span", { class: "etiqueta-estado", "data-estado": clave, text: textoDeEstado(clave, p.se_envio) }),
       ),
       el("p", { class: "empresa", text: [p.empresa, p.corregimiento].filter(Boolean).join(" · ") }),
       el(
@@ -629,6 +688,7 @@
       partes.push(el("p", { class: "f2-no", text: "Dijiste que no: tu CV no se envía a esta empresa, aunque tu orientador/a lo apruebe. Tu decisión manda." }));
     }
     if (p.puede_consentir) partes.push(botonesDecision(p));
+    if (p.se_envio) partes.push(cajaMensaje(p));
     if (p.ics) partes.push(botonIcs(p));
     return el("article", { class: "tarjeta vacante f2-postulacion", "data-oferta": p.oferta_id }, partes);
   }
@@ -641,6 +701,18 @@
     });
     const sueltos = (datos.avisos || []).filter((a) => !datos.postulaciones.some((p) => p.oferta_id === a.oferta_id));
     const avisos = sueltos.map((a) => el("div", { class: "f2-aviso", role: "note" }, el("p", { text: a.texto })));
+    // Si un recálculo la saca de la lista corta de una vacante, se le dice (antes esa postulación desaparecía) (#257).
+    for (const s of datos.salieron_de_lista || []) {
+      const donde = [s.puesto, s.empresa].filter(Boolean).join(" · ");
+      avisos.push(
+        el(
+          "div",
+          { class: "f2-aviso", role: "note" },
+          el("strong", { text: "Ya no estás en la lista corta de una vacante" }),
+          el("p", { text: `${donde}. Tu orientador/a revisa otras vacantes contigo y te avisa.` }),
+        ),
+      );
+    }
     const lista = datos.postulaciones.length
       ? el("div", { class: "lista" }, datos.postulaciones.map(tarjetaPostulacion))
       : el("p", { class: "vacio", text: "Todavía no tienes postulaciones. Cuando tu orientador/a arme tu lista corta, aparecen aquí." });
@@ -702,7 +774,7 @@
     nuevaEntrevistaFase1();
   };
 
-  document.head.append(el("link", { rel: "stylesheet", href: "/static/joven_fase2.css?v=1" }));
+  document.head.append(el("link", { rel: "stylesheet", href: "/static/joven_fase2.css?v=2026101702" }));
   construirChat();
   const botonChat = el("button", { type: "button", id: "f2-btn-chat", class: "btn btn-sec", text: "Prefiero la entrevista por chat" });
   botonChat.addEventListener("click", () => iniciarChat(botonChat));

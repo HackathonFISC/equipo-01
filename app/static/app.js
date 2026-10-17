@@ -2,9 +2,23 @@
 
 let estadoActual = null;
 
-// Límites que aplica el solver; solo se usan para dibujar las barras de cada opción.
-const LIMITE_TRASLADO_MIN = 60;
-const LIMITE_PASAJE_PCT = 15;
+// <limites-solver>
+// Límites que aplica el solver, para dibujar las barras y los textos de cada opción. Salen del estado
+// (`operacion.umbrales_solver`), que el orientador puede editar: con el traslado en 95 min la barra dice «máx. 95 min».
+// 60 min y 15 % son los de ConfigSolver y solo valen mientras el estado no los trae (#255).
+const LIMITE_TRASLADO_POR_DEFECTO = 60;
+const LIMITE_PASAJE_PCT_POR_DEFECTO = 15;
+
+function limitesSolver(estado) {
+  const umbrales = (estado && estado.operacion && estado.operacion.umbrales_solver) || {};
+  const minutos = Number(umbrales.max_minutos_traslado);
+  const fraccion = Number(umbrales.max_porcentaje_salario_pasaje); // 0.15 = 15 % del salario
+  return {
+    minutos: minutos > 0 ? minutos : LIMITE_TRASLADO_POR_DEFECTO,
+    pasajePct: fraccion > 0 ? Math.round(fraccion * 1000) / 10 : LIMITE_PASAJE_PCT_POR_DEFECTO,
+  };
+}
+// </limites-solver>
 
 const NOMBRES_HABILIDAD = {
   atencion_cliente: "Atención al cliente",
@@ -33,6 +47,10 @@ const AGENTES = {
   orientador_humano: { nombre: "Orientador", icono: "check" },
   orientador: { nombre: "Orientador (Admin)", icono: "check" },
   empresa: { nombre: "Empresa", icono: "briefcase" },
+  evento_empresa: { nombre: "Evento de la empresa", icono: "briefcase" },
+  avisos: { nombre: "Avisos", icono: "send" },
+  aprobacion: { nombre: "Aprobación", icono: "check" },
+  cobertura_turnos: { nombre: "Cobertura por turnos", icono: "briefcase" },
   joven: { nombre: "Joven (Aplicante)", icono: "user" },
   tablero: { nombre: "Tablero", icono: "list" },
   consentimiento: { nombre: "Consentimiento", icono: "check" },
@@ -102,16 +120,19 @@ function nombreHabilidad(skillId) {
 }
 
 // Los nombres en outbox/ son largos; se muestran por tipo y el nombre completo queda en el title.
+function tipoArchivo(nombre) {
+  if (/^cv_/i.test(nombre)) return { etiqueta: "CV · PDF", icono: "file" };
+  if (/^carta_/i.test(nombre)) return { etiqueta: "Carta · PDF", icono: "file" };
+  if (/^telegram_/i.test(nombre)) return { etiqueta: "Telegram", icono: "send" };
+  if (/^mensaje_/i.test(nombre)) return { etiqueta: "Mensaje", icono: "send" };
+  if (/\.ics$/i.test(nombre)) return { etiqueta: "Cita .ics", icono: "clock" };
+  return { etiqueta: nombre, icono: "file" };
+}
+
 function chipsArchivos(archivos) {
-  const tipo = (nombre) => {
-    if (/^cv_/i.test(nombre)) return { etiqueta: "CV · PDF", icono: "file" };
-    if (/^telegram_/i.test(nombre)) return { etiqueta: "Telegram", icono: "send" };
-    if (/\.ics$/i.test(nombre)) return { etiqueta: "Cita .ics", icono: "clock" };
-    return { etiqueta: nombre, icono: "file" };
-  };
   return `<div class="archivos">${(archivos || [])
     .map((a) => {
-      const t = tipo(String(a));
+      const t = tipoArchivo(String(a));
       return `<span class="archivo" title="outbox/${escaparHtml(a)}">${icono(t.icono)}${escaparHtml(t.etiqueta)}</span>`;
     })
     .join("")}</div>`;
@@ -182,6 +203,31 @@ async function conBoton(boton, tarea) {
   }
 }
 
+// Las alertas de la Ley 11 de la oferta, con su frase, a la vista justo donde el orientador decide (#249). Salen de
+// los datos de la oferta (texto que escribió una empresa): todo va escapado. Sin alertas, el diálogo queda igual.
+function alertasLey11ParaAprobar(ofertaId) {
+  const alertas = ((estadoActual?.ofertas || []).find((o) => o.id === ofertaId)?.alertas) || [];
+  if (!alertas.length) return "";
+  const filas = alertas
+    .map(
+      (a) => `<li class="regla">
+        ${a.tipo === "bloqueo" ? pill("Bloqueo", "bad", "ban") : pill("Alerta", "warn", "alert")}
+        <span class="regla__frase">«${escaparHtml(a.frase)}»</span>
+        <span class="regla__norma">${escaparHtml(a.regla)}</span>
+      </li>`
+    )
+    .join("");
+  const hay = alertas.some((a) => a.tipo === "bloqueo");
+  const nota = hay
+    ? "Esta oferta se desbloqueó con motivo, pero conserva frases que la Ley 11 de 2005 prohíbe."
+    : "No bloquean el envío: las decide el orientador.";
+  return `<div class="dialog__alertas" role="note">
+      <strong>Alertas de la Ley 11 de 2005 en esta oferta</strong>
+      <p>${nota}</p>
+      <ul class="reglas">${filas}</ul>
+    </div>`;
+}
+
 function confirmar({ titulo, html, textoBoton, tono = "primary" }) {
   const dlg = document.getElementById("dlg-confirmar");
   if (!dlg || typeof dlg.showModal !== "function") {
@@ -229,10 +275,23 @@ let refrescando = false;
 const CAMPO_DE_ESCRITURA =
   "textarea, select, [contenteditable], input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit])";
 
+// Lo que el orientador escribió o marcó en la lista corta y aún no envió: la nota, el mensaje editado a la empresa
+// y «El joven consintió». Un redibujo lo borraría aunque el campo ya no tenga el foco (#230). Se compara con el
+// valor con que se dibujó (`defaultValue`, `defaultChecked`); el refresco espera a que se envíe o se deje como estaba.
+function hayCambiosSinEnviar() {
+  return [...document.querySelectorAll("#contenedor-matches input, #contenedor-matches textarea, #contenedor-matches select")]
+    .some((campo) => {
+      if (campo.type === "checkbox" || campo.type === "radio") return campo.checked !== campo.defaultChecked;
+      if (campo.tagName === "SELECT") return [...campo.options].some((o) => o.selected !== o.defaultSelected);
+      return campo.value !== campo.defaultValue;
+    });
+}
+
 async function refrescarSiCambio() {
   if (refrescando || document.visibilityState !== "visible") return;
   if (document.querySelector("dialog[open]")) return;
   if (document.activeElement && document.activeElement.matches(CAMPO_DE_ESCRITURA)) return;
+  if (hayCambiosSinEnviar()) return;
   refrescando = true;
   try {
     const resp = await fetch("/api/estado"); // sin llamarApi: un fallo de este ciclo no muestra avisos
@@ -260,9 +319,42 @@ function aplicarEstado(payload) {
   return true;
 }
 
+// Qué hizo el grafo con el caso (`accion_grafo` del Auditor), en palabras. Antes el aviso afirmaba siempre que el caso
+// había regresado al Matching y mostraba el identificador interno, aun cuando el recálculo ya se había agotado y el
+// caso quedaba con el orientador (#256).
+function textoAccionAuditor(accion) {
+  if (accion === "matching" || accion === "perfil") {
+    return `El Auditor devolvió el caso a ${accion === "perfil" ? "Perfil" : "Matching"} para recalcular una vez.`;
+  }
+  return "El recálculo no quitó el sesgo: el caso queda con el orientador, que puede revisarlo, pero no se puede aprobar mientras el Auditor detecte sesgo.";
+}
+
+// Los avisos que el grafo deja para el orientador (la empresa rechazó o cubrió una vacante, #54) llegan en
+// `avisos_orientador`, pero nada los dibujaba (#256). El más reciente va primero; se muestran los últimos 3.
+function renderizarAvisosOrientador() {
+  const cont = document.getElementById("avisos-orientador");
+  if (!cont) return;
+  const avisos = [...(estadoActual.avisos_orientador || [])].reverse();
+  if (!avisos.length) {
+    cont.innerHTML = "";
+    return;
+  }
+  const hora = (a) => (a.timestamp ? ` <span class="muted">· ${escaparHtml(String(a.timestamp).slice(11, 19))}</span>` : "");
+  const items = avisos
+    .slice(0, 3)
+    .map((a) => `<li>${escaparHtml(a.texto || `${a.tipo || "aviso"}: ${a.perfil_id || ""} en ${a.oferta_id || ""}`)}${hora(a)}</li>`)
+    .join("");
+  const mas = avisos.length > 3 ? `<p class="muted">Y ${avisos.length - 3} aviso${avisos.length - 3 === 1 ? "" : "s"} anterior${avisos.length - 3 === 1 ? "" : "es"}.</p>` : "";
+  cont.innerHTML = `<div class="banner banner--info" role="status">${icono("info")}<div>
+      <strong>${avisos.length === 1 ? "Aviso para el orientador" : `${avisos.length} avisos para el orientador`}</strong>
+      <ul class="avisos__lista">${items}</ul>${mas}
+    </div></div>`;
+}
+
 function renderizarTodo() {
   if (!estadoActual) return;
   renderizarEncabezado();
+  renderizarAvisosOrientador();
   renderizarFlujo();
   renderizarKPIs();
   renderizarMetricasImpacto();
@@ -286,7 +378,7 @@ function renderizarEncabezado() {
   const aud = estadoActual.auditoria || {};
   const badge = document.getElementById("badge-grafo");
   if (aud.sesgo_detectado) {
-    badge.textContent = "Auditor devolvió el caso a Matching";
+    badge.textContent = "Auditor detectó sesgo: aprobación bloqueada";
     badge.className = "status-pill status-alert";
   } else if (estadoActual.estado_grafo === "postulacion_ejecutada") {
     badge.textContent = "Grafo reanudado · postulación enviada";
@@ -352,10 +444,17 @@ function renderizarKPIs() {
   document.getElementById("kpi-matches").textContent = String(matches.length);
   document.getElementById("kpi-auditoria").textContent = porcentaje(pct);
 
+  // Los textos que nombran los límites del solver salen del mismo lugar que las barras (#255).
+  const limites = limitesSolver(estadoActual);
+  document.getElementById("kpi-matches-foot").textContent =
+    `Traslado ≤ ${limites.minutos} min · pasaje ≤ ${limites.pasajePct} % del salario`;
+  document.getElementById("hint-limite-min").textContent = String(limites.minutos);
+  document.getElementById("hint-limite-pct").textContent = String(limites.pasajePct);
+
   const footAud = document.getElementById("kpi-auditoria-foot");
   const tarjetaAud = footAud.closest(".kpi");
   if (aud.sesgo_detectado) {
-    footAud.textContent = "Sesgo detectado: el caso volvió a Matching";
+    footAud.textContent = "Sesgo detectado: no se puede aprobar";
     tarjetaAud.classList.add("kpi--alerta");
   } else {
     footAud.textContent = "Sin sesgo detectado · corregimiento fijo";
@@ -492,14 +591,15 @@ function partirCurso(texto) {
 }
 
 function motivosDescarte(motivo) {
+  const limites = limitesSolver(estadoActual);
   return String(motivo || "")
     .split(/;\s*/)
     .filter(Boolean)
     .map((parte) => {
       if (/bloqueada/i.test(parte)) return pill("Bloqueada por Ley 11", "bad", "ban");
       const traslado = parte.match(/traslado (\d+) min/i);
-      if (traslado) return pill(`Traslado ${traslado[1]} min (máx. ${LIMITE_TRASLADO_MIN})`, "warn", "clock");
-      if (/% del salario/i.test(parte)) return pill(`Pasaje > ${LIMITE_PASAJE_PCT} % del salario`, "warn", "wallet");
+      if (traslado) return pill(`Traslado ${traslado[1]} min (máx. ${limites.minutos})`, "warn", "clock");
+      if (/% del salario/i.test(parte)) return pill(`Pasaje > ${limites.pasajePct} % del salario`, "warn", "wallet");
       if (/presupuesto/i.test(parte)) {
         const diario = parte.match(/pasaje diario (\$[\d.]+)/i);
         return pill(`Pasaje ${diario ? diario[1] + "/día " : ""}> su presupuesto`, "warn", "wallet");
@@ -542,6 +642,7 @@ function renderizarOpcion(m, indice, perfil, oferta) {
   const minutos = Number(d.minutos_traslado ?? 0);
   const salario = Number(m.salario_mensual || oferta?.salario_mensual || 0);
   const pctPasaje = salario > 0 ? (Number(d.pasaje_mensual || 0) / salario) * 100 : 0;
+  const limites = limitesSolver(estadoActual);
 
   const evidencias = evidenciasDe(m, perfil, oferta);
   const itemsEvidencia = evidencias.length
@@ -586,7 +687,7 @@ function renderizarOpcion(m, indice, perfil, oferta) {
         <input type="text" id="${escaparHtml(notaId)}" class="input" placeholder="Nota del orientador (opcional)" value="${escaparHtml(post?.comentario_orientador || "")}" />
         <div class="acciones__fila">
           <button type="button" class="btn btn--primary btn-accion-hitl" data-accion="aprobar" ${datosPar}
-            ${estadoActual.auditoria?.sesgo_detectado ? 'disabled title="El Auditor detectó sesgo: el caso volvió a Matching"' : ""}>
+            ${estadoActual.auditoria?.sesgo_detectado ? 'disabled title="El Auditor detectó sesgo: no se puede aprobar hasta restaurar el flujo"' : ""}>
             ${icono("send")}Aprobar y enviar
           </button>
           <div class="acciones__secundarias">
@@ -630,13 +731,13 @@ function renderizarOpcion(m, indice, perfil, oferta) {
         </div>
         <div class="metrica">
           <dt>${icono("clock")}Traslado</dt>
-          <dd>${minutos} min <span class="metrica__sub">máx. ${LIMITE_TRASLADO_MIN} min</span></dd>
-          <div class="barra barra--warn"><i style="--v:${Math.min(100, (minutos / LIMITE_TRASLADO_MIN) * 100)}"></i></div>
+          <dd>${minutos} min <span class="metrica__sub">máx. ${limites.minutos} min</span></dd>
+          <div class="barra barra--warn"><i style="--v:${Math.min(100, (minutos / limites.minutos) * 100)}"></i></div>
         </div>
         <div class="metrica">
           <dt>${icono("wallet")}Pasaje</dt>
           <dd>${dinero(d.pasaje_diario)}/día <span class="metrica__sub">${pctPasaje.toFixed(1)} % del salario</span></dd>
-          <div class="barra barra--warn"><i style="--v:${Math.min(100, (pctPasaje / LIMITE_PASAJE_PCT) * 100)}"></i></div>
+          <div class="barra barra--warn"><i style="--v:${Math.min(100, (pctPasaje / limites.pasajePct) * 100)}"></i></div>
         </div>
       </dl>
       ${d.fuente_traslado ? `<p class="metricas__fuente">${icono("info")}Traslado y pasaje: ${escaparHtml(d.fuente_traslado)}</p>` : ""}
@@ -679,7 +780,9 @@ function renderizarPersona(perfil, matches) {
   if (ordenados.length) {
     opciones = `<div class="opciones">${ordenados.map((m, i) => renderizarOpcion(m, i, perfil, mapaOfertas.get(m.oferta_id))).join("")}</div>`;
   } else if (!rechazadas.length) {
-    opciones = `<div class="vacio">${icono("briefcase")}<strong>Ninguna oferta cumple sus restricciones</strong>Traslado, pasaje u horario dejan fuera todas las vacantes válidas.</div>`;
+    // La causa la calcula el servidor (#245): restricciones, cupo lleno o sin ofertas; el texto fijo es solo de respaldo.
+    const sin = estadoActual.sin_opcion?.[perfil.id];
+    opciones = `<div class="vacio">${icono("briefcase")}<strong>${escaparHtml(sin?.titulo || "Ninguna oferta cumple sus restricciones")}</strong>${escaparHtml(sin?.texto || "Traslado, pasaje, salario, horario, habilidades o la Ley 11 dejan fuera todas las vacantes.")}</div>`;
   }
 
   const listaRechazadas = rechazadas.length
@@ -837,7 +940,7 @@ function renderizarListaCorta() {
 
   const bloqueo = estadoActual.auditoria?.sesgo_detectado
     ? `<div class="banner banner--bad" role="alert">${icono("alert")}<div><strong>No se puede aprobar mientras el Auditor detecte sesgo.</strong>
-        Cambiar el nombre o el género altera el resultado; el caso volvió a Matching. Revisa la pestaña Auditoría de sesgo.</div></div>`
+        Cambiar el nombre o el género altera el resultado. Revisa la pestaña Auditoría de sesgo.</div></div>`
     : "";
 
   const pendientes = matches.filter(
@@ -867,7 +970,7 @@ function devolverFoco(perfilId) {
 }
 
 const TEXTOS_ACCION = {
-  aprobar: "Postulación enviada: CV, mensaje y cita quedaron en outbox/.",
+  aprobar: "Postulación enviada: CV, carta, mensaje y cita quedaron en outbox/.",
   editar: "Nota guardada. La opción sigue por aprobar.",
   quitar_candidato: "Candidato retirado de esta vacante; Matching recalculado.",
   rechazar: "Opción rechazada. No se envió nada a la empresa.",
@@ -901,7 +1004,7 @@ async function ejecutarAccionOrientador(boton) {
     const ok = await confirmar({
       titulo: `¿Enviar la postulación de ${match?.nombre_perfil || perfilId}?`,
       html: `<p><strong>${puesto}</strong> en ${empresa}. Al aprobar, el grafo se reanuda y se generan:</p>
-        <ul><li>CV en PDF sin cédula, teléfono ni dirección</li><li>Mensaje para la empresa (Telegram u <code>outbox/</code>)</li><li>Cita de entrevista en <code>.ics</code></li></ul>`,
+        <ul><li>CV en PDF sin cédula, teléfono ni dirección</li><li>Mensaje para la empresa (Telegram u <code>outbox/</code>)</li><li>Cita de entrevista en <code>.ics</code></li></ul>${alertasLey11ParaAprobar(ofertaId)}`,
       textoBoton: "Aprobar y enviar",
     });
     if (!ok) return;
@@ -1032,11 +1135,27 @@ function razonTraza(razon) {
     </details>`;
 }
 
+// El filtro trae los agentes de siempre y suma los que aparecen en el historial y no estaban (empresa, evento de la
+// empresa, avisos, orientador, etc.), para poder filtrar por cualquiera de ellos (#256).
+function completarFiltroDeTrazas(historial) {
+  const filtroEl = document.getElementById("filtro-agente");
+  const presentes = new Set([...filtroEl.options].map((o) => o.value));
+  for (const agente of [...new Set(historial.map((d) => d.agente))].sort()) {
+    if (!agente || presentes.has(agente)) continue;
+    const opcion = document.createElement("option");
+    opcion.value = agente;
+    opcion.textContent = (AGENTES[agente] || { nombre: agente }).nombre;
+    filtroEl.appendChild(opcion);
+  }
+}
+
 function renderizarTrazas() {
-  const filtro = document.getElementById("filtro-agente").value;
-  const decisiones = (estadoActual.decisiones || []).filter(
-    (d) => filtro === "TODOS" || d.agente === filtro
-  );
+  const filtroEl = document.getElementById("filtro-agente");
+  // `trazas` es el historial completo; `decisiones` solo la corrida actual (respaldo si el servidor no lo manda).
+  const historial = estadoActual.trazas || estadoActual.decisiones || [];
+  completarFiltroDeTrazas(historial);
+  const filtro = filtroEl.value;
+  const decisiones = historial.filter((d) => filtro === "TODOS" || d.agente === filtro);
   const lista = document.getElementById("tabla-decisiones-body");
 
   if (decisiones.length === 0) {
@@ -1198,7 +1317,7 @@ function renderizarAuditoria() {
       <div>
         <strong>El Auditor detuvo el flujo: solo ${escaparHtml(porcentaje(pct))} de las variantes dan el mismo resultado.</strong>
         Cambiar el nombre o el género alteró las habilidades o el puntaje de ${afectados} ${afectados === 1 ? "joven" : "jóvenes"}.${escaparHtml(origen)}
-        El caso volvió a Matching (<code>accion_grafo = "${escaparHtml(aud.accion_grafo)}"</code>) y no llega al orientador. El detalle está en la tabla.
+        ${escaparHtml(textoAccionAuditor(aud.accion_grafo))} El detalle está en la tabla.
       </div>`;
     btnSesgo.innerHTML = `${icono("refresh")}<span>Restaurar el flujo sin sesgo</span>`;
     btnSesgo.className = "btn btn--ok";
@@ -1382,7 +1501,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (aplicarEstado(await llamarApi("/api/auditor/simular-sesgo", { activar }))) {
         mostrarToast(
           activar
-            ? "Sesgo simulado: el Auditor detuvo el flujo y devolvió el caso a Matching."
+            ? "Sesgo simulado: el Auditor detectó sesgo y la aprobación quedó bloqueada."
             : "Flujo restaurado: 100 % de las variantes dan el mismo resultado."
         );
       }

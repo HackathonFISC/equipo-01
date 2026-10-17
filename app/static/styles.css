@@ -1,95 +1,53 @@
-/* Puente · tablero del orientador
-   Sin fuentes ni recursos externos: la demo tiene que correr sin conexión. */
+/* SkillMatch · tablero del orientador, diseño V3 Líquido con la paleta Ámbar (#284)
+   Siempre oscuro. Sin fuentes ni recursos externos: la demo tiene que correr sin conexión. */
 
 :root {
-  --bg: #f5f4f0;
-  --surface: #ffffff;
-  --surface-2: #f2f0ea;
-  --surface-3: #e8e5dd;
-  --border: #e3dfd5;
-  --border-strong: #cdc7ba;
+  --bg: #0e0d0b;
+  --surface: #1e1b17;
+  --surface-2: #171512;
+  --surface-3: #26221d;
+  --border: #2f2b25;
+  --border-strong: #463f36;
 
-  --text: #18212a;
-  --text-2: #46525d;
-  --text-3: #5d6873;
+  --text: #f4efe6;
+  --text-2: #cfc7b9;
+  --text-3: #aaa194;
 
-  --brand: #0d6b69;
-  --brand-hover: #0a5856;
-  --brand-soft: #dcefec;
-  --brand-ink: #074341;
-  --on-brand: #ffffff;
+  --brand: #e2a11b;
+  --brand-hover: #f0b53e;
+  --brand-soft: #3a2c10;
+  --brand-ink: #f6d48a;
+  --on-brand: #1d1604;
 
   --accent: #e2a11b;
-  --accent-soft: #fcf0d4;
+  --accent-soft: #3a2c10;
 
-  --ok: #1b7245;
-  --ok-soft: #dcf1e3;
-  --warn: #965800;
-  --warn-soft: #fcefd5;
-  --bad: #b1261d;
-  --bad-soft: #fbe3df;
-  --info: #1e5c95;
-  --info-soft: #e0ecf7;
+  --ok: #5cc48a;
+  --ok-soft: #153223;
+  --warn: #e9b25c;
+  --warn-soft: #3a2b11;
+  --bad: #f0857b;
+  --bad-soft: #3d1c19;
+  --on-bad: #2a0d09;
+  --info: #8fa6ff;
+  --info-soft: #1a2240;
 
-  --appbar: #102a2c;
-  --appbar-text: #e9f2f1;
-  --appbar-muted: #a9c0be;
+  --appbar: #0e0d0b;
+  --appbar-text: #f4efe6;
+  --appbar-muted: #aaa194;
 
-  --radius-s: 6px;
-  --radius: 10px;
-  --radius-l: 14px;
-  --shadow-1: 0 1px 2px rgba(24, 33, 42, 0.06), 0 1px 1px rgba(24, 33, 42, 0.03);
-  --shadow-2: 0 6px 24px rgba(24, 33, 42, 0.1);
-  --ring: 0 0 0 3px rgba(13, 107, 105, 0.35);
+  --radius-s: 8px;
+  --radius: 14px;
+  --radius-l: 20px;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-2: 0 8px 28px rgba(0, 0, 0, 0.45);
+  --ring: 0 0 0 3px rgba(226, 161, 27, 0.45);
 
-  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
-  --font-display: "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font: "Manrope", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Manrope", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: "Cascadia Code", "SF Mono", Consolas, ui-monospace, monospace;
 
-  color-scheme: light;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0e1416;
-    --surface: #151d20;
-    --surface-2: #1b2529;
-    --surface-3: #233036;
-    --border: #28343a;
-    --border-strong: #3a4950;
-
-    --text: #e6ecee;
-    --text-2: #b3bfc4;
-    --text-3: #8d9aa0;
-
-    --brand: #4db3ac;
-    --brand-hover: #67c3bc;
-    --brand-soft: #16393a;
-    --brand-ink: #bfe8e3;
-    --on-brand: #04201f;
-
-    --accent: #f0b53e;
-    --accent-soft: #3a2c10;
-
-    --ok: #5cc48a;
-    --ok-soft: #153223;
-    --warn: #e9b25c;
-    --warn-soft: #3a2b11;
-    --bad: #f0857b;
-    --bad-soft: #3d1c19;
-    --info: #7cb4e8;
-    --info-soft: #162a3c;
-
-    --appbar: #0a1517;
-    --appbar-text: #e6ecee;
-    --appbar-muted: #8fa6a4;
-
-    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
-    --shadow-2: 0 8px 28px rgba(0, 0, 0, 0.45);
-    --ring: 0 0 0 3px rgba(77, 179, 172, 0.45);
-
-    color-scheme: dark;
-  }
+  color-scheme: dark;
 }
 
 /* ---------- Base ---------- */
@@ -2219,6 +2177,51 @@ mark.m-alerta {
   color: var(--text);
 }
 
+.banner--info {
+  background: var(--info-soft);
+  color: var(--info);
+  border: 1px solid color-mix(in srgb, var(--info) 30%, transparent);
+}
+
+.banner--info strong {
+  display: block;
+}
+
+.banner--info div {
+  color: var(--text);
+}
+
+.consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s, 6px);
+  font-size: 0.84rem;
+  cursor: pointer;
+}
+
+.consent input {
+  margin-top: 0.2rem;
+}
+
+.hitl__botones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.avisos__lista {
+  margin: 0.25rem 0 0;
+  padding-left: 1.1rem;
+}
+
+.avisos:empty {
+  display: none;
+}
+
 .persona:focus {
   outline: none;
   box-shadow: var(--ring);
@@ -2358,7 +2361,7 @@ mark.m-alerta {
 .ag-tablero { --agente: var(--text-2); }
 .ag-postulacion { --agente: var(--ok); }
 
-@media (prefers-color-scheme: dark) {
+@media all { /* el tablero ya es siempre oscuro (#284): estos tonos claros se leen sobre el fondo */
   .ag-guardrails { --agente: #a99cf0; }
   .ag-mercado { --agente: #e7a061; }
   .ag-perfil { --agente: #6cbfe8; }
@@ -2406,6 +2409,24 @@ mark.m-alerta {
 
 .dialog__text li {
   margin-bottom: 0.2rem;
+}
+
+.dialog__alertas {
+  margin-top: 0.85rem;
+  padding: 0.65rem 0.8rem;
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-s, 6px);
+  background: var(--warn-soft);
+  font-size: 0.84rem;
+}
+
+.dialog__alertas p {
+  margin: 0.15rem 0 0;
+  color: var(--text-2);
+}
+
+.dialog__text .dialog__alertas .reglas {
+  padding-left: 0;
 }
 
 .dialog__actions {
@@ -2712,5 +2733,84 @@ mark.m-alerta {
   *::after {
     animation: none !important;
     transition: none !important;
+  }
+}
+
+/* ---------- SkillMatch, diseño V3 Ámbar (#284) ---------- */
+
+.appbar {
+  border-bottom: 1px solid var(--border);
+  box-shadow: none;
+}
+
+.brand__mark {
+  width: 34px;
+  height: 34px;
+  background: none;
+  color: var(--accent);
+}
+
+.brand__mark svg {
+  width: 30px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+}
+
+.btn {
+  border-radius: 999px;
+}
+
+/* Texto oscuro sobre el rojo de alerta: el blanco no llega a 4.5:1 sobre --bad. */
+.paso--alerta .paso__dot,
+.tab__count--alerta,
+.btn--bad {
+  color: var(--on-bad);
+}
+
+/* Recorrido e indicadores en un solo panel, con la bola de seda detrás. */
+.cabecera-tablero {
+  position: relative;
+  overflow: hidden;
+  margin-bottom: 1.25rem;
+  padding: 1rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius-l) + 4px);
+}
+
+.cabecera-tablero > .flujo,
+.cabecera-tablero > .kpi-grid {
+  position: relative;
+  z-index: 1;
+}
+
+.cabecera-tablero > .flujo {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  padding: 0.25rem 0 0.75rem;
+}
+
+.cabecera-tablero > .kpi-grid {
+  margin-bottom: 0;
+}
+
+.bola-seda {
+  position: absolute;
+  right: -120px;
+  top: -190px;
+  width: 460px;
+  height: 460px;
+  pointer-events: none;
+}
+
+@media (max-width: 760px) {
+  .bola-seda {
+    right: -180px;
+    top: -220px;
+    width: 360px;
+    height: 360px;
   }
 }

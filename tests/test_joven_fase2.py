@@ -623,11 +623,210 @@ def test_pagina_trae_la_fase_2(entorno) -> None:
     js = cliente.get("/static/joven_fase2.js")
     assert js.status_code == 200
     assert "innerHTML" not in js.text and "onclick=" not in js.text  # el DOM se arma con textContent
-    assert '"image/*,application/pdf"' in js.text and '"environment"' in js.text  # cámara del celular
+    # Dos botones para la tirilla (#257): con `capture` el teléfono abre solo la cámara y no deja elegir un PDF.
+    assert 'accept: "image/*", capture: "environment"' in js.text  # «Tomar foto»: la cámara
+    assert 'accept: "application/pdf", hidden: true' in js.text  # «Subir PDF»: sin `capture`, deja elegir el archivo
+    assert 'text: "Tomar foto"' in js.text and 'text: "Subir PDF"' in js.text
+    assert '"image/*,application/pdf"' not in js.text
+    # La hora se elige con el selector del teléfono (trae los dos puntos); lo leído se lleva a «HH:MM» (#257).
+    assert 'type: "time"' in js.text and "inputmode" not in js.text and "function normalizarHora(" in js.text
     assert "?token=" not in js.text  # el token no viaja en la URL: el .ics se baja con fetch
+    # Lo mismo en la tarjeta de Vacantes de la fase 1 (antes el .ics era un enlace con el token en la URL).
+    joven_js = cliente.get("/static/joven.js").text
+    assert "?token=" not in joven_js and "async function bajarIcsDelJoven(" in joven_js
     # El ejemplo del chat son las respuestas del guion del video, con su lectura grabada (#194): así la demo sin
     # conexión las reproduce. tests/test_vista_joven_reproducir.py lo revisa letra por letra y en orden.
     guion = json.loads((RAIZ / "data/demo/yaritza_chat.json").read_text(encoding="utf-8"))
     for paso in guion["entrevista"]:
         assert json.dumps(paso["respuesta"], ensure_ascii=False) in js.text
     assert cliente.get("/static/joven_fase2.css").status_code == 200
+
+
+# ---------------------------------------------------------------- arreglos de uso (#257)
+
+CHORRERA = "OF-CHORRERA-01"
+VISTA_ALEGRE = "OF-VISTAALEGRE-02"
+SUPER = "supermercado-oeste-s-a"  # «Supermercado Oeste S.A. (Empresa de Prueba)», dueña de OF-CHORRERA-01
+
+
+def _vacante(resultado: dict, oferta_id: str) -> dict:
+    return next(v for v in resultado["vacantes"] if v["oferta_id"] == oferta_id)
+
+
+@pytest.mark.parametrize(
+    "post, esperado",
+    [
+        ({"estado": "enviado", "archivos_generados": []}, True),
+        ({"estado": "entrevista", "archivos_generados": []}, True),
+        # La empresa dijo que no, pero el CV ya había llegado: los archivos que Postulación genera al enviar siguen ahí.
+        ({"estado": "no_seleccionado", "archivos_generados": ["cv_x_y.pdf", "mensaje_1.txt", "entrevista_x_y.ics"]}, True),
+        ({"estado": "no_seleccionado", "archivos_generados": ["mensaje_20261017-010101_1.txt"]}, True),
+        # El orientador rechazó antes de enviar: no hay archivos y no se envió nada.
+        ({"estado": "no_seleccionado", "archivos_generados": []}, False),
+        ({"estado": "no_seleccionado"}, False),
+        ({"estado": "preseleccionado", "archivos_generados": []}, False),
+        ({"estado": "no_seleccionado", "archivos_generados": ["entrevista_x_y.ics"]}, False),
+    ],
+)
+def test_cv_llego_a_la_empresa_aunque_ella_haya_dicho_que_no(post: dict, esperado: bool) -> None:
+    assert srv.cv_llego_a_la_empresa(post) is esperado
+
+
+def test_tras_el_rechazo_de_la_empresa_el_cv_sigue_contando_como_enviado_en_las_dos_partes(entorno) -> None:
+    """#257: el embudo y la tarjeta de Vacantes decían «no se envió» después de que la empresa rechazó un CV ya enviado."""
+    cliente, estado, _, _ = entorno
+    h = _cred(estado["_tokens_joven"]["PERFIL-YARITZA"])
+    par = {"perfil_id": "PERFIL-YARITZA", "oferta_id": CHORRERA}
+    assert cliente.post("/api/joven/consentimiento", json={**par, "otorgado": True}, headers=h).status_code == 200
+    assert cliente.post("/api/orientador/accion", json={**par, "accion": "aprobar", "consentimiento_joven": True}).status_code == 200
+
+    # La empresa rechaza desde su vista, como en el paso 7 del guion.
+    cab_empresa = {"X-Token-Empresa": estado["_tokens_empresa"][SUPER]}
+    lista = cliente.get(f"/api/empresa/{SUPER}/lista-corta", headers=cab_empresa).json()
+    ref = next(v for v in lista["vacantes"] if v["oferta_id"] == CHORRERA)["candidatos"][0]["ref"]
+    r = cliente.post(
+        f"/api/empresa/{SUPER}/responder", json={"accion": "rechazar", "oferta_id": CHORRERA, "ref": ref}, headers=cab_empresa
+    )
+    assert r.status_code == 200, r.text
+    # En el servidor real los archivos de la postulación se pierden al reconstruir el estado desde SQLite (se vio en
+    # el tablero tras el rechazo): lo que no se pierde es el historial de la base, y es lo que cuenta.
+    for p in estado["postulaciones"]:
+        p["archivos_generados"] = []
+
+    post = _postulacion(cliente.get("/api/joven/PERFIL-YARITZA/postulaciones", headers=h).json(), CHORRERA)
+    assert post["estado"] == "no_seleccionado" and post["se_envio"] is True
+    assert [p["alcanzado"] for p in post["pasos"]] == [True, True, True, False]  # «CV enviado» sí se alcanzó
+    vacante = _vacante(cliente.get("/api/joven/PERFIL-YARITZA/resultado", headers=h).json(), CHORRERA)
+    assert vacante["estado_postulacion"] == "no_seleccionado" and vacante["se_envio"] is True and vacante["enviada"] is False
+
+
+def test_un_rechazo_del_orientador_antes_de_enviar_sigue_diciendo_que_no_se_envio(entorno) -> None:
+    cliente, estado, _, _ = entorno
+    h = _cred(estado["_tokens_joven"]["PERFIL-YARITZA"])
+    r = cliente.post(
+        "/api/orientador/accion", json={"accion": "rechazar", "perfil_id": "PERFIL-YARITZA", "oferta_id": VISTA_ALEGRE}
+    )
+    assert r.status_code == 200, r.text
+    post = _postulacion(cliente.get("/api/joven/PERFIL-YARITZA/postulaciones", headers=h).json(), VISTA_ALEGRE)
+    assert post["estado"] == "no_seleccionado" and post["se_envio"] is False
+    assert [p["alcanzado"] for p in post["pasos"]][2] is False  # «CV enviado» no se alcanzó
+    vacante = _vacante(cliente.get("/api/joven/PERFIL-YARITZA/resultado", headers=h).json(), VISTA_ALEGRE)
+    assert vacante["se_envio"] is False
+
+
+def test_si_un_recalculo_la_saca_de_la_lista_corta_se_le_avisa(entorno) -> None:
+    """#257: la postulación desaparecía sin decirle nada; ahora queda un aviso en «Mis postulaciones» y en el resultado."""
+    cliente, estado, _, _ = entorno
+    h = _cred(estado["_tokens_joven"]["PERFIL-YARITZA"])
+    antes = cliente.get("/api/joven/PERFIL-YARITZA/postulaciones", headers=h).json()
+    assert antes["salieron_de_lista"] == []
+    assert {p["oferta_id"] for p in antes["postulaciones"]} == {CHORRERA, VISTA_ALEGRE}
+
+    # Un recálculo deja a Yaritza fuera de la vacante de Vista Alegre sin cerrar su postulación.
+    estado["matches"] = [
+        m for m in estado["matches"] if not (m["perfil_id"] == "PERFIL-YARITZA" and m["oferta_id"] == VISTA_ALEGRE)
+    ]
+    datos = cliente.get("/api/joven/PERFIL-YARITZA/postulaciones", headers=h).json()
+    assert [p["oferta_id"] for p in datos["postulaciones"]] == [CHORRERA]
+    assert [s["oferta_id"] for s in datos["salieron_de_lista"]] == [VISTA_ALEGRE]
+    assert datos["salieron_de_lista"][0]["puesto"] and datos["salieron_de_lista"][0]["empresa"]
+    resultado = cliente.get("/api/joven/PERFIL-YARITZA/resultado", headers=h).json()
+    assert [v["oferta_id"] for v in resultado["vacantes"]] == [CHORRERA]
+    assert [s["oferta_id"] for s in resultado["salieron_de_lista"]] == [VISTA_ALEGRE]
+
+
+def _umbrales(cliente: TestClient, k: int) -> None:
+    r = cliente.post("/api/orientador/umbrales", json={"k": k, "max_vacantes_por_perfil": 3})
+    assert r.status_code == 200, r.text
+
+
+def test_con_k_1_el_recalculo_real_saca_a_daniela_de_la_lista_y_se_le_avisa(entorno) -> None:
+    """#270: el #262 quita del estado la postulación «preseleccionado» que sale de la lista corta y el aviso de #257
+    la buscaba justo ahí, así que nunca salía. Aquí el recálculo es el real (umbral k=1), no un `matches` editado."""
+    cliente, estado, _, _ = entorno
+    h = _cred(estado["_tokens_joven"]["PERFIL-DANIELA"])
+    ruta = "/api/joven/PERFIL-DANIELA"
+    antes = cliente.get(f"{ruta}/postulaciones", headers=h).json()
+    assert {p["oferta_id"] for p in antes["postulaciones"]} == {CHORRERA, VISTA_ALEGRE}
+    assert antes["salieron_de_lista"] == []
+
+    _umbrales(cliente, 1)
+    assert not [p for p in estado["postulaciones"] if p["perfil_id"] == "PERFIL-DANIELA"]  # esto lo hace el #262
+    for _ in range(2):  # lo quitado no se olvida: un segundo recálculo con el mismo umbral deja el mismo aviso
+        datos = cliente.get(f"{ruta}/postulaciones", headers=h).json()
+        assert datos["postulaciones"] == []
+        assert {s["oferta_id"] for s in datos["salieron_de_lista"]} == {CHORRERA, VISTA_ALEGRE}
+        assert all(s["puesto"] and s["empresa"] for s in datos["salieron_de_lista"])
+        resultado = cliente.get(f"{ruta}/resultado", headers=h).json()
+        assert resultado["vacantes"] == []
+        assert {s["oferta_id"] for s in resultado["salieron_de_lista"]} == {CHORRERA, VISTA_ALEGRE}
+        _umbrales(cliente, 1)
+
+    # Los demás jóvenes no ven ese aviso, y sin sus postulaciones no se les inventa ninguno.
+    yaritza = cliente.get(
+        "/api/joven/PERFIL-YARITZA/postulaciones", headers=_cred(estado["_tokens_joven"]["PERFIL-YARITZA"])
+    ).json()
+    assert all(s["oferta_id"] not in {p["oferta_id"] for p in yaritza["postulaciones"]} for s in yaritza["salieron_de_lista"])
+
+    # Si el cupo se abre, vuelve a la lista corta: el aviso se va y las postulaciones regresan.
+    _umbrales(cliente, 3)
+    datos = cliente.get(f"{ruta}/postulaciones", headers=h).json()
+    assert {p["oferta_id"] for p in datos["postulaciones"]} == {CHORRERA, VISTA_ALEGRE}
+    assert datos["salieron_de_lista"] == []
+    assert cliente.get(f"{ruta}/resultado", headers=h).json()["salieron_de_lista"] == []
+    assert estado["fuera_de_lista_corta"] == []
+
+
+def test_reiniciar_la_demo_olvida_a_quien_habia_salido_de_la_lista_corta(entorno) -> None:
+    cliente, estado, _, _ = entorno
+    _umbrales(cliente, 1)
+    assert "PERFIL-DANIELA" in {f["perfil_id"] for f in estado["fuera_de_lista_corta"]}  # con k=1 salen varios
+    assert cliente.post("/api/reset").status_code == 200
+    assert estado["fuera_de_lista_corta"] == []
+
+
+def test_el_texto_del_resultado_ya_no_manda_a_una_casilla_que_no_existe() -> None:
+    html = (RAIZ / "app" / "static" / "joven.html").read_text(encoding="utf-8")
+    assert "marcas la casilla" not in html
+    assert "solo sale si dices que sí en «Mis postulaciones»" in html
+
+
+def test_el_resultado_trae_por_que_no_hay_opciones_y_la_vista_lo_dice(entorno) -> None:
+    """#245 en la vista del joven: con el cupo lleno ya no se le dice que ninguna vacante cumple sus requisitos."""
+    cliente, estado, _, _ = entorno
+    h = _cred(estado["_tokens_joven"]["PERFIL-YARITZA"])
+    assert cliente.get("/api/joven/PERFIL-YARITZA/resultado", headers=h).json()["sin_opcion"] is None  # tiene opciones
+    estado["sin_opcion"] = {"PERFIL-YARITZA": {"causa": "cupo", "titulo": "t", "texto": "x", "ofertas": [{"oferta_id": CHORRERA}]}}
+    sin = cliente.get("/api/joven/PERFIL-YARITZA/resultado", headers=h).json()["sin_opcion"]
+    assert sin["causa"] == "cupo" and len(sin["ofertas"]) == 1
+    js = cliente.get("/static/joven.js").text
+    assert "function textoSinVacantes(" in js and 'sin.causa === "cupo"' in js and "lista corta completa" in js
+
+
+def test_la_decision_de_enviar_se_toma_en_un_solo_lugar_y_las_etiquetas_son_las_mismas(entorno) -> None:
+    """#257: ya no hay casilla en Vacantes además de los botones Sí/No de «Mis postulaciones»; misma etiqueta en las dos."""
+    cliente, *_ = entorno
+    joven_js = cliente.get("/static/joven.js").text
+    fase2_js = cliente.get("/static/joven_fase2.js").text
+    # Hay otras casillas en el formulario (los días); la de consentimiento era la de «Acepto que Puente envíe mi CV».
+    assert "Acepto que Puente envíe mi CV" not in joven_js and "Guardar mi decisión" not in joven_js
+    assert 'href: "#f2-postulaciones"' in joven_js  # la tarjeta lleva a donde se decide
+    assert "Sí, envíen mi CV a" in fase2_js  # los botones siguen en «Mis postulaciones»
+    assert "textoDeEstado(clave, vacante.se_envio)" in joven_js and "textoDeEstado(clave, p.se_envio)" in fase2_js
+    assert "ETIQUETAS" not in fase2_js and "No seleccionado/a" not in fase2_js
+
+
+def test_los_errores_de_validacion_salen_en_espanol_y_el_aviso_no_tapa_el_ultimo_boton(entorno) -> None:
+    cliente, *_ = entorno
+    # El servidor sigue mandando el error de Pydantic en inglés: la vista lo traduce por su tipo.
+    r = cliente.post("/api/joven/perfil", json={"nombre": "A", "edad": 17})
+    assert r.status_code == 422
+    assert any(e["type"] in ("missing", "string_too_short", "greater_than_equal") for e in r.json()["detail"])
+    joven_js = cliente.get("/static/joven.js").text
+    assert "function traducirErrorDeValidacion(" in joven_js
+    for tipo in ("missing", "greater_than_equal", "less_than_equal", "string_too_short", "int_parsing"):
+        assert f'case "{tipo}":' in joven_js
+    assert "debe ser ${n} o más" in joven_js
+    css = cliente.get("/static/joven.css").text
+    assert "padding-bottom: 6rem" in css and "cursor: pointer; /* un toque lo cierra */" in css
+    assert "e.currentTarget.hidden = true" in joven_js  # un toque cierra el aviso flotante

@@ -1,0 +1,43 @@
+{
+  "id": "P16",
+  "nombre": "Ricardo (ficticio)",
+  "edad": 25,
+  "corregimiento": "La Chorrera",
+  "horario_libre": [
+    {
+      "dias": [
+        "lunes",
+        "martes",
+        "miercoles",
+        "jueves",
+        "viernes",
+        "sabado"
+      ],
+      "hora_inicio": "05:00",
+      "hora_fin": "17:00"
+    }
+  ],
+  "salario_minimo": 650,
+  "presupuesto_pasaje_diario": 3.0,
+  "experiencia_texto": "Cargaba los camiones de reparto en la madrugada. Descargaba los contenedores de mercancía y los acomodaba por pasillo. Armaba los pedidos de los clientes según la factura. Empacaba la mercancía con plástico y cinta para que no se dañara.",
+  "habilidades": [
+    {
+      "skill_id": "carga_mercancia",
+      "evidencia": "Cargaba los camiones de reparto"
+    },
+    {
+      "skill_id": "descarga_mercancia",
+      "evidencia": "Descargaba los contenedores de mercancía"
+    },
+    {
+      "skill_id": "despacho_mercancia",
+      "evidencia": "Armaba los pedidos de los clientes según la factura"
+    },
+    {
+      "skill_id": "empaquetado",
+      "evidencia": "Empacaba la mercancía con plástico y cinta"
+    }
+  ],
+  "datos_sinteticos": true,
+  "horario_clases": []
+}

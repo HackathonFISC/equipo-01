@@ -35,7 +35,11 @@ Por eso `puente/solver/` y `puente/rules/` no importan ningún modelo de lenguaj
 
 El flujo es un grafo de **LangGraph** (`puente/graph.py`, #10) con 14 nodos. Por defecto `construir_grafo()` usa los agentes reales (`nodos_fase_2()`). Los stubs de la fase 1 (`NODOS_FASE_1`) sirven para probar la mecánica del grafo, y el tablero los usa para Mercado y Perfil (ver [Límites](#5-límites)).
 
-El diagrama sale del grafo real, sin red:
+![Arquitectura de Puente: 14 nodos, regresos y aprobación humana](arquitectura.png)
+
+*Diagrama de arquitectura ([`arquitectura.png`](arquitectura.png)): lo dibuja `docs/generar_arquitectura.py` con los nodos y las aristas de `construir_grafo()`, y `tests/test_arquitectura.py` comprueba que coinciden. Se regenera con `uv run python docs/generar_arquitectura.py` cuando cambia el flujo.*
+
+El mismo grafo, como texto, sale del grafo real sin red:
 
 ```bash
 uv run python -c "from puente.graph import construir_grafo; print(construir_grafo().get_graph().draw_mermaid())"
@@ -132,7 +136,7 @@ Cómo se lee cada arista condicional:
 | `puente/agents/postulacion.py`, `puente/tools/` | #7, #12, #84, #212 | SQLite, CV ciego y carta de presentación en PDF, Telegram con respaldo en `outbox/`, `.ics` y agenda de la entrevista. |
 | `puente/cargar.py` | #46 | Carga inicial de `data/` en `puente.db`. |
 | `puente/metricas.py` | #47, #198 | Indicadores ilustrativos con datos de la demo, rotulados como tales, y tendencias del mercado sobre las ofertas de `puente.db`. |
-| `app/server.py`, `app/empresa.py`, `app/joven_fase2.py`, `app/static/` | #11, #33, #49, #52, #166, #167 | Starlette y Uvicorn, con HTML, CSS y JS sin framework. Sirve tres vistas: el tablero del orientador (`/`); la vista del joven (`/joven`), con formulario, entrevista de una vez o por chat, tirilla de matrícula y «Mis postulaciones»; y la lista corta ciega de la empresa (`/empresa/lista-corta`), con aceptar, rechazar o vacante cubierta. |
+| `app/server.py`, `app/empresa.py`, `app/joven_fase2.py`, `app/static/` | #11, #33, #49, #52, #166, #167 | Starlette y Uvicorn, con HTML, CSS y JS sin framework. Sirve tres vistas: el tablero del orientador (`/`); la vista del joven (`/joven`), con formulario, entrevista de una vez o por chat, tirilla de matrícula y «Mis postulaciones»; y la lista corta ciega de la empresa (`/empresa/lista-corta`), con aceptar, rechazar o vacante cubierta, más `/empresa` para publicar una vacante, que responde solo con el resultado de su oferta. |
 | `evals/run.py`, `evals/casos.yaml` | #13, #129 | Evals propios, con el resultado esperado escrito antes de correr. |
 | `puente/agents/horario.py`, `redactor.py`, `micromision.py` | #164, #157, #158 | Fase 1 de tres extensiones. Horario ya lee la tirilla desde `/joven`. Redactor y Micromisión se usan desde su propia CLI y desde los evals, sin conexión al grafo ni al tablero (ver [Límites](#5-límites)). |
 
@@ -205,6 +209,7 @@ Cómo se lee cada arista condicional:
      - hasta 3 candidatos por plaza (una vacante con 2 plazas admite 6) y hasta 2 vacantes por joven.
    - **Si falta un dato** de la oferta, como el salario, el horario o las habilidades, no se descarta por ese dato. El par baja 10 puntos por cada dato que falta y queda «por confirmar». La excepción es el traslado: un par sin fila en la matriz de traslados no es viable.
    - **El puntaje** es la cobertura de habilidades. Los minutos de traslado no restan puntaje: filtran por el máximo y desempatan entre las vacantes de un mismo joven.
+   - **El orden de la lista corta** de cada vacante es por puntaje, de mayor a menor, y a igual puntaje por id del perfil. Los minutos de traslado no cuentan: así ve primero a los más aptos el orientador y así se presentan a la empresa (#238, #269). En la vista de la empresa, en cambio, «Candidato N» se numera por la hora de entrevista propuesta, no por puntaje.
    - **La explicación** de cada match es una plantilla determinística, sin LLM.
    - **Ejemplo con Yaritza**, desde La Chorrera (`data/traslados.csv`):
      - Vista Alegre: 20 minutos y 0.75 por viaje, o sea 1.50 al día ida y vuelta: entra.
@@ -240,7 +245,7 @@ Cómo se lee cada arista condicional:
 9. **Postulación** (#7, #12, #84). Solo corre después de la aprobación:
    - guarda perfil, oferta y postulación en SQLite y la avanza por sus estados, cada paso con su `Decision` en la tabla `decisiones`;
    - genera el CV ciego en PDF, solo con las habilidades que tienen evidencia;
-   - genera la carta de presentación (#212, `puente/tools/carta.py`) por plantilla y sin LLM: saludo, puesto, hasta 3 habilidades que la oferta pide con su frase literal (si son menos de 2, completa con otras que tengan evidencia) y la disponibilidad. Solo dice que el horario del puesto «cabe» si es fijo y no cruza la medianoche. La evidencia pasa por `cegar()`; el texto de la oferta no, porque tapar ahí el corregimiento del joven se lo revelaría a la empresa (#226). Todo pasa por `limpiar_pii()` y el nombre va tal como lo da la persona (#123);
+   - genera la carta de presentación (#212, `puente/tools/carta.py`) por plantilla y sin LLM: saludo, puesto, hasta 3 habilidades que la oferta pide con su frase literal (si son menos de 2, completa con otras que tengan evidencia) y la disponibilidad. Solo dice que el horario del puesto «cabe» si es fijo y no cruza la medianoche. La evidencia y el nombre de cada habilidad pasan por `cegar()`; el texto de la oferta no, porque tapar ahí el corregimiento del joven se lo revelaría a la empresa (#226). Todo pasa por `limpiar_pii()` y el nombre va tal como lo da la persona (#123);
    - elige una franja de entrevista sin choques y crea el `.ics` de 45 minutos;
    - envía la lista corta a la empresa por Telegram o, sin token, la escribe en `outbox/`.
 
@@ -303,7 +308,7 @@ uv run python -m puente.graph
 - **`--auto`** decide sin preguntar, por ejemplo `--auto "aprobar,aprobar,empresa_rechaza:yaritza@of-cajero-vista-alegre,aprobar"`. Sin esta opción, la demo pregunta en cada vacante.
 - **`--telegram`**: en la demo por terminal es la única forma de que algo salga por Telegram. Sin esta opción, todo se escribe en `outbox/`, aunque `.env` traiga token.
   - **El tablero no tiene esa opción y tiene dos caminos de salida:**
-    - **Postulación.** La lista corta a la empresa (CV ciego, carta, `.ics` y mensaje) la arma `_nodo_postulacion_tablero` en `app/server.py`. Llama a `postular()` (`puente/agents/postulacion.py`) con `outbox/` de la raíz del repositorio, y `postular()` la manda con `enviar_lista_corta()` (`puente/tools/telegram.py`). Sale por Telegram si el entorno del proceso trae `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID_EMPRESA`; si no, queda en esa carpeta.
+    - **Postulación.** La lista corta a la empresa (CV ciego, carta, `.ics` y mensaje) la arma `_nodo_postulacion_tablero` en `app/server.py`. Llama a `postular()` (`puente/agents/postulacion.py`) con la carpeta de `PUENTE_OUTBOX` (o `outbox/` de la raíz si no está definida, #207), y `postular()` la manda con `enviar_lista_corta()` (`puente/tools/telegram.py`). Sale por Telegram si el entorno del proceso trae `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID_EMPRESA`; si no, queda en esa carpeta.
     - **Avisos del reacomodo.** Los avisos al joven los escribe el nodo `avisos` del grafo, que el tablero no reemplaza: `crear_nodo_avisos()` de `nodos_fase_2()` (`puente/graph.py`), con el transporte `sin_telegram`. Nunca salen por Telegram y van a `PUENTE_OUTBOX` o, si falta, a `outbox/` del directorio desde donde se arrancó el servidor (`outbox_por_entorno()`).
 
 **Otras piezas:**
@@ -312,11 +317,11 @@ uv run python -m puente.graph
 uv run python -m puente.cargar                 # carga data/ en puente.db (#46)
 uv run python -m puente.metricas --tendencias  # tendencias del mercado sobre puente.db (#198)
 uv run python -m puente.agents.perfil --entrevista   # entrevista de Perfil por terminal
-uv run python -m app.server                    # tablero en http://127.0.0.1:8000 (vista del joven en /joven)
+uv run python -m app.server                    # landing en http://127.0.0.1:8000, tablero en /orientador, joven en /joven
 uv run python -m evals.run                     # evals (escribe evals/resultados.md)
 ```
 
-La vista de la empresa (`/empresa/lista-corta`) se abre con un código por empresa. El servidor imprime cada código en la consola al arrancar y en cada `/api/reset`, con el enlace `/empresa/lista-corta#codigo=<empresa>.<token>`. Lo mismo pasa con los códigos de `/joven`.
+La vista de la empresa (`/empresa/lista-corta`) se abre con un código por empresa. El servidor imprime cada código en la consola al arrancar y en cada `/api/reset`, con el enlace `/empresa/lista-corta#codigo=<empresa>.<token>`. Lo mismo pasa con los códigos de `/joven`, y una empresa nueva recibe el suyo cuando publica su primera vacante.
 
 ### Modo sin red y sin claves
 
@@ -339,9 +344,9 @@ La vista de la empresa (`/empresa/lista-corta`) se abre con un código por empre
 |---|---|---|---|---|
 | Base de Puente | `puente.db` | `%TEMP%/puente_tablero.db` | `PUENTE_DB` | Perfiles, ofertas, postulaciones con su historial, `entrevistas`, `decisiones`, `descartes`, y las tablas de la carga `cargas` y `cargas_ofertas`; la del tablero guarda además su estado en `tablero_estado` (#122) |
 | Checkpoints del grafo | `checkpoints.db` | `<base>_checkpoints.db`, junto a la base | `PUENTE_CHECKPOINTS` | Cada caso por `thread_id`, para retomarlo después del `interrupt()` |
-| Salida de mensajes | `outbox/` | Lista corta: `outbox/` en la raíz del repositorio. Avisos del reacomodo: `PUENTE_OUTBOX` u `outbox/` del directorio de trabajo | `PUENTE_OUTBOX` (terminal y avisos del tablero) | CV ciego, carta, `.ics` y mensajes a la empresa y al joven cuando no salen por Telegram |
+| Salida de mensajes | `outbox/` | `PUENTE_OUTBOX`; sin ella, lista corta en `outbox/` de la raíz y avisos del reacomodo en `outbox/` del directorio de trabajo | `PUENTE_OUTBOX` (terminal y tablero, #207) | CV ciego, carta, `.ics` y mensajes a la empresa y al joven cuando no salen por Telegram |
 
-Hoy la lista corta del tablero va siempre a `outbox/` de la raíz, sin mirar `PUENTE_OUTBOX`, y los avisos del reacomodo sí la respetan. Si el servidor se arranca desde la raíz y sin `PUENTE_OUTBOX`, los dos caminos terminan en la misma carpeta. Eso cambia si se fusiona el #207, que hace que el tablero respete `PUENTE_OUTBOX`. Para repetir la demo desde cero se usa otra `PUENTE_DB` o se borran esos archivos.
+Desde el #207, el tablero respeta `PUENTE_OUTBOX` en la lista corta, el `.ics` que confirma la empresa y la cobertura por turnos, igual que los avisos del reacomodo. Para repetir la demo desde cero se usa otra `PUENTE_DB` o se borran esos archivos.
 
 ---
 
@@ -396,7 +401,7 @@ El registro completo está en [`decisiones.md`](decisiones.md). El horario y las
    - **Cómo se aplica:** el modelo es Claude Opus 5.5 (`claude-opus-5-5`) con el crédito del equipo, detrás de `puente/llm.py` (#45, #41), con Gemini como respaldo opcional (`LLM_PROVEEDOR=gemini`). Ningún agente crea su propio cliente.
 9. **Tablero en Starlette y Uvicorn, no en Streamlit.**
    - **Por qué:** Streamlit vuelve a ejecutar todo el programa en cada clic, y eso complica controlar la pausa del orientador (`interrupt()`) y probar el tablero de punta a punta por HTTP.
-   - **Cómo se aplica:** el tablero es un servidor web (Starlette y Uvicorn) con páginas en HTML, CSS y JavaScript sin framework (#11, #33). `app/streamlit_app.py` quedó vacío, con solo su docstring, pero la dependencia `streamlit` sigue en `pyproject.toml`.
+   - **Cómo se aplica:** el tablero es un servidor web (Starlette y Uvicorn) con páginas en HTML, CSS y JavaScript sin framework (#11, #33). `app/streamlit_app.py` quedó vacío, con solo su docstring, y la dependencia `streamlit` salió de `pyproject.toml` para que el despliegue de Vercel quepa en 500 MB (#252).
 
 ---
 
@@ -417,5 +422,7 @@ El registro completo está en [`decisiones.md`](decisiones.md). El horario y las
 - **La foto de la tirilla va completa a Claude**, con lo que traiga: nombre, cédula o número de carnet. `limpiar_entrada` solo limpia lo que vuelve del modelo, y la imagen no se guarda.
 - **`cegar()` es heurístico:** son expresiones regulares, y un dato escrito de una forma que no prevén puede pasar.
 - **Los evals y la CI corren con grabaciones**, no con el LLM en vivo. En modo reproducir cada caso con LLM usa una sola grabación, así que no se mide la variación entre corridas. La corrida de la entrega queda en [`evals/resultados.md`](../evals/resultados.md), que se regenera sobre el commit final antes del tag (#17); las metas por categoría son propuestas del equipo.
+- **Publicar una vacante no pide código.** En la demo, `/empresa` y `POST /api/empresa/ofertas` no piden código y el nombre de empresa es libre, así que cualquiera puede publicar a nombre de cualquiera. Por eso esa ruta pasa por la misma Ley 11 y responde solo con el resultado de su oferta, nunca con datos de los jóvenes. En Vercel todo POST da 403.
+- **El tablero del orientador no tiene login:** `GET /api/estado` y `POST /api/ofertas` devuelven el estado completo, con los jóvenes, a quien llegue al servidor.
 - **Notas de voz: fuera de alcance.** Se rechazan con un mensaje claro; #55 se cerró sin implementar.
 - **Cobertura geográfica:** la matriz de traslados tiene 13 nodos (10 corregimientos y 3 distritos) del corredor Panamá Oeste, Centro, San Miguelito y Este. Diez de las 20 ofertas no indican un lugar de esa matriz, así que el Matching no las puede asignar (`data/FUENTES.md`).

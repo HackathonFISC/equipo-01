@@ -60,6 +60,8 @@ La comparación usa las **20 ofertas reales anonimizadas** de `data/ofertas/` (C
 | **Sus habilidades** | Sin CV, lo que hace en la fonda no aparece en ningún papel. | **3 habilidades con evidencia literal:** atención al cliente («atiendo pedidos»), manejo de caja («cobro en caja») e inventario («cuento los productos que quedan al cerrar»). La oferta propuesta pide atención al cliente. |
 | **Lo que falta** | — | La opción cubre 1 de las 2 habilidades que pide la oferta y su horario no está publicado, así que queda «por confirmar» (puntaje 40). El orientador decide si la aprueba. |
 
+Esta tabla usa `data/perfiles/yaritza.json` (B/. 3,00 de pasaje), igual que el caso de la terminal. En el tablero, el lote de demo de Yaritza trae B/. 5,00, así que ahí Tocumen queda fuera solo por traslado (#234).
+
 Para reproducirlo, sin red ni clave:
 
 ```bash
@@ -122,11 +124,27 @@ Los siete agentes mínimos que sugiere el documento del reto y dónde están en 
 
 **Tendencias del mercado (#198).** `puente/metricas.py` calcula en código las habilidades más pedidas, el salario por zona y los bloqueos de la Ley 11 sobre las ofertas de la base: `uv run python -m puente.cargar` y después `uv run python -m puente.metricas --tendencias`. Con las 20 ofertas de `data/`, atención al cliente es la más pedida (6).
 
+**Más allá de los siete agentes (stretch).** Verificado en `main` el 17 de octubre, sin red:
+
+- **Cobertura por turnos (#165).** Cuando ningún joven puede cubrir un turno completo porque le cruza con sus clases, `puente/solver/turnos.py` usa CP-SAT para proponer una dupla de mañana y tarde. En el tablero se prueba con «Probar escenario cobertura por turnos» (`POST /api/orientador/cobertura-turnos/demo`). Aprobar exige el consentimiento de los dos jóvenes. Pruebas en `tests/test_turnos.py`.
+- **Vista por rol y panel de operación (#168).** La cabecera del tablero tiene un selector de rol: «Orientador (Admin)», «Vista Aplicante» (`/joven`) y «Vista Empresa» (`/empresa/lista-corta`, y `/empresa` para publicar vacantes). El desplegable «Umbrales del solver editables y panel de operación (Admin)» hace dos cosas:
+  - recalcula con otros topes (`POST /api/orientador/umbrales`), por ejemplo 95 min de traslado, con lo que Tocumen deja de quedar fuera para Yaritza, y deja una `Decision` firmada;
+  - muestra el uso del LLM por agente y el estado de los canales (`GET /api/admin/operacion`).
+- **Ofertas y CV por archivo (#170).** En el tablero, «Subir oferta (PDF o foto con cámara)» y «Subir CV (PDF)» (`POST /api/ofertas/archivo` y `POST /api/perfiles/archivo`).
+  - Los guardrails de tamaño (5 MB) y de tipo se aplican antes de leer el archivo, y el audio se rechaza.
+  - La cédula y el teléfono se quitan antes del LLM.
+  - Sin red solo funcionan los archivos de prueba, con grabaciones escritas a mano (#236): `tests/fixtures/volante_sintetico.jpg` y `tests/fixtures/cv_sintetico.pdf`.
+- **Demo pública de solo lectura (#161).** `vercel.json` publica el tablero con `PUENTE_DEMO_PUBLICA=1` y `LLM_MODO=reproducir`. Toda acción que no sea GET responde 403 y el estado es efímero. **No es la demo en vivo** (#169), que corre en local. Para verlo en local: `PUENTE_DEMO_PUBLICA=1 uv run python -m app.server`.
+
 ## Arquitectura de agentes
 
 LangGraph orquesta los agentes. Principio de diseño: **el LLM trabaja en los bordes y el código decide en el centro**. El LLM lee ofertas, CVs y entrevistas y redacta; el código normaliza, aplica las reglas legales, calcula traslados y horarios, asigna con CP-SAT, audita el sesgo y decide qué sale. El LLM nunca ordena candidatos, nunca calcula traslados y nunca decide si una oferta es legal. Metodología completa en [`docs/metodologia.md`](docs/metodologia.md).
 
-Diagrama del grafo real, generado sin red con `draw_mermaid()`:
+![Arquitectura de Puente: 14 nodos, regresos y aprobación humana](docs/arquitectura.png)
+
+*Diagrama de arquitectura: [`docs/arquitectura.png`](docs/arquitectura.png). Lo dibuja [`docs/generar_arquitectura.py`](docs/generar_arquitectura.py) con los mismos nodos y aristas que `construir_grafo()`, y `tests/test_arquitectura.py` falla si dejan de coincidir o si el PNG no se regeneró.*
+
+El mismo grafo, como texto, generado sin red con `draw_mermaid()`:
 
 ```bash
 uv run python -c "from puente.graph import construir_grafo; print(construir_grafo().get_graph().draw_mermaid())"
@@ -250,7 +268,7 @@ Redactor y Micromisión se usan por línea de comandos y en los evals; todavía 
 | `data/perfiles/` | 10 perfiles de 18 a 29 años, incluida Yaritza | Sintético |
 | `data/cursos.csv` | 9 cursos con títulos y áreas reales del INADEH | Cupos y horarios de prueba |
 | `data/retos.csv` | Retos cortos por habilidad de Micromisión (#158) | De prueba |
-| `data/grabaciones/`, `evals/grabaciones/` | Respuestas grabadas de Claude para la demo y los evals sin red | Generado |
+| `data/grabaciones/`, `evals/grabaciones/` | Respuestas grabadas de Claude para la demo y los evals sin red, salvo dos de `data/grabaciones/` (el volante y el CV sintéticos de #170), escritas a mano y rotuladas así en su `nota` (ver [`data/grabaciones/README.md`](data/grabaciones/README.md)) | Generado, salvo esas dos |
 
 Supuestos del equipo, configurables en el solver: 60 minutos por trayecto, pasaje de hasta 15 % del salario, 22 días laborables al mes y la misma duración y tarifa a la ida y a la vuelta.
 
@@ -282,13 +300,13 @@ uv run python -m puente.graph --auto "aprobar,aprobar,empresa_rechaza:yaritza@of
 
 El CV ciego, el `.ics` y los mensajes quedan en `outbox/` (o en `PUENTE_OUTBOX`) y la base en `puente.db` (o en `PUENTE_DB`). Telegram solo sale con `--telegram`.
 
-**2. La extracción real de Mercado sobre las 20 ofertas.** Las pasa por Mercado con las respuestas grabadas de Claude y las guarda en `puente.db`, junto con 10 perfiles. La primera corrida imprime «ofertas: 20 leídas con el LLM, 0 desde cargas · en la base: 20 (7 bloqueadas)». Las siguientes reutilizan lo ya extraído.
+**2. La extracción real de Mercado sobre las 20 ofertas.** Las pasa por Mercado con las respuestas grabadas de Claude y las guarda en `puente.db`, junto con 10 perfiles. Con una base vacía, la primera corrida imprime «ofertas: 20 leídas con el LLM, 0 desde cargas · en la base: 20 (7 bloqueadas)». Si antes corriste el paso 1 en la misma `puente.db`, dice 22 ofertas y 13 perfiles, porque el grafo dejó ahí sus 2 ofertas y sus 3 perfiles. Para ver 20, usa otra base: `PUENTE_DB=cargar.db uv run python -m puente.cargar`. Las siguientes reutilizan lo ya extraído.
 
 ```bash
 uv run python -m puente.cargar
 ```
 
-**3. El tablero.** Se abre en http://127.0.0.1:8000.
+**3. El tablero.** Se abre en http://127.0.0.1:8000/orientador; en la raíz está la landing.
 
 ```bash
 uv run python -m app.server
@@ -297,8 +315,13 @@ uv run python -m app.server
 - **`/`**: tablero del orientador. Muestra la lista corta por vacante, las ofertas bloqueadas con su motivo, el reporte del Auditor, las métricas de impacto y las trazas.
 - **`/joven`**: el joven llena el formulario, hace la entrevista de una vez o por chat, sube su tirilla de matrícula, da su consentimiento y sigue sus postulaciones. Detalle en [Vista del joven](#vista-del-joven-joven).
 - **`/empresa/lista-corta`**: la empresa ve su lista corta ciega y puede aceptar, rechazar o dar la vacante por cubierta; rechazar o cubrir dispara el reacomodo.
+- **Mensajes del joven a la empresa (#289)**: cuando su CV ya llegó, el joven le escribe desde `/joven` y la empresa lo ve como «Nuevo mensaje de Candidato N»; el texto sale sin cédula, teléfono, dirección ni datos que identifican, y el aviso va por WhatsApp (Twilio, #253) al número `TWILIO_WHATSAPP_EMPRESA` o a `outbox/` si no hay credenciales.
 
-Los códigos de acceso de `/joven` y `/empresa/lista-corta` se imprimen en la consola al arrancar y en cada reinicio.
+Los códigos de acceso de `/joven` y `/empresa/lista-corta` se imprimen en la consola al arrancar, en cada reinicio y cuando una empresa nueva publica su primera vacante.
+
+La empresa publica vacantes en `/empresa`, que no muestra a ninguna persona: `POST /api/empresa/ofertas` pasa por la misma Ley 11 y responde solo con su oferta (id, bloqueo y alertas con su frase). El estado completo del tablero (con los jóvenes) lo piden solo la página del orientador, por `POST /api/ofertas` y `GET /api/estado`; en la demo esas dos rutas no piden código, así que lo recibe quien llegue al servidor (en Vercel, solo lectura).
+
+El selector de rol, los umbrales y el panel de operación, subir ofertas o CV por archivo y la cobertura por turnos están en el mismo tablero: ver «Más allá de los siete agentes».
 
 **4. Agentes por línea de comandos**, también sin red:
 
@@ -335,7 +358,7 @@ uv run python -m evals.run
 
 Con `LLM_MODO=reproducir` (sin red) solo se leen las entradas que tienen grabación: en el chat, el botón «Usar la respuesta de Yaritza», y la tirilla `tests/fixtures/tirilla_sintetica.png`. Con otras respuestas el agente Perfil responde con un error claro y no inventa el perfil.
 
-**Limitación de la demo: no hay login.** El joven se identifica con un código `PERFIL-….<token>` que recibe al abrir la entrevista. El token viaja en el encabezado `X-Token-Joven` y, en la página, en el fragmento `#codigo=` de la URL, que el navegador no manda al servidor (el enlace `.ics` de la fase 1 aún lo lleva en la URL). Quien tenga el código ve y decide por ese perfil. Los códigos de los perfiles semilla salen en la consola del servidor. Una entrevista por chat sin terminar vive en memoria: si el servidor se reinicia, se empieza de nuevo.
+**Limitación de la demo: no hay login.** El joven se identifica con un código `PERFIL-….<token>` que recibe al abrir la entrevista. El token viaja en el encabezado `X-Token-Joven` y, en la página, en el fragmento `#codigo=` de la URL, que el navegador no manda al servidor (el enlace `.ics` de la fase 1 aún lo lleva en la URL). Quien tenga el código ve y decide por ese perfil. Los códigos de los perfiles semilla salen en la consola del servidor. Una entrevista por chat sin terminar vive en memoria: si el servidor se reinicia, se empieza de nuevo. Publicar una vacante en `/empresa` tampoco pide código en la demo y el nombre de empresa es libre: por eso esa ruta devuelve solo el resultado de la oferta y nunca datos de los jóvenes (en Vercel todo POST da 403).
 
 ## Chatbot de WhatsApp (sandbox de Twilio, #160)
 
@@ -391,7 +414,7 @@ Solo existe [`.env.example`](.env.example), sin claves reales: se copia a `.env`
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID_EMPRESA` | Bot y chat de la empresa de demo. Sin ellos, los mensajes van a `outbox/` |
 | `TELEGRAM_CHATS_JOVENES` | Un chat por joven (`perfil_id=chat_id`); quien no esté recibe su aviso en `outbox/` |
 | `PUENTE_DB` | Base SQLite; por defecto `puente.db`. El tablero, sin esta variable, usa `%TEMP%/puente_tablero.db` |
-| `PUENTE_OUTBOX` | Carpeta del CV ciego, el `.ics` y los mensajes; por defecto `outbox/`. Vale para la terminal y para los avisos del reacomodo del tablero; el resto del tablero escribe en `outbox/` de la raíz hasta que entre el #207 |
+| `PUENTE_OUTBOX` | Carpeta del CV ciego, el `.ics` y los mensajes; por defecto `outbox/`. Vale para la terminal y para el tablero: la lista corta, el `.ics` que confirma la empresa y los avisos del reacomodo (#207). Sin ella, el tablero usa `outbox/` de la raíz |
 | `PUENTE_ENTREVISTA_INICIO` | Fecha ISO 8601 de la entrevista; vacía, mañana a las 10:00, marcada como provisional |
 | `PUENTE_SAL_ANONIMO` | Clave del código anónimo del scorecard (#158); vacía, una al azar por proceso |
 | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM` | Chatbot de WhatsApp por el sandbox de Twilio (#160). Sin token, el webhook no atiende; sin cuenta o sin red, los mensajes del bot van a `outbox/` |
@@ -414,7 +437,7 @@ Cada afirmación de diseño tiene una prueba que cualquiera puede repetir:
 
   En el tablero, `POST /api/orientador/accion` responde **422 sin efectos** en tres casos: si falta el consentimiento, si el joven dijo «no» en `/joven` o si el Auditor marcó sesgo en el lote (#189). Lo cubre `tests/test_tablero.py`.
 - **La Ley 11 de 2005, con la frase.** Cada hallazgo de [`puente/rules/discriminacion.py`](puente/rules/discriminacion.py) guarda la regla y la frase literal de la oferta. Solo bloquean el límite de edad (art. 2) y la exigencia de sexo (art. 1), y las demás causales del art. 1 alertan citando el artículo. «Buena presencia», foto y estado civil solo alertan, sin artículo, porque la ley no menciona la apariencia. Lo cubren los 25 casos de requisitos discriminatorios de los evals.
-- **CV ciego.** `cegar()` en [`puente/tools/pdf.py`](puente/tools/pdf.py) quita de la evidencia que llega a la empresa la edad, la fecha de nacimiento, el corregimiento, el estado civil, la pareja, los hijos, el embarazo y los términos de género. El CV nunca lleva el presupuesto, el salario mínimo pedido ni las ofertas descartadas. La carta de presentación ([`puente/tools/carta.py`](puente/tools/carta.py), #212) pasa por lo mismo: se arma por plantilla, sin LLM, solo con habilidades que tienen evidencia. La evidencia y el nombre de cada habilidad pasan por `cegar()`; el texto de la oferta (empresa y puesto) no, porque tapar ahí el corregimiento del joven se lo revelaría a la empresa (pruebas en `tests/test_carta.py`).
+- **CV y carta sin datos sensibles.** `cegar()` en [`puente/tools/pdf.py`](puente/tools/pdf.py) quita de la evidencia que llega a la empresa la edad, la fecha de nacimiento, el corregimiento, el estado civil, la pareja, los hijos, el embarazo y los términos de género. El CV nunca lleva el presupuesto, el salario mínimo pedido ni las ofertas descartadas. La carta de presentación ([`puente/tools/carta.py`](puente/tools/carta.py), #212) pasa por lo mismo: se arma por plantilla, sin LLM, solo con habilidades que tienen evidencia. La evidencia y el nombre de cada habilidad pasan por `cegar()`; el texto de la oferta (empresa y puesto) no, porque tapar ahí el corregimiento del joven se lo revelaría a la empresa (pruebas en `tests/test_carta.py`).
   - El nombre, por decisión de @jesus12ga del 16 de octubre (#123), va o no según lo que mande la persona: Puente no lo agrega ni lo quita, y todo lo demás de esta lista sí se oculta.
   - La vista de la empresa sí lo quita: allí cada persona es «Candidato N».
   - Pruebas en `tests/test_cv_ciego.py`.
@@ -427,6 +450,7 @@ Cada afirmación de diseño tiene una prueba que cualquiera puede repetir:
 - **Telegram en el tablero.** El tablero no tiene un interruptor de Telegram como el `--telegram` de la terminal: si el entorno trae `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID_EMPRESA`, la lista corta sale de verdad.
 - **WhatsApp, fase 1.** El bot hace la entrevista y pide el consentimiento, pero el resultado y el `.ics` tras la aprobación siguen saliendo por Telegram u `outbox/`, no por WhatsApp. Las notas de voz y los archivos tampoco entran todavía. El número del joven vive solo en memoria mientras se arma su perfil: el bot no puede escribirle por su cuenta después, solo responderle.
 - **Variación del LLM.** Los evals en modo reproducir usan una grabación por caso; no miden la variación entre corridas del LLM.
+- **Falsos positivos de la regla de edad.** Las reglas de la Ley 11 pueden bloquear por edad una frase que no habla de la edad del candidato, como «trayectoria mayor a 20 años en el mercado» o «plazo menor a 12 años». En ese caso el orientador desbloquea la oferta con su motivo. Ninguna de las 20 ofertas de `data/` cae en eso: siguen 7 bloqueadas.
 
 ## Guardrails y datos personales
 
@@ -451,12 +475,12 @@ Las palabras clave de inyección ("ignora tus instrucciones", "eres ahora", "sys
 | Postulación | 2 | 2/2 | Sin consentimiento no sale nada; con consentimiento, CV, carta, .ics y mensaje sin datos sensibles | 100 % | sí |
 | Reacomodo | 1 | 1/1 | Tras el rechazo de la empresa: pareja excluida, aviso al joven y nueva aprobación pendiente | 100 % | sí |
 | Formación | 2 | 2/2 | Cursos calculados a mano, con cupo, horario sin cruce, traslado de hasta 60 min y pasaje dentro del presupuesto | 100 % | sí |
-| De punta a punta | 1 | 0/1 | Listas cortas calculadas a mano y CV, carta e .ics por pareja en outbox, sin datos sensibles | 100 % | no (#238) |
+| De punta a punta | 1 | 1/1 | Listas cortas calculadas a mano y CV, carta e .ics por pareja en outbox, sin datos sensibles | 100 % | sí |
 
 Para leer esta tabla con honestidad:
 
 - **No siempre fue así.** El 16 de octubre, 4 de los 5 casos de extracción fallaban (#152 a #155). Se corrigieron en el código de Mercado, sin tocar lo esperado, y el historial queda en `evals/resultados.md`.
-- **Un caso falla hoy.** E2E-01 recorre el caso Yaritza de punta a punta. Coinciden las parejas enviadas, los archivos y la ausencia de datos sensibles, pero la lista corta de la cocina sale ordenada por id (Carlos 50, María 50, Yaritza 100) y no por puntaje. El fallo queda anotado y se sigue en #238.
+- **El caso de punta a punta falló y se corrigió.** El primer día E2E-01 recorría el caso Yaritza y la lista corta de la cocina salía ordenada por id (Carlos 50, María 50, Yaritza 100) y no por puntaje; coincidían las parejas, los archivos y la ausencia de datos sensibles. Se arregló en el código (#238: puntaje de mayor a menor y, a igual puntaje, id del perfil), sin tocar lo esperado, y el historial queda en `evals/resultados.md`.
 - **Las metas son provisionales.** Las propuso el equipo.
 - **No se mide la variación.** En modo reproducir cada caso con LLM usa una sola grabación.
 - **Todos los datos de los casos son sintéticos.**

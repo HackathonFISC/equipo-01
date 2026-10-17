@@ -1,0 +1,39 @@
+{
+  "id": "P17",
+  "nombre": "Edilberto (ficticio)",
+  "edad": 22,
+  "corregimiento": "San Miguelito",
+  "horario_libre": [
+    {
+      "dias": [
+        "lunes",
+        "martes",
+        "miercoles",
+        "jueves",
+        "viernes",
+        "sabado"
+      ],
+      "hora_inicio": "06:00",
+      "hora_fin": "16:00"
+    }
+  ],
+  "salario_minimo": 600,
+  "presupuesto_pasaje_diario": 1.5,
+  "experiencia_texto": "Cargaba bloques y bolsas de cemento. Trabajaba en andamios con arnés. Trabajé en cuadrilla de 6 personas.",
+  "habilidades": [
+    {
+      "skill_id": "carga_mercancia",
+      "evidencia": "Cargaba bloques y bolsas de cemento"
+    },
+    {
+      "skill_id": "seguridad_altura",
+      "evidencia": "Trabajaba en andamios con arnés"
+    },
+    {
+      "skill_id": "trabajo_equipo",
+      "evidencia": "Trabajé en cuadrilla de 6 personas"
+    }
+  ],
+  "datos_sinteticos": true,
+  "horario_clases": []
+}

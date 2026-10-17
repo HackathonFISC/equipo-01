@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
+import subprocess
 from pathlib import Path
 import time
 
@@ -905,7 +907,7 @@ def test_el_tablero_registra_la_decision_cuando_la_hora_queda_por_confirmar(
 def test_issue_168_roles_umbrales_tocumen_y_panel_operacion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Issue #168: 3 vistas de rol (orientador, empresa, joven) con Decision firmada, umbrales del solver (90 min hace viable Tocumen para Yaritza) y panel de operación."""
+    """Issue #168: 3 vistas de rol (orientador, empresa, joven) con Decision firmada, umbrales del solver (95 min hace viable Tocumen para Yaritza) y panel de operación."""
     import app.server as srv
 
     monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path / "outbox")
@@ -1004,8 +1006,10 @@ def test_issue_168_roles_umbrales_tocumen_y_panel_operacion(
             assert r_emp.json().get("ok") is True
             assert "decisiones_db" not in r_emp.json()
 
-            # En /api/empresa/postulaciones la empresa solo ve postulaciones enviadas
-            r_post_emp = await client.get("/api/empresa/postulaciones")
+            # En /api/empresa/postulaciones cada empresa ve solo las suyas, con su código y sin datos de la persona (#235)
+            assert (await client.get("/api/empresa/postulaciones")).status_code == 401
+            token_empresa = srv.ESTADO_GLOBAL["_tokens_empresa"]["supermercado-oeste-s-a"]
+            r_post_emp = await client.get("/api/empresa/postulaciones", headers={"X-Token-Empresa": token_empresa})
             assert r_post_emp.status_code == 200
             assert "postulaciones" in r_post_emp.json()
 
@@ -1444,3 +1448,326 @@ def test_respuesta_de_cada_accion_es_igual_al_estado_siguiente(tmp_path: Path, m
             assert (await client.get("/api/estado")).text == siguiente.text  # dos GET seguidos, iguales
 
     asyncio.run(_ejecutar())
+
+
+def test_joven_sin_opciones_por_cupo_no_se_explica_como_restricciones(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Con cupo de 1 candidato por vacante, Daniela cumple las restricciones de 2 vacantes y las llenan otros (#245)."""
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path / "outbox")
+
+    async def _ejecutar() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            assert (await client.post("/api/reset")).status_code == 200
+            base = (await client.get("/api/estado")).json()
+            assert base["sin_opcion"] == {}  # la demo de siempre (k=3): todos tienen opciones
+            viables_daniela = {
+                m["oferta_id"] for m in base["matches"] if m["perfil_id"] == "PERFIL-DANIELA"
+            }
+            assert viables_daniela == {"OF-VISTAALEGRE-02", "OF-CHORRERA-01"}
+
+            r = await client.post("/api/orientador/umbrales", json={"k": 1, "max_vacantes_por_perfil": 3})
+            assert r.status_code == 200
+            estado = r.json()
+            assert not [m for m in estado["matches"] if m["perfil_id"] == "PERFIL-DANIELA"]
+            sin = estado["sin_opcion"]["PERFIL-DANIELA"]
+            assert sin["causa"] == "cupo"
+            assert "cupo está lleno" in sin["titulo"] and "restricciones" in sin["titulo"]
+            assert "1 candidato por plaza" in sin["texto"]
+            assert {o["oferta_id"] for o in sin["ofertas"]} == viables_daniela
+            # Los que sí tienen opción no llevan explicación.
+            assert set(estado["sin_opcion"]) == {"PERFIL-DANIELA"}
+
+    asyncio.run(_ejecutar())
+
+
+def test_joven_que_no_cumple_ninguna_oferta_sigue_diciendo_restricciones() -> None:
+    estado = obtener_datos_iniciales_demo()
+    # Presupuesto de pasaje y salario imposibles: ninguna vacante es viable para Daniela.
+    for p in estado["perfiles"]:
+        if p["id"] == "PERFIL-DANIELA":
+            p["presupuesto_pasaje_diario"] = 0.0
+            p["salario_minimo"] = 50000.0
+    from app.server import recalcular_pipeline_tablero
+
+    estado = recalcular_pipeline_tablero(estado, registrar_trazas=False)
+    sin = estado["sin_opcion"]["PERFIL-DANIELA"]
+    assert sin["causa"] == "restricciones" and sin["ofertas"] == []
+    assert sin["titulo"] == "Ninguna oferta cumple sus restricciones"
+    assert "Ley 11" in sin["texto"] and "salario" in sin["texto"]
+
+
+def test_tarjeta_usa_la_explicacion_que_manda_el_servidor() -> None:
+    js = (Path(__file__).resolve().parents[1] / "app" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "estadoActual.sin_opcion?.[perfil.id]" in js and "sin?.titulo" in js and "sin?.texto" in js
+
+
+def test_despues_de_reiniciar_la_demo_aprobar_deja_sus_archivos_en_la_tarjeta(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#227: tras «Reiniciar demo» el nodo de postulación escribía en el estado viejo y la tarjeta quedaba sin chips."""
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path)
+    monkeypatch.setenv("PUENTE_DB", str(tmp_path / "reinicio.db"))
+    monkeypatch.setitem(srv.ESTADO_GLOBAL, "_db_path", str(tmp_path / "reinicio.db"))  # el reinicio la reutiliza
+    aprobar = {
+        "accion": "aprobar",
+        "perfil_id": "PERFIL-YARITZA",
+        "oferta_id": "OF-CHORRERA-01",
+        "consentimiento_joven": True,
+    }
+
+    async def _ejecutar() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            assert (await client.post("/api/reset")).status_code == 200
+            r = await client.post("/api/orientador/accion", json=aprobar)
+            assert r.status_code == 200, r.text
+            estado = (await client.get("/api/estado")).json()
+        post = next(
+            p for p in estado["postulaciones"]
+            if p["perfil_id"] == "PERFIL-YARITZA" and p["oferta_id"] == "OF-CHORRERA-01"
+        )
+        assert post["estado"] == "enviado"
+        archivos = post["archivos_generados"]
+        assert any(a.startswith("cv_") for a in archivos) and any(a.endswith(".ics") for a in archivos)
+        assert any(a.startswith("carta_") for a in archivos)
+
+    asyncio.run(_ejecutar())
+
+
+def test_despues_de_reiniciar_sin_ninguna_hora_la_decision_queda_una_sola_vez(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#227: tras el reinicio, el grafo y la ruta de respaldo comparten lo ya registrado y no duplican la Decision."""
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path)
+    ruta_db = tmp_path / "reinicio_sin_hora.db"
+    monkeypatch.setenv("PUENTE_DB", str(ruta_db))
+    monkeypatch.setitem(srv.ESTADO_GLOBAL, "_db_path", str(ruta_db))  # el reinicio la reutiliza
+    sin_hora = lambda matches, *a, **k: ([], {}, [((m.perfil_id, m.oferta_id), "aviso de prueba", None) for m in matches])  # noqa: E731
+    monkeypatch.setattr(srv, "agendar_entrevistas", sin_hora)
+    aprobar = {
+        "accion": "aprobar",
+        "perfil_id": "PERFIL-YARITZA",
+        "oferta_id": "OF-CHORRERA-01",
+        "consentimiento_joven": True,
+    }
+
+    async def _ejecutar() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            assert (await client.post("/api/reset")).status_code == 200
+            r = await client.post("/api/orientador/accion", json=aprobar)
+            assert r.status_code == 422, r.text
+
+    asyncio.run(_ejecutar())
+    sin_envio = [t for t in _trazas_postulacion(ruta_db)
+                 if t["salida_resumen"] == "no se envió nada" and "aviso de prueba" in t["razon"]]
+    assert len(sin_envio) == 1
+
+
+def test_dialogo_de_aprobar_muestra_las_alertas_de_la_ley_11_de_la_oferta() -> None:
+    """El diálogo de «Aprobar y enviar» trae las alertas de la oferta, con su frase y escapadas (#249)."""
+    estado = obtener_datos_iniciales_demo()
+    # El dato en el que se apoya: la oferta del paso 6 del guion trae la alerta de «buena presencia» y no bloquea.
+    oferta = next(o for o in estado["ofertas"] if o["id"] == "OF-VISTAALEGRE-02")
+    assert oferta["bloqueada"] is False
+    assert [(a["tipo"], a["frase"]) for a in oferta["alertas"]] == [("alerta", "buena presencia")]
+    assert oferta["alertas"][0]["regla"]
+    sin_alertas = next(o for o in estado["ofertas"] if o["id"] == "OF-CHORRERA-01")
+    assert sin_alertas["alertas"] == []  # sin alertas, el diálogo queda como hoy
+
+    js = (Path(__file__).resolve().parents[1] / "app" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "${alertasLey11ParaAprobar(ofertaId)}" in js  # va en el diálogo de aprobar
+    assert "if (!alertas.length) return \"\"" in js  # sin alertas, no agrega nada
+    assert "escaparHtml(a.frase)" in js and "escaparHtml(a.regla)" in js  # texto de una empresa: escapado
+    assert "onclick=" not in js
+
+
+def test_refresco_no_borra_lo_escrito_o_marcado_sin_enviar() -> None:
+    """Una nota, un mensaje editado o «El joven consintió» sin enviar no se pierden aunque el campo no tenga el foco.
+
+    Hallazgo de la revisión del #243: con el campo sin foco, un cambio del servidor redibujaba la lista corta y
+    borraba la nota, desmarcaba la casilla y descartaba el mensaje. El refresco espera a que se envíe o se
+    deje como estaba, comparando con el valor con que se dibujó.
+    """
+    js = (Path(__file__).resolve().parents[1] / "app" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "function hayCambiosSinEnviar()" in js
+    assert "if (hayCambiosSinEnviar()) return;" in js  # junto a las otras guardas de refrescarSiCambio
+    guarda = js[js.index("function hayCambiosSinEnviar()"): js.index("async function refrescarSiCambio()")]
+    for pieza in ("#contenedor-matches input", "#contenedor-matches textarea", "#contenedor-matches select"):
+        assert pieza in guarda
+    assert "campo.checked !== campo.defaultChecked" in guarda  # la casilla de consentimiento
+    assert "campo.value !== campo.defaultValue" in guarda  # la nota y el mensaje a la empresa
+    # Lo que escribe el orientador tiene que seguir con ids estables para compararse al redibujar.
+    assert "`nota-${m.perfil_id}-${m.oferta_id}`" in js and "`consent-${m.perfil_id}-${m.oferta_id}`" in js
+
+
+def _static(nombre: str) -> str:
+    return (Path(__file__).resolve().parents[1] / "app" / "static" / nombre).read_text(encoding="utf-8")
+
+
+def test_el_embudo_cuenta_solo_las_postulaciones_con_tarjeta(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Al desbloquear una oferta o cambiar un umbral, lo preseleccionado que sale de la lista corta se quita (#256)."""
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path / "outbox")
+
+    def sin_tarjeta(estado: dict) -> list:
+        pre = {(p["perfil_id"], p["oferta_id"]) for p in estado["postulaciones"] if p["estado"] == "preseleccionado"}
+        tarjetas = {(m["perfil_id"], m["oferta_id"]) for m in estado["matches"]}
+        assert estado["conteo_embudo"]["preseleccionado"] == len(tarjetas)
+        return sorted(pre ^ tarjetas)
+
+    async def _ejecutar() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            await client.post("/api/reset")
+            assert sin_tarjeta((await client.get("/api/estado")).json()) == []
+            r = await client.post(
+                "/api/ofertas/desbloquear",
+                json={"oferta_id": "OF-BLOQ-EDAD-04", "motivo": "El orientador revisó el anuncio con la empresa"},
+            )
+            assert r.status_code == 200
+            assert sin_tarjeta(r.json()) == []  # antes quedaban Yaritza y Kevin en OF-CHORRERA-01 sin tarjeta
+            for minutos in (95, 60):
+                r = await client.post(
+                    "/api/orientador/umbrales", json={"max_minutos_traslado": minutos, "max_vacantes_por_perfil": 3}
+                )
+                assert sin_tarjeta(r.json()) == [], minutos
+
+    asyncio.run(_ejecutar())
+
+
+def test_avisos_al_orientador_se_dibujan_arriba_del_tablero() -> None:
+    js, html, css = _static("app.js"), _static("index.html"), _static("styles.css")
+    assert 'id="avisos-orientador"' in html and html.index('id="avisos-orientador"') < html.index('id="flujo-pasos"')
+    assert "function renderizarAvisosOrientador()" in js and "renderizarAvisosOrientador();" in js.split("function renderizarTodo()")[1]
+    assert "estadoActual.avisos_orientador" in js and "escaparHtml(a.texto" in js  # el texto sale de la empresa: escapado
+    assert ".banner--info" in css  # la clase que usaban los banners y no tenía estilo
+
+
+def test_aviso_de_sesgo_dice_lo_que_pasa_y_no_el_identificador_interno() -> None:
+    js = _static("app.js")
+    assert "volvió a Matching" not in js and "devolvió el caso a Matching" not in js
+    assert 'accion_grafo = "' not in js  # el identificador interno no se muestra
+    assert "function textoAccionAuditor(accion)" in js and "no se puede aprobar mientras el Auditor detecte sesgo" in js
+
+
+def test_cv_solo_en_pdf_y_el_volante_sigue_con_camara() -> None:
+    """Esta máquina no tiene OCR para fotos de CV (decisión del 17 de octubre): el campo del CV es solo PDF (#256)."""
+    html = _static("index.html")
+    cv = next(l for l in html.splitlines() if 'id="scv-archivo"' in l)
+    assert 'accept="application/pdf"' in cv and "capture" not in cv and "image/" not in cv
+    volante = next(l for l in html.splitlines() if 'id="so-archivo"' in l)
+    assert 'capture="environment"' in volante  # el volante de la oferta sí puede seguir con cámara
+
+
+def test_trazas_trae_el_historial_completo_y_el_filtro_se_completa(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """La pestaña «Trazas» dibuja todas las corridas, no solo la última de Matching, Auditor y Formación (#256)."""
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path / "outbox")
+
+    async def _ejecutar() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            await client.post("/api/reset")
+            await client.post("/api/auditor/simular-sesgo", json={"activar": True})
+            await client.post("/api/auditor/simular-sesgo", json={"activar": False})
+            await client.post(
+                "/api/orientador/accion",
+                json={"accion": "aprobar", "perfil_id": "PERFIL-YARITZA", "oferta_id": "OF-VISTAALEGRE-02",
+                      "consentimiento_joven": True},
+            )
+            primera = await client.get("/api/estado")
+            assert primera.text == (await client.get("/api/estado")).text  # estable: el refresco no redibuja de más
+            estado = primera.json()
+
+            agentes = [d["agente"] for d in estado["trazas"]]
+            assert agentes.count("matching") > len(
+                [d for d in estado["decisiones"] if d["agente"] == "matching"]
+            )  # antes solo se veía la corrida actual
+            assert "aprobacion" in agentes  # la del nodo de aprobación solo vive en memoria: se suma
+            assert len(estado["trazas"]) >= len(estado["decisiones_db"])
+            marcas = [srv._marca_de_tiempo(d) for d in estado["trazas"]]  # unas traen «Z» y otras «+00:00»
+            assert marcas == sorted(marcas)  # en orden
+
+    asyncio.run(_ejecutar())
+
+    js = _static("app.js")
+    assert "estadoActual.trazas || estadoActual.decisiones" in js
+    assert "function completarFiltroDeTrazas(" in js and "evento_empresa:" in js and "avisos:" in js
+
+
+def test_cobertura_por_turnos_aprobada_se_conserva_al_recalcular(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path / "outbox")
+
+    async def _ejecutar() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            await client.post("/api/reset")
+            assert (await client.post("/api/orientador/cobertura-turnos/demo", json={})).status_code == 200
+            oferta = (await client.get("/api/estado")).json()["coberturas_turnos"][0]["oferta_id"]
+            r = await client.post(
+                "/api/orientador/cobertura-turnos/aprobar",
+                json={"oferta_id": oferta, "consentimiento_manana": True, "consentimiento_tarde": True},
+            )
+            assert r.status_code == 200
+            # Un recálculo cualquiera: la dupla aprobada sigue a la vista, con sus dos postulaciones enviadas.
+            estado = (await client.post("/api/auditor/simular-sesgo", json={"activar": False})).json()
+            assert [c["oferta_id"] for c in estado["coberturas_turnos"]] == [oferta]
+            enviadas = [p for p in estado["postulaciones"] if p["oferta_id"] == oferta and p["estado"] == "enviado"]
+            assert len(enviadas) == 2
+            # Issue #240: cada postulación en cobertura por turnos tiene su propia cita con DTSTART distinto
+            ics_files = list((tmp_path / "outbox").glob("entrevista_*.ics"))
+            assert len(ics_files) >= 2
+            dtstarts = [
+                line.strip()
+                for f in ics_files
+                for line in f.read_text(encoding="utf-8").splitlines()
+                if line.startswith("DTSTART")
+            ]
+            assert len(dtstarts) >= 2
+            assert len(set(dtstarts)) == len(dtstarts)
+
+    asyncio.run(_ejecutar())
+
+
+def test_estilos_que_usaban_las_tarjetas_existen() -> None:
+    css = _static("styles.css")
+    for clase in (".consent {", ".hitl__botones {", ".banner--info {"):
+        assert clase in css, clase
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="hace falta node para ejecutar la función del navegador")
+def test_chips_de_la_tarjeta_nombran_cv_carta_cita_y_mensaje() -> None:
+    """Los cuatro archivos de una postulación enviada salen con etiqueta y no con el nombre del archivo."""
+    import json as _json
+    import re
+
+    js = (Path(__file__).resolve().parents[1] / "app" / "static" / "app.js").read_text(encoding="utf-8")
+    funcion = re.search(r"^function tipoArchivo\(nombre\) \{.*?^\}", js, re.S | re.M)
+    assert funcion, "falta tipoArchivo en app.js"
+    nombres = [
+        "cv_PERFIL-YARITZA_OF-CHORRERA-01.pdf",
+        "carta_PERFIL-YARITZA_OF-CHORRERA-01.pdf",
+        "entrevista_PERFIL-YARITZA_OF-CHORRERA-01.ics",
+        "mensaje_20261017-071731_1.txt",
+        "otro_archivo.bin",
+    ]
+    llamada = f"console.log(JSON.stringify({_json.dumps(nombres)}.map((n) => tipoArchivo(n).etiqueta)));"
+    guion = "\n".join([funcion.group(0), llamada])
+    salida = subprocess.run(["node", "-e", guion], capture_output=True, text=True, encoding="utf-8", timeout=30)
+    assert salida.returncode == 0, salida.stderr
+    assert _json.loads(salida.stdout) == ["CV · PDF", "Carta · PDF", "Cita .ics", "Mensaje", "otro_archivo.bin"]

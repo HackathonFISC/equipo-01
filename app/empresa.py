@@ -131,6 +131,16 @@ def verificar_token_empresa(estado: dict[str, Any], empresa_id: str, token: str 
         )
 
 
+def empresa_del_token(estado: dict[str, Any], token: str | None) -> str | None:
+    """El id de la empresa dueña de ese código, o None. Comparación en tiempo constante, igual que `verificar_token_empresa`."""
+    if not token:
+        return None
+    for empresa_id, esperado in (estado.get("_tokens_empresa") or {}).items():
+        if hmac.compare_digest(token.encode(), esperado.encode()):
+            return empresa_id
+    return None
+
+
 def _ref(estado: dict[str, Any], empresa_id: str, perfil_id: str, oferta_id: str) -> str:
     """Referencia opaca del candidato para esa empresa: el perfil_id puede llevar el nombre."""
     clave = (estado.get("_tokens_empresa") or {}).get(empresa_id, "")
@@ -221,6 +231,27 @@ def _ics_confirmado(post: dict[str, Any]) -> str | None:
     return next((a for a in post.get("archivos_generados") or [] if str(a).startswith(PREFIJO_ICS)), None)
 
 
+def postulaciones_ciegas(estado: dict[str, Any], empresa_id: str) -> list[dict[str, Any]]:
+    """Las postulaciones a las vacantes de esa empresa que ya puede ver, sin nada que identifique a la persona.
+
+    Solo enviadas y con consentimiento vigente, igual que la lista ciega, y solo de sus vacantes. Cada una trae
+    la referencia opaca (`ref`) con que responde en la lista corta, nunca el `perfil_id`, que puede llevar el nombre.
+    """
+    filas = []
+    for oferta in _ofertas_de(estado, empresa_id):
+        for post in _candidatos_visibles(estado, oferta["id"]):
+            filas.append(
+                {
+                    "oferta_id": oferta["id"],
+                    "puesto": oferta.get("puesto"),
+                    "empresa": oferta.get("empresa"),
+                    "estado": post.get("estado"),
+                    "ref": _ref(estado, empresa_id, post["perfil_id"], oferta["id"]),
+                }
+            )
+    return filas
+
+
 def lista_corta_ciega(estado: dict[str, Any], empresa_id: str) -> dict[str, Any]:
     """Lo que ve la empresa: sus vacantes y, en cada una, los candidatos ya enviados, ciegos."""
     srv = _servidor()
@@ -294,9 +325,17 @@ def lista_corta_ciega(estado: dict[str, Any], empresa_id: str) -> dict[str, Any]
                     # Candidatos que el Matching propone y el orientador aún no aprueba: solo el número.
                     "en_revision": en_revision,
                     "candidatos": candidatos,
-                    # TODO(#157, #165): la oferta corregida (versión legal y «viables: antes -> después») y la
-                    # cobertura por turnos van en otros PR. Al conectarlas, llenan estos campos y empresa_lista.js los pinta.
-                    "propuestas": {"oferta_corregida": None, "cobertura_turnos": None},
+                    # Lo que Puente ya sabe hacer con esta vacante, solo como información para la empresa: la
+                    # versión legal que propone el Redactor (#157) si está bloqueada y la cobertura por turnos
+                    # (#165) si el orientador la aprobó y los dos jóvenes ya se enviaron.
+                    "propuestas": {
+                        "oferta_corregida": _oferta_corregida(modelos[oferta_id], modelos_perfiles)
+                        if oferta.get("bloqueada")
+                        else None,
+                        "cobertura_turnos": _cobertura_aprobada(
+                            estado, empresa_id, oferta_id, {p["perfil_id"] for p in _candidatos_visibles(estado, oferta_id)}
+                        ),
+                    },
                 }
             )
     finally:
@@ -307,6 +346,59 @@ def lista_corta_ciega(estado: dict[str, Any], empresa_id: str) -> dict[str, Any]
         "empresa": {"id": empresa_id, "nombre": ofertas[0].get("empresa", "")},
         "vacantes": vacantes,
         "nombres_habilidades": {sid: taxonomia.get(sid, {}).get("nombre_es", sid) for sid in sorted(ids)},
+    }
+
+
+def _oferta_corregida(oferta: Oferta, perfiles: list[Perfil]) -> dict[str, Any] | None:
+    """La versión legal que propone el Redactor (#157) para una vacante bloqueada, con su plantilla (sin LLM).
+
+    La empresa ve su propio texto corregido, las frases que cambian con su fundamento y, de la cifra del solver,
+    solo cuántas personas pasan de viables a viables: nunca quiénes son.
+    """
+    from puente.agents import redactor
+
+    try:
+        propuesta = redactor.proponer_version(oferta, perfiles, redactar=redactor.redactor_plantilla)
+    except Exception:  # el Redactor no debe tumbar la lista: sin propuesta, la vacante sigue como estaba
+        _registro.warning("Lista corta de la empresa: el Redactor no pudo proponer una versión de %s", oferta.id, exc_info=True)
+        return None
+    return {
+        "puesto": propuesta.puesto_nuevo,
+        "requisitos": propuesta.texto_nuevo,
+        "cambios": [
+            {"regla": c.get("regla"), "frase": c.get("frase"), "reemplazo": c.get("reemplazo"), "fundamento": c.get("fundamento")}
+            for c in propuesta.cambios
+        ],
+        "queda_bloqueada": propuesta.bloqueada_despues,
+        "viables_antes": propuesta.viables_antes,
+        "viables_despues": propuesta.viables_despues,
+        "nota": propuesta.nota_redaccion,
+    }
+
+
+def _cobertura_aprobada(
+    estado: dict[str, Any], empresa_id: str, oferta_id: str, visibles: set[str]
+) -> dict[str, Any] | None:
+    """La cobertura por turnos (#165) de la vacante, solo si todos sus jóvenes ya se enviaron a la empresa.
+
+    Cada turno lleva la referencia opaca del candidato que lo cubre, la misma de la lista, y su franja: nunca el
+    perfil ni el nombre.
+    """
+    cobertura = next((c for c in estado.get("coberturas_turnos") or [] if c.get("oferta_id") == oferta_id), None)
+    segmentos = (cobertura or {}).get("segmentos") or []
+    if not segmentos or any(s.get("perfil_id") not in visibles for s in segmentos):
+        return None
+    return {
+        "horario_completo": cobertura.get("horario_completo"),
+        "turnos": [
+            {
+                "turno": "mañana" if s.get("turno") == "manana" else "tarde",
+                "inicio": s.get("inicio"),
+                "fin": s.get("fin"),
+                "ref": _ref(estado, empresa_id, s["perfil_id"], oferta_id),
+            }
+            for s in segmentos
+        ],
     }
 
 
@@ -556,17 +648,15 @@ def _estado_actual() -> dict[str, Any]:
     return estado
 
 
-def _token_de(request: Request, *, permitir_query: bool = False) -> str | None:
-    token = request.headers.get(ENCABEZADO_TOKEN_EMPRESA)
-    if not token and permitir_query:  # el enlace del .ics es un <a href>: no lleva encabezados
-        token = request.query_params.get("token")
-    return token
+def _token_de(request: Request) -> str | None:
+    """El código de la empresa, solo del encabezado: en la URL quedaría en el registro del servidor (#258)."""
+    return request.headers.get(ENCABEZADO_TOKEN_EMPRESA)
 
 
-def _empresa_autorizada(request: Request, estado: dict[str, Any], *, permitir_query: bool = False) -> str:
+def _empresa_autorizada(request: Request, estado: dict[str, Any]) -> str:
     """empresa_id de la ruta con `_id_seguro` (ValueError) y su token (CredencialEmpresaInvalida)."""
     empresa_id = _servidor()._id_seguro(request.path_params["empresa_id"])
-    verificar_token_empresa(estado, empresa_id, _token_de(request, permitir_query=permitir_query))
+    verificar_token_empresa(estado, empresa_id, _token_de(request))
     return empresa_id
 
 
@@ -616,7 +706,7 @@ async def endpoint_ics(request: Request) -> FileResponse | JSONResponse:
     try:
         oferta_id = srv._id_seguro(request.path_params["oferta_id"])
         ref = srv._id_seguro(request.path_params["ref"])
-        empresa_id = _empresa_autorizada(request, estado, permitir_query=True)
+        empresa_id = _empresa_autorizada(request, estado)
         nombre = _ics_confirmado(_candidato(estado, empresa_id, oferta_id, ref))
         if nombre is None:
             return JSONResponse({"detail": "Todavía no aceptaste la entrevista de este candidato."}, status_code=404)

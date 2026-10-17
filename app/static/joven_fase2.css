@@ -210,3 +210,21 @@
     grid-column: auto;
   }
 }
+
+/* Mensaje a la empresa (#289) */
+.f2-mensaje {
+  margin-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+}
+
+.f2-mensaje h4 {
+  margin: 0 0 0.25rem;
+  font-size: 1rem;
+}
+
+.f2-mensaje-texto {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0.4rem 0;
+}

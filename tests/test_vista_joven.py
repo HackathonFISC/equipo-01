@@ -446,11 +446,12 @@ def test_token_por_perfil_protege_resultado_consentimiento_e_ics(entorno) -> Non
         assert cliente.get("/api/joven/PERFIL-YARITZA/ics/OF-CHORRERA-01", headers=cabeceras).status_code == 401
     assert estado["consentimientos"] == []  # nadie consintió por Yaritza
 
-    # Con su token sí; el .ics acepta el token en la URL porque es un enlace.
+    # Con su token sí, y solo en el encabezado: en la URL quedaría en el registro del servidor (#257).
     assert cliente.get("/api/joven/PERFIL-YARITZA/resultado", headers=_cred(estado)).status_code == 200
     assert cliente.post("/api/joven/consentimiento", json=par, headers=_cred(estado)).status_code == 200
     token = estado["_tokens_joven"]["PERFIL-YARITZA"]
-    assert cliente.get(f"/api/joven/PERFIL-YARITZA/ics/OF-CHORRERA-01?token={token}").status_code == 404  # aún no enviada
+    assert cliente.get("/api/joven/PERFIL-YARITZA/ics/OF-CHORRERA-01", headers=_cred(estado)).status_code == 404  # aún no enviada
+    assert cliente.get(f"/api/joven/PERFIL-YARITZA/ics/OF-CHORRERA-01?token={token}").status_code == 401  # el token en la URL no vale
 
     # /api/estado no trae tokens ni las respuestas en texto libre de los jóvenes.
     r = cliente.post("/api/joven/perfil", json=formulario_yaritza())
