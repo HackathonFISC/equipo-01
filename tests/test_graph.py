@@ -5,14 +5,18 @@ la Fase 2, con los agentes reales y un LLM o extractor falso. Los checkpoints vi
 directorio temporal.
 """
 
+import functools
+import io
 import json
 import sqlite3
+import sys
 from datetime import datetime
 
 import pytest
 from langgraph.types import Command
 
 from puente import graph as g
+from puente.agents.auditor import nodo_auditor
 from puente.graph import (
     aprobacion_pendiente,
     cargar_caso,
@@ -439,6 +443,44 @@ def test_demo_por_consola_interactiva(tmp_path):
     assert _agentes(final).count("postulacion") == 1
 
 
+def test_demo_por_consola_con_salida_cp1252(tmp_path, monkeypatch):
+    """Salida redirigida en Windows (#74): cp1252 no tiene ⏸, ⚠ ni →; se reemplazan y la demo termina."""
+    salida = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+    monkeypatch.setattr(sys, "stdout", salida)
+    g.main(["--checkpoints", str(tmp_path / "cp.db"), "--auto", "aprobar,aprobar"])
+    salida.flush()
+    texto = salida.buffer.getvalue().decode("cp1252")
+    assert "Aprobación pendiente" in texto
+    assert "Flujo terminado." in texto
+
+
+CEDULA, TELEFONO = "8-123-4567", "6123-4567"
+
+
+def _volcar_sqlite(ruta) -> bytes:
+    """Todas las celdas de todas las tablas, como bytes (los checkpoints viven en el WAL)."""
+    with sqlite3.connect(ruta) as conexion:
+        tablas = [t for (t,) in conexion.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+        celdas = [c for t in tablas for fila in conexion.execute(f'SELECT * FROM "{t}"') for c in fila]
+    return b"".join(c if isinstance(c, bytes) else str(c).encode() for c in celdas)
+
+
+def test_demo_no_guarda_cedula_ni_telefono_en_el_checkpoint(tmp_path):
+    """main() limpia la entrada antes de graph.invoke: el estado inicial llega limpio al checkpointer."""
+    datos = json.loads(g.CASO_YARITZA.read_text(encoding="utf-8"))
+    datos["entradas_perfil"][0]["respuestas"][0] += f" Mi cédula es {CEDULA} y mi celular {TELEFONO}."
+    ruta_caso = tmp_path / "caso.json"
+    ruta_caso.write_text(json.dumps(datos, ensure_ascii=False), encoding="utf-8")
+    ruta = tmp_path / "cp.db"
+
+    g.main(["--caso", str(ruta_caso), "--checkpoints", str(ruta), "--auto", "rechazar"], escribir=lambda _: None)
+
+    crudo = _volcar_sqlite(ruta)
+    assert CEDULA.encode() not in crudo
+    assert TELEFONO.encode() not in crudo
+    assert b"[CEDULA]" in crudo  # el checkpoint sí guardó la entrada, ya limpia
+
+
 # ---------------------------------------------------------------- Fase 2: agentes reales
 
 
@@ -627,6 +669,41 @@ def test_fase2_auditor_que_devuelve_a_perfil_no_cuenta_dos_veces(ruta_cp, caso):
     assert llamadas == {"perfil": 2, "auditor": 2}
     assert grafo.get_state(config).values["reintentos_auditor"] == 1
     assert aprobacion_pendiente(grafo, config) is not None
+
+
+def test_fase2_auditor_real_con_sesgo_de_lectura_vuelve_a_perfil_una_vez(ruta_cp, caso, monkeypatch):
+    """El Auditor v2 real, no un falso: si la lectura del perfil cambia con el género, la arista
+    "perfil" vuelve a Perfil una vez y después la diferencia pasa al orientador."""
+    thread, estado = caso
+
+    def lectura_sesgada(perfil: dict) -> dict:
+        if str(perfil.get("genero", "")).lower().startswith("f"):
+            return {**perfil, "habilidades": perfil["habilidades"][:1]}
+        return perfil
+
+    # nodo_auditor_grafo, el nodo real de nodos_fase_2, llama a nodo_auditor con esta lectura
+    monkeypatch.setattr(g, "nodo_auditor", functools.partial(nodo_auditor, fn_perfil=lectura_sesgada))
+    llm = _llm_yaritza(estado)
+    reales = nodos_fase_2(llm_perfil=llm)
+    llamadas = {"perfil": 0, "auditor": 0}
+
+    def contar(nombre):
+        def nodo(estado):
+            llamadas[nombre] += 1
+            return reales[nombre](estado)
+
+        return nodo
+
+    grafo = construir_grafo(
+        nodos={**reales, "perfil": contar("perfil"), "auditor": contar("auditor")}, checkpointer=checkpointer_sqlite(ruta_cp)
+    )
+    config = _arrancar(grafo, estado, thread)
+    valores = grafo.get_state(config).values
+    assert llamadas == {"perfil": 2, "auditor": 2}
+    assert len(llm.prompts) == 2  # Perfil volvió a leer la entrada
+    assert valores["accion_auditor"] == "orientador"
+    assert valores["devolver_a_matching"] is False
+    assert aprobacion_pendiente(grafo, config)["alertas_auditor"]
 
 
 def test_fase2_cada_agente_es_un_nodo_con_nombre_para_langsmith():
