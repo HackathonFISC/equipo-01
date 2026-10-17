@@ -182,6 +182,31 @@ async function conBoton(boton, tarea) {
   }
 }
 
+// Las alertas de la Ley 11 de la oferta, con su frase, a la vista justo donde el orientador decide (#249). Salen de
+// los datos de la oferta (texto que escribió una empresa): todo va escapado. Sin alertas, el diálogo queda igual.
+function alertasLey11ParaAprobar(ofertaId) {
+  const alertas = ((estadoActual?.ofertas || []).find((o) => o.id === ofertaId)?.alertas) || [];
+  if (!alertas.length) return "";
+  const filas = alertas
+    .map(
+      (a) => `<li class="regla">
+        ${a.tipo === "bloqueo" ? pill("Bloqueo", "bad", "ban") : pill("Alerta", "warn", "alert")}
+        <span class="regla__frase">«${escaparHtml(a.frase)}»</span>
+        <span class="regla__norma">${escaparHtml(a.regla)}</span>
+      </li>`
+    )
+    .join("");
+  const hay = alertas.some((a) => a.tipo === "bloqueo");
+  const nota = hay
+    ? "Esta oferta se desbloqueó con motivo, pero conserva frases que la Ley 11 de 2005 prohíbe."
+    : "No bloquean el envío: las decide el orientador.";
+  return `<div class="dialog__alertas" role="note">
+      <strong>Alertas de la Ley 11 de 2005 en esta oferta</strong>
+      <p>${nota}</p>
+      <ul class="reglas">${filas}</ul>
+    </div>`;
+}
+
 function confirmar({ titulo, html, textoBoton, tono = "primary" }) {
   const dlg = document.getElementById("dlg-confirmar");
   if (!dlg || typeof dlg.showModal !== "function") {
@@ -903,7 +928,7 @@ async function ejecutarAccionOrientador(boton) {
     const ok = await confirmar({
       titulo: `¿Enviar la postulación de ${match?.nombre_perfil || perfilId}?`,
       html: `<p><strong>${puesto}</strong> en ${empresa}. Al aprobar, el grafo se reanuda y se generan:</p>
-        <ul><li>CV en PDF sin cédula, teléfono ni dirección</li><li>Mensaje para la empresa (Telegram u <code>outbox/</code>)</li><li>Cita de entrevista en <code>.ics</code></li></ul>`,
+        <ul><li>CV en PDF sin cédula, teléfono ni dirección</li><li>Mensaje para la empresa (Telegram u <code>outbox/</code>)</li><li>Cita de entrevista en <code>.ics</code></li></ul>${alertasLey11ParaAprobar(ofertaId)}`,
       textoBoton: "Aprobar y enviar",
     });
     if (!ok) return;

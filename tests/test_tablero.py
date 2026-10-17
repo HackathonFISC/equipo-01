@@ -1499,3 +1499,21 @@ def test_joven_que_no_cumple_ninguna_oferta_sigue_diciendo_restricciones() -> No
 def test_tarjeta_usa_la_explicacion_que_manda_el_servidor() -> None:
     js = (Path(__file__).resolve().parents[1] / "app" / "static" / "app.js").read_text(encoding="utf-8")
     assert "estadoActual.sin_opcion?.[perfil.id]" in js and "sin?.titulo" in js and "sin?.texto" in js
+
+
+def test_dialogo_de_aprobar_muestra_las_alertas_de_la_ley_11_de_la_oferta() -> None:
+    """El diálogo de «Aprobar y enviar» trae las alertas de la oferta, con su frase y escapadas (#249)."""
+    estado = obtener_datos_iniciales_demo()
+    # El dato en el que se apoya: la oferta del paso 6 del guion trae la alerta de «buena presencia» y no bloquea.
+    oferta = next(o for o in estado["ofertas"] if o["id"] == "OF-VISTAALEGRE-02")
+    assert oferta["bloqueada"] is False
+    assert [(a["tipo"], a["frase"]) for a in oferta["alertas"]] == [("alerta", "buena presencia")]
+    assert oferta["alertas"][0]["regla"]
+    sin_alertas = next(o for o in estado["ofertas"] if o["id"] == "OF-CHORRERA-01")
+    assert sin_alertas["alertas"] == []  # sin alertas, el diálogo queda como hoy
+
+    js = (Path(__file__).resolve().parents[1] / "app" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "${alertasLey11ParaAprobar(ofertaId)}" in js  # va en el diálogo de aprobar
+    assert "if (!alertas.length) return \"\"" in js  # sin alertas, no agrega nada
+    assert "escaparHtml(a.frase)" in js and "escaparHtml(a.regla)" in js  # texto de una empresa: escapado
+    assert "onclick=" not in js
