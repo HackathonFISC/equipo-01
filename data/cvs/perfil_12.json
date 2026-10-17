@@ -1,0 +1,44 @@
+{
+  "id": "P12",
+  "nombre": "Andrea (ficticia)",
+  "edad": 23,
+  "corregimiento": "Betania",
+  "horario_libre": [
+    {
+      "dias": [
+        "lunes",
+        "martes",
+        "miercoles",
+        "jueves",
+        "viernes",
+        "sabado",
+        "domingo"
+      ],
+      "hora_inicio": "06:00",
+      "hora_fin": "22:00"
+    }
+  ],
+  "salario_minimo": 750,
+  "presupuesto_pasaje_diario": 2.0,
+  "experiencia_texto": "Atendía llamadas en inglés y español de clientes de una aerolínea. Registraba cada llamada en el sistema Salesforce con el motivo y la solución. Resolvía quejas por equipaje perdido y cambios de vuelo.",
+  "habilidades": [
+    {
+      "skill_id": "ingles_basico",
+      "evidencia": "Atendía llamadas en inglés y español"
+    },
+    {
+      "skill_id": "registro_llamadas",
+      "evidencia": "Registraba cada llamada en el sistema Salesforce"
+    },
+    {
+      "skill_id": "uso_crm",
+      "evidencia": "sistema Salesforce"
+    },
+    {
+      "skill_id": "resolver_reclamos",
+      "evidencia": "Resolvía quejas por equipaje perdido y cambios de vuelo"
+    }
+  ],
+  "datos_sinteticos": true,
+  "horario_clases": []
+}

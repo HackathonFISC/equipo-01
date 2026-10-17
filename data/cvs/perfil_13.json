@@ -1,0 +1,61 @@
+{
+  "id": "P13",
+  "nombre": "Luis (ficticio)",
+  "edad": 21,
+  "corregimiento": "San Francisco",
+  "horario_libre": [
+    {
+      "dias": [
+        "lunes",
+        "martes",
+        "miercoles",
+        "jueves",
+        "viernes"
+      ],
+      "hora_inicio": "13:00",
+      "hora_fin": "20:00"
+    },
+    {
+      "dias": [
+        "sabado"
+      ],
+      "hora_inicio": "08:00",
+      "hora_fin": "17:00"
+    }
+  ],
+  "salario_minimo": 500,
+  "presupuesto_pasaje_diario": 1.5,
+  "experiencia_texto": "Cambio pantallas y baterías de celulares a vecinos y compañeros. Instalaba programas de ofimática y ayudaba a los estudiantes con Word y Excel. Pasé a Excel el registro de 300 equipos donados, con serie y estado. Digitación de inventario para una donación de equipos · 2025",
+  "habilidades": [
+    {
+      "skill_id": "reparar_moviles",
+      "evidencia": "Cambio pantallas y baterías de celulares"
+    },
+    {
+      "skill_id": "ofimatica_basica",
+      "evidencia": "Instalaba programas de ofimática"
+    },
+    {
+      "skill_id": "excel",
+      "evidencia": "Pasé a Excel el registro de 300 equipos donados"
+    },
+    {
+      "skill_id": "registro_datos",
+      "evidencia": "Digitación de inventario"
+    }
+  ],
+  "datos_sinteticos": true,
+  "horario_clases": [
+    {
+      "dias": [
+        "lunes",
+        "martes",
+        "miercoles",
+        "jueves",
+        "viernes"
+      ],
+      "hora_inicio": "07:00",
+      "hora_fin": "12:00"
+    }
+  ]
+}
