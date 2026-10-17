@@ -38,6 +38,7 @@
     <symbol id="i-scale" viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M7 21h10"/><path d="M4 7h16"/><path d="m6 7-3 7a3 3 0 0 0 6 0z"/><path d="m18 7-3 7a3 3 0 0 0 6 0z"/></symbol>
     <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></symbol>
     <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8"/><path d="M18.5 14.2A6.5 6.5 0 0 1 21.5 20"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></symbol>
   </svg>
 
   <a class="skip-link" href="#principal">Saltar al contenido</a>
@@ -52,6 +53,11 @@
         </div>
       </div>
       <div class="appbar__actions">
+        <nav aria-label="Selector de vista por rol" style="display:flex;gap:0.35rem;align-items:center;">
+          <a href="/" class="btn btn--on-dark" aria-current="page" title="Vista Admin / Orientador (control completo)">Orientador (Admin)</a>
+          <a href="/joven" class="btn btn--on-dark" style="opacity:0.85;" title="Vista Aplicante (Yaritza)">Vista Aplicante</a>
+          <a href="/empresa" class="btn btn--on-dark" style="opacity:0.85;" title="Vista Empresa (publicar oferta y reportar contratación)">Vista Empresa</a>
+        </nav>
         <span id="badge-grafo" class="status-pill status-paused">Esperando tu aprobación</span>
         <button id="btn-reset" class="btn btn--on-dark" type="button" title="Vuelve a los datos iniciales del caso Yaritza">
           <svg class="icon"><use href="#i-refresh"/></svg><span>Reiniciar demo</span>
@@ -61,6 +67,7 @@
   </header>
 
   <main id="principal" class="container">
+    <div id="banner-demo-publica" class="banner hidden" role="status"></div>
     <!-- Recorrido del caso por los agentes del sistema -->
     <section class="flujo" aria-labelledby="flujo-titulo">
       <h2 id="flujo-titulo" class="visually-hidden">Recorrido por los agentes</h2>
@@ -191,7 +198,7 @@
             </label>
             <label class="field">
               <span>Edad</span>
-              <input type="number" id="np-edad" class="input" min="15" max="29" value="20" required />
+              <input type="number" id="np-edad" class="input" min="18" max="29" value="20" required />
             </label>
             <label class="field">
               <span>Corregimiento donde vive</span>
@@ -232,6 +239,78 @@
               <button type="submit" class="btn btn--primary">Registrar perfil y recalcular</button>
             </div>
           </form>
+        </details>
+
+        <details class="drawer">
+          <summary><svg class="icon"><use href="#i-upload"/></svg><span>Subir CV (PDF o foto con cámara)</span><svg class="icon drawer__chev"><use href="#i-chevron"/></svg></summary>
+          <form id="form-subir-cv" class="form-grid drawer__body">
+            <p class="drawer__hint full-width">Sube un CV en PDF (con capa de texto) o foto (máximo 5 MB). La cédula, teléfono y dirección exacta se eliminan automáticamente por regex antes de cualquier procesamiento.</p>
+            <label class="field">
+              <span>Nombre (opcional)</span>
+              <input type="text" id="scv-nombre" class="input" placeholder="Ej. Daniela Pérez" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>Edad</span>
+              <input type="number" id="scv-edad" class="input" min="18" max="29" value="21" required />
+            </label>
+            <label class="field">
+              <span>Corregimiento</span>
+              <select id="scv-corregimiento" class="input">
+                <option value="La Chorrera">La Chorrera</option>
+                <option value="Vista Alegre">Vista Alegre</option>
+                <option value="Arraiján">Arraiján</option>
+                <option value="Bella Vista">Bella Vista</option>
+                <option value="Tocumen">Tocumen</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Salario mínimo (USD)</span>
+              <input type="number" id="scv-salario" class="input" min="400" max="2000" step="10" value="600" required />
+            </label>
+            <label class="field">
+              <span>Pasaje diario (USD)</span>
+              <input type="number" id="scv-pasaje" class="input" min="1" max="15" step="0.25" value="3.00" required />
+            </label>
+            <label class="field full-width">
+              <span style="display:flex;align-items:center;gap:0.5rem;">
+                <input type="checkbox" id="scv-estudia-noche" />
+                <span>Estudia de noche (18:00 a 22:00)</span>
+              </span>
+            </label>
+            <label class="field full-width">
+              <span>Archivo de CV (PDF o foto)</span>
+              <input type="file" id="scv-archivo" class="input" accept="image/*,application/pdf" capture="environment" required />
+            </label>
+            <div id="scv-preview" class="full-width" style="display:none;margin-top:0.5rem;"></div>
+            <div class="form-actions full-width">
+              <button type="submit" class="btn btn--primary">Procesar CV y recalcular</button>
+            </div>
+          </form>
+        </details>
+        <details class="drawer" id="drawer-admin-operacion">
+          <summary><svg class="icon"><use href="#i-activity"/></svg><span>Umbrales del solver editables y panel de operación (Admin)</span><svg class="icon drawer__chev"><use href="#i-chevron"/></svg></summary>
+          <div class="drawer__body">
+            <p class="drawer__hint">Ajusta los umbrales de CP-SAT en caliente (ej. subir traslado máximo a 90 min habilita Tocumen para Yaritza con traza firmada) y audita el estado técnico de operación.</p>
+            <form id="form-umbrales-solver" class="form-grid" style="margin-bottom:1rem;">
+              <label class="field">
+                <span>Traslado máximo por trayecto (min)</span>
+                <input type="number" id="umb-minutos" class="input" min="15" max="180" step="5" value="60" required />
+              </label>
+              <label class="field">
+                <span>Tope pasaje mensual (% del salario)</span>
+                <input type="number" id="umb-pasaje-pct" class="input" min="5" max="50" step="1" value="15" required />
+              </label>
+              <label class="field">
+                <span>Máximo de ofertas por joven</span>
+                <input type="number" id="umb-max-ofertas" class="input" min="1" max="10" step="1" value="3" required />
+              </label>
+              <div class="form-actions full-width" style="display:flex;gap:0.5rem;align-items:center;">
+                <button type="submit" class="btn btn--primary">Recalcular solver con estos umbrales</button>
+                <button type="button" id="btn-umb-tocumen-95" class="btn btn--secondary">Probar 95 min (habilitar Tocumen)</button>
+              </div>
+            </form>
+            <div id="contenedor-operacion-admin"></div>
+          </div>
         </details>
       </div>
     </section>
@@ -286,6 +365,21 @@
           </label>
           <div class="form-actions full-width">
             <button type="submit" class="btn btn--primary">Revisar con la Ley 11 y recalcular</button>
+          </div>
+        </form>
+      </details>
+
+      <details class="drawer">
+        <summary><svg class="icon"><use href="#i-upload"/></svg><span>Subir oferta (PDF o foto con cámara)</span><svg class="icon drawer__chev"><use href="#i-chevron"/></svg></summary>
+        <form id="form-subir-oferta" class="form-grid drawer__body">
+          <p class="drawer__hint full-width">Sube un volante o anuncio en PDF, JPG o PNG (máximo 5 MB). En celulares puedes tomar la foto directamente con la cámara. El agente Mercado extrae los datos y aplica las reglas de la Ley 11 de 2005.</p>
+          <label class="field full-width">
+            <span>Archivo o foto del volante</span>
+            <input type="file" id="so-archivo" class="input" accept="image/*,application/pdf" capture="environment" required />
+          </label>
+          <div id="so-preview" class="full-width" style="display:none;margin-top:0.5rem;"></div>
+          <div class="form-actions full-width">
+            <button type="submit" class="btn btn--primary">Subir y analizar con agente Mercado</button>
           </div>
         </form>
       </details>

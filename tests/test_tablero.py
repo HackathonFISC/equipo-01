@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+import time
 
 import httpx
 import pytest
@@ -188,7 +189,7 @@ def test_acciones_orientador_consentimiento_sqlite_editar_quitar_rechazar_y_desb
     assert post["estado"] == "enviado"
     assert len(estado["consentimientos"]) == 1
     assert estado["consentimientos"][0]["medio"] == "orientador"
-    assert len(post["archivos_generados"]) == 3
+    assert len(post["archivos_generados"]) == 4  # CV, carta (#212), .ics y mensaje
     for nombre_arch in post["archivos_generados"]:
         ruta_arch = (tmp_path / nombre_arch).resolve()
         assert ruta_arch.is_relative_to(tmp_path.resolve())
@@ -656,7 +657,6 @@ def test_issue_122_persistencia_entre_reinicios_y_reset_con_puente_db(
     finally:
         conn.close()
 
-
 def test_trazas_honestas_el_tablero_no_firma_por_agentes_que_no_corrieron(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -782,5 +782,388 @@ def test_api_no_aprueba_si_el_auditor_detecto_sesgo(tmp_path: Path, monkeypatch:
             # Sin sesgo, el mismo pedido vuelve a aprobarse.
             await client.post("/api/auditor/simular-sesgo", json={"activar": False})
             assert (await client.post("/api/orientador/accion", json=aprobar)).status_code == 200
+
+    asyncio.run(_ejecutar())
+
+
+def test_issue_168_roles_umbrales_tocumen_y_panel_operacion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #168: 3 vistas de rol (orientador, empresa, joven) con Decision firmada, umbrales del solver (90 min hace viable Tocumen para Yaritza) y panel de operación."""
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path / "outbox")
+
+    async def _ejecutar() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            await client.post("/api/reset")
+            srv.anunciar_codigos_joven(srv.ESTADO_GLOBAL)
+
+            # 1. Las 3 vistas responden 200
+            assert (await client.get("/")).status_code == 200
+            assert (await client.get("/joven")).status_code == 200
+            assert (await client.get("/empresa")).status_code == 200
+
+            # 2. En el estado por defecto (60 min), OF-TOCUMEN-03 está descartada para Yaritza
+            est0 = (await client.get("/api/estado")).json()
+            assert not any(
+                m["perfil_id"] == "PERFIL-YARITZA" and m["oferta_id"] == "OF-TOCUMEN-03"
+                for m in est0["matches"]
+            )
+
+            # 3. Cambiar el traslado máximo a 95 min hace viable OF-TOCUMEN-03 para Yaritza y queda trazado con agente='orientador'
+            r_umb = await client.post(
+                "/api/orientador/umbrales",
+                json={"max_minutos_traslado": 95, "max_vacantes_por_perfil": 3},
+            )
+            assert r_umb.status_code == 200
+            est_umb = r_umb.json()
+            assert any(
+                m["perfil_id"] == "PERFIL-YARITZA" and m["oferta_id"] == "OF-TOCUMEN-03"
+                for m in est_umb["matches"]
+            )
+            assert any(
+                d["agente"] == "orientador" and "95 min" in d["salida_resumen"]
+                for d in est_umb["decisiones_db"]
+            )
+
+            # 4. Acción del joven en /joven deja Decision con agente='joven'
+            token_yaritza = srv.ESTADO_GLOBAL["_tokens_joven"]["PERFIL-YARITZA"]
+            r_joven = await client.post(
+                "/api/joven/consentimiento",
+                json={"perfil_id": "PERFIL-YARITZA", "oferta_id": "OF-CHORRERA-01", "otorgado": True},
+                headers={"X-Token-Joven": token_yaritza},
+            )
+            assert r_joven.status_code == 200
+
+            # Intentar citar a entrevista antes de que la postulación esté en 'enviado' es rechazado con 422
+            r_emp_invalida = await client.post(
+                "/api/empresa/evento",
+                json={
+                    "tipo": "acepta",
+                    "oferta_id": "OF-CHORRERA-01",
+                    "perfil_id": "PERFIL-YARITZA",
+                    "empresa": "Supermercados del Istmo",
+                },
+            )
+            assert r_emp_invalida.status_code == 422
+
+            # Orientador aprueba la candidatura consentida -> se envía a la empresa
+            r_aprob = await client.post(
+                "/api/orientador/accion",
+                json={
+                    "accion": "aprobar",
+                    "perfil_id": "PERFIL-YARITZA",
+                    "oferta_id": "OF-CHORRERA-01",
+                    "consentimiento_joven": True,
+                    "orientador": "Orientadora Ana Gómez",
+                },
+            )
+            assert r_aprob.status_code == 200
+
+            # 5. Acción de la empresa en /api/empresa/evento deja Decision con agente='empresa' sin filtrar estado orientador
+            r_emp_404 = await client.post(
+                "/api/empresa/evento",
+                json={
+                    "tipo": "acepta",
+                    "oferta_id": "OF-CHORRERA-01",
+                    "perfil_id": "PERFIL-INEXISTENTE-999",
+                    "empresa": "Supermercados del Istmo",
+                },
+            )
+            assert r_emp_404.status_code == 404
+
+            r_emp = await client.post(
+                "/api/empresa/evento",
+                json={
+                    "tipo": "acepta",
+                    "oferta_id": "OF-CHORRERA-01",
+                    "perfil_id": "PERFIL-YARITZA",
+                    "empresa": "Supermercados del Istmo",
+                    "nota": "Citada a entrevista matutina",
+                },
+            )
+            assert r_emp.status_code == 200
+            assert r_emp.json().get("ok") is True
+            assert "decisiones_db" not in r_emp.json()
+
+            # En /api/empresa/postulaciones la empresa solo ve postulaciones enviadas
+            r_post_emp = await client.get("/api/empresa/postulaciones")
+            assert r_post_emp.status_code == 200
+            assert "postulaciones" in r_post_emp.json()
+
+            est_final = (await client.get("/api/estado")).json()
+            agentes_db = {d["agente"] for d in est_final["decisiones_db"]}
+            assert {"orientador", "empresa", "joven"} <= agentes_db
+
+            # 6. Panel de operación expone uso_por_agente, uso_total, llm_modo, grabaciones y roles
+            r_op = await client.get("/api/admin/operacion")
+            assert r_op.status_code == 200
+            op = r_op.json()
+            assert "llm_modo" in op
+            assert "uso_por_agente" in op
+            assert "uso_total" in op
+            assert "grabaciones_disponibles" in op
+            assert op["umbrales_solver"]["max_minutos_traslado"] == 95
+
+    asyncio.run(_ejecutar())
+
+
+def test_issue_161_vercel_json_y_modo_demo_publica(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issue #161: configuración de despliegue en Vercel y aviso de demo pública de solo lectura."""
+    import json
+    import app.server as srv
+
+    ruta_vercel = Path(__file__).resolve().parents[1] / "vercel.json"
+    assert ruta_vercel.is_file()
+    cfg_vercel = json.loads(ruta_vercel.read_text(encoding="utf-8"))
+    assert cfg_vercel["env"]["PUENTE_DEMO_PUBLICA"] == "1"
+    assert cfg_vercel["env"]["LLM_MODO"] == "reproducir"
+    assert any(b.get("src") == "app/server.py" for b in cfg_vercel.get("builds", []))
+
+    monkeypatch.setenv("PUENTE_DEMO_PUBLICA", "1")
+    assert srv.es_modo_demo_publica() is True
+    estado_pub = srv.serializar_estado_publico(srv.ESTADO_GLOBAL)
+    # Verificar .vercelignore
+    ruta_ignore = Path(__file__).resolve().parents[1] / ".vercelignore"
+    assert ruta_ignore.is_file()
+    txt_ignore = ruta_ignore.read_text(encoding="utf-8")
+    assert ".venv" in txt_ignore
+    assert "tests" in txt_ignore
+
+    # En modo demo pública, POST/mutaciones devuelven 403 (read-only)
+    from httpx import ASGITransport, AsyncClient
+    import asyncio
+
+    async def _test_readonly():
+        async with AsyncClient(transport=ASGITransport(app=srv.app), base_url="http://test") as client:
+            # GET responde 200
+            res_get = await client.get("/api/estado")
+            assert res_get.status_code == 200
+
+            # POST devuelve 403
+            res_post = await client.post("/api/reset", json={})
+            assert res_post.status_code == 403
+            assert res_post.json().get("modo_demo_publica") is True
+
+    asyncio.run(_test_readonly())
+
+
+def test_issue_170_ingesta_multicanal_archivos_guardrails_y_pii(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #170: subida de ofertas y CV por archivo (PDF y foto) con validación de guardrails y sin PII."""
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path / "outbox")
+
+    ruta_volante = Path(__file__).resolve().parent / "fixtures" / "volante_sintetico.jpg"
+    ruta_cv = Path(__file__).resolve().parent / "fixtures" / "cv_sintetico.pdf"
+    assert ruta_volante.is_file(), "Debe existir tests/fixtures/volante_sintetico.jpg"
+    assert ruta_cv.is_file(), "Debe existir tests/fixtures/cv_sintetico.pdf"
+
+    async def _ejecutar() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            await client.post("/api/reset")
+
+            # 1. Subir oferta volante_sintetico.jpg -> llega bloqueada por Ley 11 con alerta de edad
+            datos_volante = ruta_volante.read_bytes()
+            r_of = await client.post(
+                "/api/ofertas/archivo",
+                files={"archivo": ("volante.jpg", datos_volante, "image/jpeg")},
+            )
+            assert r_of.status_code == 200, r_of.text
+            payload_of = r_of.json()
+            assert "subida" in payload_of
+            sub_of = payload_of["subida"]["oferta"]
+            assert sub_of["bloqueada"] is True
+            assert any("18 a 25" in str(a) for a in sub_of["alertas"])
+
+            # 2. Subir CV cv_sintetico.pdf -> produce perfil con evidencias y cero cédula en decisiones
+            datos_cv = ruta_cv.read_bytes()
+            r_cv = await client.post(
+                "/api/perfiles/archivo",
+                files={"archivo": ("mi_cv.pdf", datos_cv, "application/pdf")},
+                data={
+                    "nombre": "Daniela Pérez",
+                    "edad": "21",
+                    "corregimiento": "La Chorrera",
+                    "salario_minimo": "600",
+                    "presupuesto_pasaje_diario": "3.0",
+                },
+            )
+            assert r_cv.status_code == 200, r_cv.text
+            payload_cv = r_cv.json()
+            assert "subida" in payload_cv
+            sub_cv = payload_cv["subida"]["perfil"]
+            assert sub_cv["edad"] == 21
+            assert sub_cv["corregimiento"] == "La Chorrera"
+            habilidades_ids = {h["skill_id"] for h in sub_cv["habilidades"]}
+            assert {"atencion_cliente", "manejo_caja", "inventario"} <= habilidades_ids
+            # Verificar ausencia de cédula y teléfono en decisiones y checkpoint
+            decisiones_db = payload_cv.get("decisiones_db", [])
+            for d in decisiones_db:
+                assert "8-999-1111" not in str(d)
+                assert "6999-1111" not in str(d)
+
+            # 3. Rechazo de .exe renombrado a .pdf (firma falsa) -> 422 y Decision de guardrails
+            exe_falso = b"MZ\x90\x00\x03\x00\x00\x00" + b"\x00" * 100
+            r_exe = await client.post(
+                "/api/ofertas/archivo",
+                files={"archivo": ("malware.pdf", exe_falso, "application/pdf")},
+            )
+            assert r_exe.status_code == 422
+            assert "no corresponde a un pdf" in r_exe.text
+
+            # 4. Rechazo de archivo de audio .ogg -> mensaje de MENSAJE_AUDIO
+            audio_falso = b"OggS\x00\x02\x00\x00" + b"\x00" * 50
+            r_audio = await client.post(
+                "/api/perfiles/archivo",
+                files={"archivo": ("nota_voz.ogg", audio_falso, "audio/ogg")},
+                data={"edad": "20", "corregimiento": "La Chorrera"},
+            )
+            assert r_audio.status_code == 422
+            assert "notas de voz" in r_audio.text
+
+            # 5. Rechazo de archivo > 5 MB declarado -> 413
+            r_grande = await client.post(
+                "/api/ofertas/archivo",
+                files={"archivo": ("enorme.pdf", b"%PDF-1.4" + b"A" * 10, "application/pdf")},
+                headers={"Content-Length": str(50 * 1024 * 1024)},
+            )
+            assert r_grande.status_code == 413
+
+            # 6. Rechazo de PDF dañado o no legible -> 422
+            pdf_corrupto = b"%PDF-1.4\n" + b"contenido completamente corrupto sin xref ni trailer" * 10
+            r_corrupto = await client.post(
+                "/api/perfiles/archivo",
+                files={"archivo": ("corrupto.pdf", pdf_corrupto, "application/pdf")},
+                data={"edad": "21", "corregimiento": "La Chorrera"},
+            )
+            assert r_corrupto.status_code == 422
+            assert "dañado" in r_corrupto.text
+
+            # 7. Falta de encabezado Content-Length -> 411
+            r_sin_cl = await client.post(
+                "/api/perfiles/archivo",
+                content=b"--boundary\r\nContent-Disposition: form-data; name=\"archivo\"; filename=\"test.pdf\"\r\nContent-Type: application/pdf\r\n\r\n%PDF-1.4\r\n--boundary--\r\n",
+                headers={
+                    "Content-Type": "multipart/form-data; boundary=boundary",
+                    "Content-Length": "",
+                },
+            )
+            assert r_sin_cl.status_code == 411
+            assert "Content-Length" in r_sin_cl.text
+
+            # 8. Límite de subidas por minuto antes de parsear cuerpo -> 429
+            monkeypatch.setattr(srv, "LIMITE_PERFILES_POR_MINUTO", 0)
+            r_limite = await client.post(
+                "/api/ofertas/archivo",
+                files={"archivo": ("volante2.jpg", datos_volante, "image/jpeg")},
+            )
+            assert r_limite.status_code == 429
+            assert "Muchas subidas seguidas" in r_limite.text
+
+    asyncio.run(_ejecutar())
+
+
+def test_cargar_desde_data_lee_el_archivo_y_rotula_lo_sintetico(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """«Cargar desde data/» lee el archivo elegido; lo escrito en el código se rotula como ejemplo sintético (#188)."""
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path)
+
+    async def _ejecutar() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            assert (await client.post("/api/reset")).status_code == 200
+            catalogo = srv.listar_catalogo_data()
+            for item in catalogo["ofertas"] + catalogo["perfiles"]:
+                if item["id"].startswith("data/"):
+                    assert item["etiqueta"].startswith(item["id"])
+                else:
+                    assert item["etiqueta"].startswith("ejemplo sintético")
+
+            # Oferta: el anuncio de data/ofertas pasa por Mercado (reproducir, grabaciones de #139) y la Ley 11
+            # se aplica sobre su texto: CT02 pide edad y queda bloqueada.
+            r = await client.post("/api/cargar-data", json={"tipo": "oferta", "item_id": "data/ofertas/CT02.txt"})
+            assert r.status_code == 200, r.text
+            oferta = next(o for o in r.json()["ofertas"] if o["fuente"] == "data/ofertas/CT02.txt")
+            assert "Recaudaci" in oferta["puesto"] and oferta["bloqueada"] is True
+            assert "sintético" not in oferta["fuente"]
+
+            # Perfil: el JSON de data/perfiles, con sus horarios y evidencias del archivo.
+            r = await client.post("/api/cargar-data", json={"tipo": "perfil", "item_id": "data/perfiles/yaritza.json"})
+            assert r.status_code == 200, r.text
+            perfil = next(p for p in r.json()["perfiles"] if p["id"] == "PERFIL-DATA-P01")
+            assert perfil["modalidad_ingreso"] == "data/perfiles/yaritza.json (sintético)"
+            assert {h["evidencia"] for h in perfil["habilidades"]} >= {"cobro en caja", "atiendo pedidos"}
+            assert perfil["horario_clases_bloques"][0]["hora_inicio"] == "18:30"
+
+            # El mismo archivo dos veces no duplica: 422.
+            r = await client.post("/api/cargar-data", json={"tipo": "perfil", "item_id": "data/perfiles/yaritza.json"})
+            assert r.status_code == 422 and "ya está en el tablero" in r.json()["detail"]
+
+    asyncio.run(_ejecutar())
+
+
+def test_catalogo_de_data_trae_todos_los_archivos() -> None:
+    """El catálogo lista las 20 ofertas de data/ofertas (Computrabajo y Konzerta) y todos los perfiles (#188)."""
+    import app.server as srv
+
+    catalogo = srv.listar_catalogo_data()
+    ids = {item["id"] for item in catalogo["ofertas"] + catalogo["perfiles"]}
+    ofertas = {f"data/ofertas/{a.name}" for a in (srv.RUTA_DATA / "ofertas").glob("*.txt")}
+    perfiles = {f"data/perfiles/{a.name}" for a in (srv.RUTA_DATA / "perfiles").glob("*.json")}
+    assert len(ofertas) == 20 and ofertas <= ids
+    assert perfiles <= ids
+    assert any(i.startswith("data/ofertas/K") for i in ids)  # las de Konzerta ya no quedan fuera
+
+
+def test_editar_no_guarda_pii_de_la_nota_ni_del_mensaje(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """La nota y el mensaje del orientador pasan por limpiar_entrada antes de guardarse (#213, TRA-6)."""
+    import json as _json
+
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path)
+    crudos = ("8-123-4567", "6123-4567", "Calle 5ta")
+    editar = {
+        "accion": "editar",
+        "perfil_id": "PERFIL-YARITZA",
+        "oferta_id": "OF-CHORRERA-01",
+        "nota_edicion": "Cédula 8-123-4567, tel 6123-4567, vive en Calle 5ta casa 12, Arraiján. Buena actitud.",
+        "mensaje_empresa": "Pueden llamarla al 6123-4567 para coordinar la entrevista.",
+    }
+
+    async def _ejecutar() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            assert (await client.post("/api/reset")).status_code == 200
+            r = await client.post("/api/orientador/accion", json=editar)
+            assert r.status_code == 200, r.text
+            estado = (await client.get("/api/estado")).json()
+
+        publico = _json.dumps(estado, ensure_ascii=False)
+        for dato in crudos:
+            assert dato not in publico, dato
+        post = next(
+            p for p in estado["postulaciones"]
+            if p["perfil_id"] == "PERFIL-YARITZA" and p["oferta_id"] == "OF-CHORRERA-01"
+        )
+        assert "Buena actitud" in post["comentario_orientador"]  # la nota llega, sin los datos
+        assert "[CEDULA]" in post["comentario_orientador"] and "[TELEFONO]" in post["mensaje_empresa"]
+
+        conn = db.conectar(srv.ESTADO_GLOBAL["_db_path"])
+        try:
+            filas = conn.execute("SELECT entrada_resumen, salida_resumen, razon FROM decisiones").fetchall()
+        finally:
+            conn.close()
+        guardado = " ".join(" ".join(str(c) for c in tuple(f)) for f in filas)
+        assert "Buena actitud" in guardado
+        for dato in crudos:
+            assert dato not in guardado, dato
 
     asyncio.run(_ejecutar())

@@ -1,0 +1,37 @@
+{
+  "hash": "0a5cf3a90eb5c0bf81eb73819ab88366ed944d34e719c27aba80ab734c1d2398",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "nota": "Grabación sintética determinística de prueba para fixtures de ingesta multicanal (issue #170).",
+  "tipo": "estructurado",
+  "agente": "perfil",
+  "esquema": "PerfilExtraido",
+  "salida": {
+    "habilidades": [
+      {
+        "skill_id": "atencion_cliente",
+        "evidencia": "Atendí clientes en la abarrotería de mi tío durante dos años."
+      },
+      {
+        "skill_id": "manejo_caja",
+        "evidencia": "Hacía el cobro en caja y el cuadre de caja al cierre del día."
+      },
+      {
+        "skill_id": "inventario",
+        "evidencia": "Llevaba el control de inventario de la bodega cada semana."
+      }
+    ],
+    "edad": null,
+    "corregimiento": null,
+    "ubicacion_texto": null,
+    "salario_minimo": null,
+    "horario_libre": [],
+    "horario_clases": [],
+    "transcripcion_literal": null
+  },
+  "uso": {
+    "entrada": 0,
+    "salida": 0
+  },
+  "creado": "2026-10-17T05:50:08+00:00"
+}
