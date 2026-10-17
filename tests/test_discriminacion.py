@@ -217,3 +217,95 @@ def test_demas_causales_del_art_1_alertan_citando_el_articulo(texto, regla, fras
     assert _reglas(texto) == [(regla, frase)]
     assert hallazgos[0].como_texto().startswith(f"alerta · {regla}")
     assert "Ley 11 de 2005 art. 1" in hallazgos[0].como_texto()
+
+
+# ---------------------------------------------------------------- #73: edad mínima mayor de 18 y más puestos en femenino
+
+
+def test_ofertas_reales_ct40_bloquea_por_edad_minima_y_ct03_alerta_por_operaria():
+    ct40 = revisar_texto("Edad: A partir de 26 años")
+    assert esta_bloqueada(ct40)
+    assert [(h.regla, h.frase) for h in ct40] == [(EDAD, "Edad: A partir de 26 años")]
+    assert ct40[0].como_texto().startswith("bloqueo · edad") and "Ley 11 de 2005 art. 2" in ct40[0].como_texto()
+
+    ct03 = revisar_texto("Puesto: Operaria de Limpieza")
+    assert not esta_bloqueada(ct03)
+    assert [(h.regla, h.frase) for h in ct03] == [(SEXO_IMPLICITO, "Operaria")]
+    assert ct03[0].como_texto().startswith("alerta · sexo_implicito")
+
+
+@pytest.mark.parametrize(
+    "texto, frase",
+    [
+        ("Requisitos: desde 25 años, bachiller", "desde 25 años"),
+        ("Mínimo 26 años", "Mínimo 26 años"),
+        ("Edad mínima: 30", "Edad mínima: 30"),
+        ("A partir de los 26 años", "A partir de los 26 años"),
+        ("Personas de 26 años en adelante", "26 años en adelante"),
+    ],
+)
+def test_edad_minima_mayor_de_18_bloquea(texto, frase):
+    hallazgos = revisar_texto(texto)
+    assert esta_bloqueada(hallazgos)
+    assert _reglas(texto) == [(EDAD, frase)]
+    assert "art. 2" in hallazgos[0].como_texto()
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Mayor de 18",
+        "A partir de 18 años",
+        "18 años en adelante",
+        "Edad: 18 años en adelante",
+        "Edad: desde 18 años",
+    ],
+)
+def test_edad_minima_legal_de_18_no_bloquea(texto):
+    assert revisar_texto(texto) == []
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Inicio a partir de 2026",
+        "Entrada a partir de las 8",
+        "Bono desde 25 dólares",
+        "Mínimo 26 horas semanales",
+        "2 años de experiencia",
+        "Mayor de 18, turno nocturno",
+        "Mínimo 20 años de experiencia",
+        "Experiencia: desde 20 años",
+    ],
+)
+def test_numeros_que_no_son_edad_no_bloquean(texto):
+    assert revisar_texto(texto) == []
+
+
+@pytest.mark.parametrize(
+    "texto, frase",
+    [
+        ("Operaria de producción", "Operaria"),
+        ("Empacadora para supermercado", "Empacadora"),
+        ("Despachadora de combustible", "Despachadora"),
+        ("Mesera para restaurante", "Mesera"),
+    ],
+)
+def test_mas_puestos_en_femenino_alertan(texto, frase):
+    hallazgos = revisar_texto(texto)
+    assert not esta_bloqueada(hallazgos)
+    assert _reglas(texto) == [(SEXO_IMPLICITO, frase)]
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Recepcionista bilingüe",
+        "Se busca cajero(a)",
+        "Operario(a) de producción",
+        "Operaria/o de limpieza",
+        "Solicitamos mesero o mesera",
+    ],
+)
+def test_puestos_neutros_o_en_ambos_generos_no_alertan(texto):
+    assert revisar_texto(texto) == []
