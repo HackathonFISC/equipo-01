@@ -185,9 +185,29 @@ def _es_minimo_legal(frase: str) -> bool:
 
 
 def _es_experiencia(plegado: str, m: re.Match[str]) -> bool:
-    """"Mínimo 20 años de experiencia" o "experiencia: desde 20 años" cuentan experiencia, no edad."""
-    antes, despues = plegado[max(0, m.start() - 20) : m.start()], plegado[m.end() : m.end() + 20]
-    return re.match(r"\s*(?:de\s+)?experiencia", despues) is not None or re.search(r"experiencia\s*:?\s*$", antes) is not None
+    """"Mínimo 20 años de experiencia", "experiencia: desde 20 años" o "experiencia comprobable de 20
+    años en adelante" cuentan experiencia, no edad.
+
+    Ante la duda es edad: bajo la Ley 11 un límite que se escapa pesa más que una oferta bloqueada de
+    más. Nunca es experiencia si la frase describe personas ("mayores de", "menores de"), si empieza
+    por "edad", si lleva "los" antes del número ("desde los 25 años") o "de edad" después. Entre
+    "experiencia" y el número se admite un solo calificativo de una lista cerrada; "indispensable",
+    "requerida" o "necesaria" quedan fuera porque tras ellas un "desde 25 años" suele ser edad.
+    """
+    frase = m.group(0)
+    antes, despues = plegado[max(0, m.start() - 40) : m.start()], plegado[m.end() : m.end() + 20]
+    if (
+        re.match(r"(?:no\s+)?(?:mayor|menor)(?:es)?\s+de\b", frase)
+        or frase.startswith("edad")
+        or re.search(r"\blos\s+\d", frase)
+        or re.match(r"\s*de\s+edad\b", despues)
+    ):
+        return False
+    calificativo = (
+        r"(?:laboral|minima|previa|comprobable|comprobada|deseable|demostrada|relacionada|acumulada|certificada)"
+    )
+    previa = rf"experiencia(?:\s+{calificativo})?\s*:?\s*(?:de\s*)?$"
+    return re.match(r"\s*(?:de\s+)?experiencia", despues) is not None or re.search(previa, antes) is not None
 
 
 def _frase(original: str, inicio: int, fin: int) -> str:
