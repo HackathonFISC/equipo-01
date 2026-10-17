@@ -2331,6 +2331,7 @@ mark.m-alerta {
 .ag-auditor { --agente: #a63d6b; }
 .ag-formacion { --agente: #5c6912; }
 .ag-orientador_humano { --agente: #8f6200; }
+.ag-tablero { --agente: var(--text-2); }
 .ag-postulacion { --agente: var(--ok); }
 
 @media (prefers-color-scheme: dark) {
