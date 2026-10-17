@@ -374,3 +374,47 @@ def test_con_puente_outbox_el_ics_que_confirma_la_empresa_va_a_esa_carpeta(
         assert _accion(cliente, estado, accion="aceptar", oferta_id=CHORRERA, ref=ref).status_code == 200
         assert cliente.get(f"/api/empresa/{SUPER}/ics/{CHORRERA}/{ref}", headers=_cred(estado)).status_code == 200
     assert list(carpeta.glob(f"{empresa.PREFIJO_ICS}{CHORRERA}_*.ics"))  # el .ics confirmado quedó ahí
+
+
+# ---------------------------------------------------------------- #258: /empresa solo publica y el rol lleva a la lista ciega
+
+
+def test_el_selector_de_roles_lleva_a_la_lista_ciega(entorno) -> None:
+    """El menú del tablero y `roles_sistema` ya no llevan a la página vieja, que no es ciega (#258)."""
+    cliente, _estado, _ = entorno
+    roles = {r["rol"]: r for r in cliente.get("/api/admin/operacion").json()["roles_sistema"]}
+    assert roles["empresa"]["ruta"] == "/empresa/lista-corta"
+    menu = (empresa.RUTA_STATIC / "index.html").read_text(encoding="utf-8")
+    assert 'href="/empresa/lista-corta"' in menu and 'href="/empresa"' not in menu
+    assert cliente.get(roles["empresa"]["ruta"]).status_code == 200
+
+
+def test_la_pagina_empresa_solo_publica_y_no_muestra_a_nadie(entorno) -> None:
+    """/empresa ya no lista postulaciones ni deja citar, contratar o rechazar: eso es de la lista ciega (#258)."""
+    cliente, _estado, _ = entorno
+    r = cliente.get("/empresa")
+    assert r.status_code == 200
+    html = r.text
+    for viejo in (
+        "Citar a entrevista",
+        "Contratar",
+        "Rechazar",
+        "nombre_perfil",
+        "Candidato ciego",
+        "/api/empresa/evento",
+        "/api/empresa/postulaciones",
+        "lista-postulaciones-empresa",
+        "perfil_id",
+    ):
+        assert viejo not in html, viejo
+    assert "/api/ofertas" in html and 'href="/empresa/lista-corta"' in html
+    assert 'class="boton' not in html  # esas clases no existen en joven.css: los botones son .btn
+
+
+def test_las_habilidades_de_publicar_no_van_fijas_en_el_codigo(entorno) -> None:
+    """La página manda las habilidades que la empresa marca; antes llevaban siempre las mismas dos (#258)."""
+    cliente, _estado, _ = entorno
+    html = cliente.get("/empresa").text
+    assert 'habilidades: ["atencion_cliente", "manejo_caja"]' not in html
+    assert html.count('name="habilidad"') >= 4
+    assert "Elige al menos una habilidad" in html
