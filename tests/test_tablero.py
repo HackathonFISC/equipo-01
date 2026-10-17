@@ -77,6 +77,13 @@ def test_datos_iniciales_demo_incluyen_caso_yaritza_ley11_y_fuentes_sinteticas()
     assert "corregimiento" in estado["auditoria"]["nota_metodologica"].lower()
     assert "referencia_inec" in estado["metricas"]
     assert "operativas_demo" in estado["metricas"]
+    inec = estado["metricas"]["referencia_inec"]
+    assert inec["fecha"] == "agosto de 2026"
+    assert inec["desocupacion_20_24_pct"] == 22.6
+    assert inec["desocupacion_25_29_pct"] == 14.4
+    assert inec["informalidad_no_agricola_pct"] == 45.8
+    assert inec["fuente_desocupacion_url"].startswith("https://www.inec.gob.pa/")
+    assert inec["fuente_informalidad_url"].startswith("https://www.inec.gob.pa/")
 
 
 def test_traslado_faltante_no_inventa_45_min_y_descarta_con_motivo() -> None:

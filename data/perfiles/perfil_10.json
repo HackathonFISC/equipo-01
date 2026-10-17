@@ -1,0 +1,39 @@
+{
+  "id": "P10",
+  "nombre": "Perfil J (ficticio)",
+  "edad": 28,
+  "corregimiento": "Arraiján",
+  "horario_libre": [
+    {
+      "dias": [
+        "lunes",
+        "martes",
+        "miercoles",
+        "jueves",
+        "viernes",
+        "sabado"
+      ],
+      "hora_inicio": "07:00",
+      "hora_fin": "16:00"
+    }
+  ],
+  "horario_clases": [],
+  "salario_minimo": 625,
+  "presupuesto_pasaje_diario": 3.0,
+  "experiencia_texto": "En una feria comunitaria limpié superficies, repuse insumos de aseo y ayudé a separar pedidos para entrega.",
+  "habilidades": [
+    {
+      "skill_id": "limpieza",
+      "evidencia": "limpié superficies"
+    },
+    {
+      "skill_id": "reposicion_insumos",
+      "evidencia": "repuse insumos de aseo"
+    },
+    {
+      "skill_id": "despacho_mercancia",
+      "evidencia": "separar pedidos para entrega"
+    }
+  ],
+  "datos_sinteticos": true
+}

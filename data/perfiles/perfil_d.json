@@ -1,0 +1,39 @@
+{
+  "id": "P04",
+  "nombre": "Perfil D (ficticio)",
+  "edad": 25,
+  "corregimiento": "San Miguelito",
+  "horario_libre": [
+    {
+      "dias": [
+        "lunes",
+        "martes",
+        "miercoles",
+        "jueves",
+        "viernes",
+        "sabado"
+      ],
+      "hora_inicio": "07:00",
+      "hora_fin": "19:00"
+    }
+  ],
+  "salario_minimo": 650,
+  "presupuesto_pasaje_diario": 2.5,
+  "experiencia_texto": "Colaboré en un comedor comunitario limpiando superficies, preparando ingredientes y separando pedidos para entrega.",
+  "habilidades": [
+    {
+      "skill_id": "limpieza",
+      "evidencia": "limpiando superficies"
+    },
+    {
+      "skill_id": "trabajo_equipo",
+      "evidencia": "Colaboré en un comedor comunitario"
+    },
+    {
+      "skill_id": "despacho_mercancia",
+      "evidencia": "separando pedidos para entrega"
+    }
+  ],
+  "datos_sinteticos": true,
+  "horario_clases": []
+}

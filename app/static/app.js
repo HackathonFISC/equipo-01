@@ -327,10 +327,16 @@ function renderizarKPIs() {
 function renderizarMetricasImpacto() {
   const panel = document.getElementById("panel-metricas-impacto");
   if (!panel) return;
-  const m = estadoActual.metricas_impacto || {};
+  const m = estadoActual.metricas || {};
   const inec = m.referencia_inec || {};
   const op = m.operativas_demo || {};
   const rotulo = m.rotulo || "Ilustrativo, datos de la demo";
+  const cifraInec = (valor) => {
+    const numero = Number(valor);
+    return valor == null || !Number.isFinite(numero)
+      ? "—"
+      : `${numero.toLocaleString("es-ES", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} %`;
+  };
   const descTraslado = m.total_ofertas_descartadas_traslado_pasaje ?? op.pares_descartados_con_motivo ?? 0;
   const habsEvidencia = m.total_habilidades_informales_con_evidencia ?? 0;
   const comps = m.comparaciones_mensuales || [];
@@ -346,9 +352,12 @@ function renderizarMetricasImpacto() {
   panel.innerHTML = `
     ${icono("info")}
     <div>
-      <strong>${escaparHtml(rotulo)} · Contexto INEC Panamá:</strong>
-      desempleo juvenil <strong>${escaparHtml(inec.desempleo_juvenil_pct ?? 16.8)}%</strong> ·
-      informalidad <strong>${escaparHtml(inec.informalidad_juvenil_pct ?? 48.2)}%</strong>.
+      <strong>${escaparHtml(rotulo)} · Contexto INEC Panamá (${escaparHtml(inec.fecha ?? "—")}):</strong>
+      desocupación nacional <strong>${cifraInec(inec.desocupacion_nacional_pct)}</strong> ·
+      20–24 años <strong>${cifraInec(inec.desocupacion_20_24_pct)}</strong> ·
+      25–29 años <strong>${cifraInec(inec.desocupacion_25_29_pct)}</strong> ·
+      informalidad no agrícola <strong>${cifraInec(inec.informalidad_no_agricola_pct)}</strong>.
+      <small>Fuentes: <a href="${escaparHtml(inec.fuente_desocupacion_url ?? "#")}" target="_blank" rel="noopener noreferrer">INEC, Cuadro 5</a> · <a href="${escaparHtml(inec.fuente_informalidad_url ?? "#")}" target="_blank" rel="noopener noreferrer">INEC, Boletín, Cuadro 26</a>.</small>
       <span>En este lote: <strong>${escaparHtml(descTraslado)}</strong> descartes por traslado/pasaje ·
       <strong>${escaparHtml(habsEvidencia)}</strong> habilidades con evidencia literal ·
       <strong>${escaparHtml(op.consentimientos_confirmados ?? 0)}</strong> consentimientos confirmados ·
