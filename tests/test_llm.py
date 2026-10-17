@@ -23,6 +23,7 @@ VARIABLES = (
     "LLM_PROVEEDOR_RESPALDO",
     "LLM_MODELO_RESPALDO",
     "PUENTE_LLM_FALLBACKS",
+    "PUENTE_LLM_TOPE_USD",
     "ANTHROPIC_API_KEY",
     "GOOGLE_API_KEY",
 )
@@ -60,6 +61,21 @@ def respuesta(parsed=None, texto="", stop="end_turn", entrada=100, salida=50, de
         content=[SimpleNamespace(type="text", text=texto)] if texto else [],
         usage=SimpleNamespace(input_tokens=entrada, output_tokens=salida),
     )
+
+
+def test_tope_de_gasto_detiene_la_siguiente_llamada(monkeypatch):
+    monkeypatch.setenv("PUENTE_LLM_TOPE_USD", "0.0001")
+    cliente = ClienteAnthropic(respuesta(parsed=Salida(respuesta="ok"), entrada=100, salida=50))
+    with pytest.raises(ErrorLLM, match="tope estimado") as primera:
+        generar_estructurado("hola", Salida, agente="perfil", cliente=cliente)
+    assert primera.value.causa == "tope_gasto"
+    assert len(cliente.llamadas) == 1
+    assert llm.uso_por_agente()["perfil"]["costo_usd"] > 0.0001
+
+    with pytest.raises(ErrorLLM, match="no se llama al modelo") as segunda:
+        generar_estructurado("otra", Salida, agente="perfil", cliente=cliente)
+    assert segunda.value.causa == "tope_gasto"
+    assert len(cliente.llamadas) == 1
 
 
 class ClienteAnthropic:

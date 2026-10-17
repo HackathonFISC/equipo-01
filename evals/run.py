@@ -916,17 +916,17 @@ def _nota_llm() -> str:
 
 
 @contextlib.contextmanager
-def _entorno_llm() -> Iterator[None]:
-    """Por defecto los evals reproducen grabaciones de evals/grabaciones; el entorno (o el .env) de quien corre manda."""
+def _entorno_llm(modo: str = MODO_LLM_POR_DEFECTO) -> Iterator[None]:
+    """Los evals solo hacen llamadas reales cuando la CLI pide vivo o grabar explícitamente."""
     with contextlib.suppress(Exception):  # igual que puente.llm: .env sin pisar el entorno; si falta o es ilegible, se sigue
         from dotenv import load_dotenv
 
         load_dotenv(override=False)
     por_defecto = {"LLM_MODO": MODO_LLM_POR_DEFECTO, "LLM_DIR_GRABACIONES": str(DIR_GRABACIONES)}
     previos = {nombre: os.environ.get(nombre) for nombre in por_defecto}
-    for nombre, valor in por_defecto.items():
-        if not (os.environ.get(nombre) or "").strip():  # vacío cuenta como no definido (.env.example trae «LLM_DIR_GRABACIONES=»)
-            os.environ[nombre] = valor
+    os.environ["LLM_MODO"] = modo
+    if not (os.environ.get("LLM_DIR_GRABACIONES") or "").strip():
+        os.environ["LLM_DIR_GRABACIONES"] = por_defecto["LLM_DIR_GRABACIONES"]
     try:
         yield
     finally:
@@ -959,8 +959,12 @@ def escribir_resultados(
         "",
         _aviso_de_cobertura(resultados),
         "",
-        "Los casos con LLM se corren 3 veces y la tasa es aciertos sobre corridas. Las metas son propuestas "
-        "provisionales hasta que el equipo las confirme con el plan. Todos los datos de los casos son sintéticos.",
+        (
+            "En modo reproducir cada caso con LLM usa una sola grabación; no se mide variación entre corridas. "
+            if (os.getenv("LLM_MODO") or "").strip().lower() == "reproducir"
+            else "Los casos con LLM se repiten y la tasa es aciertos sobre corridas. "
+        ) + "Las metas son propuestas provisionales hasta que el equipo las confirme con el plan. "
+        "Todos los datos de los casos son sintéticos.",
         "",
         _nota_taxonomia(casos),
         "",
@@ -1039,6 +1043,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--salida", type=Path, default=RUTA_RESULTADOS, help="dónde guardar la tabla (por defecto evals/resultados.md)")
     parser.add_argument("--repeticiones", type=int, default=3, help="corridas por caso con LLM (por defecto 3)")
     parser.add_argument("--sin-llm", action="store_true", help="omite los casos que usan LLM")
+    modo = parser.add_mutually_exclusive_group()
+    modo.add_argument("--vivo", action="store_true", help="autoriza llamadas reales al LLM en esta corrida")
+    modo.add_argument("--grabar", action="store_true", help="autoriza llamadas reales y graba las respuestas")
     parser.add_argument("--abrir-issues", action="store_true", help="abre un issue bug por cada caso en fallo (usa gh)")
     argumentos = parser.parse_args(argv)
 
@@ -1048,8 +1055,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Error en los casos: {error}", file=sys.stderr)
         return 2
 
-    with _entorno_llm():
-        resultados = correr(casos, repeticiones=argumentos.repeticiones, usar_llm=not argumentos.sin_llm)
+    modo_llm = "vivo" if argumentos.vivo else "grabar" if argumentos.grabar else MODO_LLM_POR_DEFECTO
+    with _entorno_llm(modo_llm):
+        # Reproducir tres veces el mismo hash no aporta tres muestras independientes.
+        repeticiones = 1 if modo_llm == "reproducir" else argumentos.repeticiones
+        resultados = correr(casos, repeticiones=repeticiones, usar_llm=not argumentos.sin_llm)
         print(tabla(resultados, casos))
         print()
         print(_aviso_de_cobertura(resultados))

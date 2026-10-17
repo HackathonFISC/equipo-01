@@ -379,12 +379,25 @@ def test_main_reproduce_grabaciones_y_omite_las_que_faltan(casos, tmp_path, monk
     assert os.environ["LLM_DIR_GRABACIONES"] == str(vacio)
 
 
-def test_entorno_llm_respeta_lo_que_ya_esta_definido(monkeypatch):
+def test_entorno_llm_exige_modo_explicito_para_llamadas_reales(monkeypatch):
     monkeypatch.setenv("LLM_MODO", "grabar")
     with run._entorno_llm():
-        assert os.environ["LLM_MODO"] == "grabar"
+        assert os.environ["LLM_MODO"] == "reproducir"
         assert os.environ["LLM_DIR_GRABACIONES"] == str(run.DIR_GRABACIONES)
+    with run._entorno_llm("grabar"):
+        assert os.environ["LLM_MODO"] == "grabar"
     assert os.environ["LLM_MODO"] == "grabar" and "LLM_DIR_GRABACIONES" not in os.environ
+
+
+def test_main_no_usa_modo_vivo_del_entorno_sin_bandera(casos, tmp_path, monkeypatch):
+    import puente.llm as llm
+
+    monkeypatch.setenv("LLM_MODO", "vivo")
+    monkeypatch.setenv("LLM_DIR_GRABACIONES", str(tmp_path / "grabaciones"))
+    monkeypatch.setattr(llm, "_cliente_por_defecto", lambda *args: pytest.fail("llamada real sin --vivo"))
+    assert run.main(["--salida", str(tmp_path / "resultado.md")]) == 0
+    assert os.environ["LLM_MODO"] == "vivo"
+    assert "modo reproducir" in (tmp_path / "resultado.md").read_text(encoding="utf-8")
 
 
 def test_entorno_llm_trata_el_valor_vacio_como_no_definido(monkeypatch):
