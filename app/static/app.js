@@ -33,6 +33,10 @@ const AGENTES = {
   orientador_humano: { nombre: "Orientador", icono: "check" },
   orientador: { nombre: "Orientador (Admin)", icono: "check" },
   empresa: { nombre: "Empresa", icono: "briefcase" },
+  evento_empresa: { nombre: "Evento de la empresa", icono: "briefcase" },
+  avisos: { nombre: "Avisos", icono: "send" },
+  aprobacion: { nombre: "Aprobación", icono: "check" },
+  cobertura_turnos: { nombre: "Cobertura por turnos", icono: "briefcase" },
   joven: { nombre: "Joven (Aplicante)", icono: "user" },
   tablero: { nombre: "Tablero", icono: "list" },
   consentimiento: { nombre: "Consentimiento", icono: "check" },
@@ -301,9 +305,42 @@ function aplicarEstado(payload) {
   return true;
 }
 
+// Qué hizo el grafo con el caso (`accion_grafo` del Auditor), en palabras. Antes el aviso afirmaba siempre que el caso
+// había regresado al Matching y mostraba el identificador interno, aun cuando el recálculo ya se había agotado y el
+// caso quedaba con el orientador (#256).
+function textoAccionAuditor(accion) {
+  if (accion === "matching" || accion === "perfil") {
+    return `El Auditor devolvió el caso a ${accion === "perfil" ? "Perfil" : "Matching"} para recalcular una vez.`;
+  }
+  return "El recálculo no quitó el sesgo: el caso queda con el orientador, que puede revisarlo, pero no se puede aprobar mientras el Auditor detecte sesgo.";
+}
+
+// Los avisos que el grafo deja para el orientador (la empresa rechazó o cubrió una vacante, #54) llegan en
+// `avisos_orientador`, pero nada los dibujaba (#256). El más reciente va primero; se muestran los últimos 3.
+function renderizarAvisosOrientador() {
+  const cont = document.getElementById("avisos-orientador");
+  if (!cont) return;
+  const avisos = [...(estadoActual.avisos_orientador || [])].reverse();
+  if (!avisos.length) {
+    cont.innerHTML = "";
+    return;
+  }
+  const hora = (a) => (a.timestamp ? ` <span class="muted">· ${escaparHtml(String(a.timestamp).slice(11, 19))}</span>` : "");
+  const items = avisos
+    .slice(0, 3)
+    .map((a) => `<li>${escaparHtml(a.texto || `${a.tipo || "aviso"}: ${a.perfil_id || ""} en ${a.oferta_id || ""}`)}${hora(a)}</li>`)
+    .join("");
+  const mas = avisos.length > 3 ? `<p class="muted">Y ${avisos.length - 3} aviso${avisos.length - 3 === 1 ? "" : "s"} anterior${avisos.length - 3 === 1 ? "" : "es"}.</p>` : "";
+  cont.innerHTML = `<div class="banner banner--info" role="status">${icono("info")}<div>
+      <strong>${avisos.length === 1 ? "Aviso para el orientador" : `${avisos.length} avisos para el orientador`}</strong>
+      <ul class="avisos__lista">${items}</ul>${mas}
+    </div></div>`;
+}
+
 function renderizarTodo() {
   if (!estadoActual) return;
   renderizarEncabezado();
+  renderizarAvisosOrientador();
   renderizarFlujo();
   renderizarKPIs();
   renderizarMetricasImpacto();
@@ -327,7 +364,7 @@ function renderizarEncabezado() {
   const aud = estadoActual.auditoria || {};
   const badge = document.getElementById("badge-grafo");
   if (aud.sesgo_detectado) {
-    badge.textContent = "Auditor devolvió el caso a Matching";
+    badge.textContent = "Auditor detectó sesgo: aprobación bloqueada";
     badge.className = "status-pill status-alert";
   } else if (estadoActual.estado_grafo === "postulacion_ejecutada") {
     badge.textContent = "Grafo reanudado · postulación enviada";
@@ -396,7 +433,7 @@ function renderizarKPIs() {
   const footAud = document.getElementById("kpi-auditoria-foot");
   const tarjetaAud = footAud.closest(".kpi");
   if (aud.sesgo_detectado) {
-    footAud.textContent = "Sesgo detectado: el caso volvió a Matching";
+    footAud.textContent = "Sesgo detectado: no se puede aprobar";
     tarjetaAud.classList.add("kpi--alerta");
   } else {
     footAud.textContent = "Sin sesgo detectado · corregimiento fijo";
@@ -627,7 +664,7 @@ function renderizarOpcion(m, indice, perfil, oferta) {
         <input type="text" id="${escaparHtml(notaId)}" class="input" placeholder="Nota del orientador (opcional)" value="${escaparHtml(post?.comentario_orientador || "")}" />
         <div class="acciones__fila">
           <button type="button" class="btn btn--primary btn-accion-hitl" data-accion="aprobar" ${datosPar}
-            ${estadoActual.auditoria?.sesgo_detectado ? 'disabled title="El Auditor detectó sesgo: el caso volvió a Matching"' : ""}>
+            ${estadoActual.auditoria?.sesgo_detectado ? 'disabled title="El Auditor detectó sesgo: no se puede aprobar hasta restaurar el flujo"' : ""}>
             ${icono("send")}Aprobar y enviar
           </button>
           <div class="acciones__secundarias">
@@ -880,7 +917,7 @@ function renderizarListaCorta() {
 
   const bloqueo = estadoActual.auditoria?.sesgo_detectado
     ? `<div class="banner banner--bad" role="alert">${icono("alert")}<div><strong>No se puede aprobar mientras el Auditor detecte sesgo.</strong>
-        Cambiar el nombre o el género altera el resultado; el caso volvió a Matching. Revisa la pestaña Auditoría de sesgo.</div></div>`
+        Cambiar el nombre o el género altera el resultado. Revisa la pestaña Auditoría de sesgo.</div></div>`
     : "";
 
   const pendientes = matches.filter(
@@ -1075,11 +1112,27 @@ function razonTraza(razon) {
     </details>`;
 }
 
+// El filtro trae los agentes de siempre y suma los que aparecen en el historial y no estaban (empresa, evento de la
+// empresa, avisos, orientador, etc.), para poder filtrar por cualquiera de ellos (#256).
+function completarFiltroDeTrazas(historial) {
+  const filtroEl = document.getElementById("filtro-agente");
+  const presentes = new Set([...filtroEl.options].map((o) => o.value));
+  for (const agente of [...new Set(historial.map((d) => d.agente))].sort()) {
+    if (!agente || presentes.has(agente)) continue;
+    const opcion = document.createElement("option");
+    opcion.value = agente;
+    opcion.textContent = (AGENTES[agente] || { nombre: agente }).nombre;
+    filtroEl.appendChild(opcion);
+  }
+}
+
 function renderizarTrazas() {
-  const filtro = document.getElementById("filtro-agente").value;
-  const decisiones = (estadoActual.decisiones || []).filter(
-    (d) => filtro === "TODOS" || d.agente === filtro
-  );
+  const filtroEl = document.getElementById("filtro-agente");
+  // `trazas` es el historial completo; `decisiones` solo la corrida actual (respaldo si el servidor no lo manda).
+  const historial = estadoActual.trazas || estadoActual.decisiones || [];
+  completarFiltroDeTrazas(historial);
+  const filtro = filtroEl.value;
+  const decisiones = historial.filter((d) => filtro === "TODOS" || d.agente === filtro);
   const lista = document.getElementById("tabla-decisiones-body");
 
   if (decisiones.length === 0) {
@@ -1241,7 +1294,7 @@ function renderizarAuditoria() {
       <div>
         <strong>El Auditor detuvo el flujo: solo ${escaparHtml(porcentaje(pct))} de las variantes dan el mismo resultado.</strong>
         Cambiar el nombre o el género alteró las habilidades o el puntaje de ${afectados} ${afectados === 1 ? "joven" : "jóvenes"}.${escaparHtml(origen)}
-        El caso volvió a Matching (<code>accion_grafo = "${escaparHtml(aud.accion_grafo)}"</code>) y no llega al orientador. El detalle está en la tabla.
+        ${escaparHtml(textoAccionAuditor(aud.accion_grafo))} El detalle está en la tabla.
       </div>`;
     btnSesgo.innerHTML = `${icono("refresh")}<span>Restaurar el flujo sin sesgo</span>`;
     btnSesgo.className = "btn btn--ok";
@@ -1425,7 +1478,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (aplicarEstado(await llamarApi("/api/auditor/simular-sesgo", { activar }))) {
         mostrarToast(
           activar
-            ? "Sesgo simulado: el Auditor detuvo el flujo y devolvió el caso a Matching."
+            ? "Sesgo simulado: el Auditor detectó sesgo y la aprobación quedó bloqueada."
             : "Flujo restaurado: 100 % de las variantes dan el mismo resultado."
         );
       }

@@ -140,6 +140,57 @@ function mostrarAviso(mensaje, tipo = "ok") {
   }, 4500);
 }
 
+// Los errores de validación de Pydantic llegan en inglés («Input should be…»): se traducen por su tipo (#257). El
+// servidor quita el contexto, así que el número del límite se saca del propio mensaje.
+function traducirErrorDeValidacion(e) {
+  const texto = String(e.msg || "");
+  const n = (texto.match(/-?\d+(?:\.\d+)?/) || [])[0];
+  switch (e.type) {
+    case "missing":
+      return "falta completar este dato";
+    case "int_parsing":
+    case "int_from_float":
+    case "int_type":
+    case "float_parsing":
+    case "float_type":
+      return "escribe un número";
+    case "greater_than_equal":
+      return n === undefined ? "el número es muy bajo" : `debe ser ${n} o más`;
+    case "greater_than":
+      return n === undefined ? "el número es muy bajo" : `debe ser mayor que ${n}`;
+    case "less_than_equal":
+      return n === undefined ? "el número es muy alto" : `debe ser ${n} o menos`;
+    case "less_than":
+      return n === undefined ? "el número es muy alto" : `debe ser menor que ${n}`;
+    case "string_too_short":
+      return n === undefined ? "escribe un poco más" : `escribe al menos ${n} caracteres`;
+    case "string_too_long":
+      return n === undefined ? "es demasiado largo" : `escribe ${n} caracteres como máximo`;
+    case "too_short":
+      return n === undefined ? "elige al menos una opción" : `elige al menos ${n}`;
+    case "too_long":
+      return n === undefined ? "elegiste demasiadas opciones" : `elige ${n} como máximo`;
+    case "string_type":
+      return "escribe texto";
+    case "bool_type":
+    case "bool_parsing":
+      return "elige sí o no";
+    case "literal_error":
+    case "enum":
+      return "elige una de las opciones";
+    case "extra_forbidden":
+      return "este dato no se acepta";
+    case "json_invalid":
+      return "no se pudo leer lo que mandaste; inténtalo otra vez";
+    case "value_error":
+    case "assertion_error":
+      // Los validadores propios del servidor ya hablan en español: solo se quita el prefijo de Pydantic.
+      return texto.replace(/^(Value error|Assertion failed),\s*/i, "");
+    default:
+      return /^(Input|String|List|Value|Field|Dictionary|Object|Number|Data|Unable|Extra)\b/.test(texto) ? "revisa este dato" : texto;
+  }
+}
+
 function mensajeDeError(status, datos) {
   const detalle = datos && datos.detail;
   if (typeof detalle === "string") return detalle;
@@ -147,7 +198,8 @@ function mensajeDeError(status, datos) {
     return detalle
       .map((e) => {
         const campo = (e.loc || []).find((p) => typeof p === "string" && CAMPOS[p]);
-        return campo ? `${CAMPOS[campo]}: ${e.msg}` : e.msg;
+        const dicho = traducirErrorDeValidacion(e);
+        return campo ? `${CAMPOS[campo]}: ${dicho}` : dicho.charAt(0).toUpperCase() + dicho.slice(1);
       })
       .join(" · ");
   }
@@ -362,10 +414,39 @@ async function enviarFormulario(evento) {
 
 // ---------- Resultado ----------
 
+// «No se envió» y «La empresa no siguió» son cosas distintas: si el CV llegó y la empresa lo rechazó, no se dice que
+// no se envió. Vacantes y Mis postulaciones usan esta misma etiqueta (#257).
+function textoDeEstado(estado, seEnvio) {
+  if (estado === "no_seleccionado" && seEnvio) return "La empresa no siguió";
+  return ESTADOS[estado] || estado;
+}
+
 function etiquetaEstado(vacante) {
   const clave =
     vacante.estado === "preseleccionado" && vacante.consentimiento === "no_consentido" ? "no_consentido" : vacante.estado;
-  return el("span", { class: "etiqueta-estado", "data-estado": clave, text: ESTADOS[clave] || clave });
+  return el("span", { class: "etiqueta-estado", "data-estado": clave, text: textoDeEstado(clave, vacante.se_envio) });
+}
+
+// El .ics se baja con fetch y el token en el encabezado: en un enlace quedaría en la URL, en el registro del
+// servidor y en el historial del teléfono (#257).
+async function bajarIcsDelJoven(perfilId, ofertaId) {
+  const url = `/api/joven/${encodeURIComponent(perfilId)}/ics/${encodeURIComponent(ofertaId)}`;
+  const respuesta = await fetch(url, { headers: { "X-Token-Joven": tokenActual || "" } });
+  if (!respuesta.ok) {
+    let datos = null;
+    try {
+      datos = await respuesta.json();
+    } catch {
+      datos = null;
+    }
+    throw new Error(mensajeDeError(respuesta.status, datos));
+  }
+  const enlace = URL.createObjectURL(await respuesta.blob());
+  const a = el("a", { href: enlace, download: `entrevista_${ofertaId}.ics`, hidden: true });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(enlace), 1000);
 }
 
 function nombreHabilidad(resultado, skillId) {
@@ -430,48 +511,55 @@ function bloqueConsentimiento(resultado, vacante) {
   if (vacante.enviada) {
     const partes = [el("p", { text: `Tu CV se envió a ${vacante.empresa}. No lleva tu cédula, tu teléfono ni tu dirección.` })];
     if (vacante.ics) {
-      const href = `/api/joven/${encodeURIComponent(pid)}/ics/${encodeURIComponent(vacante.oferta_id)}?token=${encodeURIComponent(tokenActual || "")}`;
-      partes.push(
-        el("p", {}, el("a", { href, download: vacante.ics, text: "Agregar la entrevista propuesta a mi calendario (.ics)" })),
-        el("p", { class: "nota", text: "La fecha es una propuesta: la empresa la confirma." }),
+      const boton = el("button", { type: "button", class: "btn btn-sec", text: "Agregar la entrevista propuesta a mi calendario (.ics)" });
+      boton.addEventListener("click", () =>
+        conBoton(boton, "Descargando…", async () => {
+          try {
+            await bajarIcsDelJoven(pid, vacante.oferta_id);
+          } catch (err) {
+            mostrarAviso(err.message, "error");
+          }
+        }),
       );
+      partes.push(el("p", {}, boton), el("p", { class: "nota", text: "La fecha es una propuesta: la empresa la confirma." }));
     }
     return el("div", { class: "consentir" }, partes);
   }
   if (vacante.estado_postulacion === "no_seleccionado") {
-    return el("div", { class: "consentir" }, el("p", { class: "nota", text: "Esta vez tu perfil no se envió a esta vacante." }));
+    const texto = vacante.se_envio
+      ? `Tu CV se envió a ${vacante.empresa}, pero esta vez la empresa no siguió con tu postulación. Tu orientador/a revisa otras vacantes contigo.`
+      : "Esta vez tu perfil no se envió a esta vacante.";
+    return el("div", { class: "consentir" }, el("p", { class: "nota", text: texto }));
   }
   if (!vacante.puede_consentir) return null;
 
-  const casilla = el("input", { type: "checkbox", checked: vacante.consentimiento === "consentido" });
-  const boton = el("button", { type: "button", class: "btn btn-pri", text: "Guardar mi decisión" });
-  boton.addEventListener("click", () =>
-    conBoton(boton, "Guardando…", async () => {
-      try {
-        const nuevo = await api("/api/joven/consentimiento", {
-          perfil_id: pid,
-          oferta_id: vacante.oferta_id,
-          otorgado: casilla.checked,
-        });
-        mostrarResultado(nuevo, { desplazar: false });
-        mostrarAviso(casilla.checked ? "Guardamos que aceptas el envío." : "Guardamos que no aceptas el envío.");
-      } catch (err) {
-        mostrarAviso(err.message, "error");
-      }
-    }),
-  );
+  // La decisión se toma en un solo lugar, los botones Sí/No de «Mis postulaciones»: antes había también una casilla
+  // aquí y las dos podían decir cosas distintas (#257).
+  const aceptado = vacante.consentimiento === "consentido";
+  const texto = aceptado
+    ? `Aceptaste que Puente envíe tu CV a ${vacante.empresa}. Si cambias de idea, hazlo en «Mis postulaciones», más abajo.`
+    : vacante.consentimiento === "no_consentido"
+      ? `Dijiste que no: tu CV no se envía a ${vacante.empresa}. Si cambias de idea, hazlo en «Mis postulaciones», más abajo.`
+      : `Tu CV no se envía a ${vacante.empresa} sin tu «sí». Decídelo en «Mis postulaciones», más abajo.`;
   return el(
     "div",
     { class: "consentir" },
-    el(
-      "label",
-      { class: "casilla" },
-      casilla,
-      el("span", { text: `Acepto que Puente envíe mi CV a ${vacante.empresa}. Mi CV no lleva mi cédula, mi teléfono ni mi dirección.` }),
-    ),
-    el("div", { class: "acciones" }, boton),
-    el("p", { class: "nota", text: "Puedes cambiar tu decisión mientras tu CV no se haya enviado." }),
+    el("p", { text: texto }),
+    el("p", {}, el("a", { href: "#f2-postulaciones", text: "Ir a Mis postulaciones" })),
   );
+}
+
+// Por qué no hay ninguna vacante: las restricciones del joven o el cupo ya lleno de las que sí las cumplen (#245).
+function textoSinVacantes(resultado) {
+  const sin = resultado.sin_opcion;
+  if (sin && sin.causa === "cupo") {
+    const una = (sin.ofertas || []).length === 1;
+    return (
+      `${una ? "Hay una vacante que sí cumple" : "Hay vacantes que sí cumplen"} tu horario, tu pasaje y tu salario mínimo, ` +
+      `pero ${una ? "ya tiene" : "ya tienen"} su lista corta completa. Tu orientador/a te avisa si se libera un lugar.`
+    );
+  }
+  return "Por ahora ninguna vacante cumple tu horario, tu pasaje y tu salario mínimo. Abajo te contamos por qué y qué curso te puede acercar.";
 }
 
 function pintarVacantes(resultado) {
@@ -479,7 +567,7 @@ function pintarVacantes(resultado) {
   if (!vacantes.length) {
     vaciar(
       $("res-vacantes"),
-      el("p", { class: "vacio", text: "Por ahora ninguna vacante cumple tu horario, tu pasaje y tu salario mínimo. Abajo te contamos por qué y qué curso te puede acercar." }),
+      el("p", { class: "vacio", text: textoSinVacantes(resultado) }),
     );
     return;
   }
@@ -642,6 +730,9 @@ function nuevaEntrevista() {
 // ---------- Inicio ----------
 
 document.addEventListener("DOMContentLoaded", async () => {
+  $("toast").addEventListener("click", (e) => {
+    e.currentTarget.hidden = true; // el aviso flotante se cierra con un toque (#257)
+  });
   $("form-joven").addEventListener("submit", enviarFormulario);
   $("btn-ejemplo").addEventListener("click", usarEjemplo);
   $("f-estudia").addEventListener("change", (e) => {
