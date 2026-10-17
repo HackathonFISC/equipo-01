@@ -154,8 +154,6 @@ No hagas: tocar archivos fuera del alcance del issue sin comentarlo · cambiar `
 
 ## 10. Línea de tiempo y congelamiento
 
-Propuesta; el tablero manda.
-
 El horario único de las 24 horas y los cortes de alcance están en el [issue #41](https://github.com/HackathonFISC/equipo-01/issues/41).
 Sus decisiones están copiadas en [`docs/decisiones.md`](docs/decisiones.md).
 
