@@ -20,7 +20,7 @@ from starlette.testclient import TestClient
 import app.joven_fase2 as fase2
 import app.server as srv
 from puente.agents.perfil import construir_perfil
-from puente.graph import cargar_caso, cargar_taxonomia_grafo, nodo_matching_grafo
+from puente.graph import cargar_taxonomia_grafo
 from puente.llm import clave_grabacion
 from puente.rules.taxonomia import normalizar_habilidad
 from puente.schemas import PerfilExtraido
@@ -55,8 +55,7 @@ def respuestas_del_chat_js() -> list[str]:
 
 
 def cuerpo_del_ejemplo(ejemplo: dict) -> dict:
-    """Lo que arma `datosDelFormulario()` tras «Usar el ejemplo de Yaritza»: la vista llena un solo bloque por horario
-    y, sin bloque libre, deja los días sin marcar y manda `horario_libre: []`."""
+    """Lo que arma `datosDelFormulario()` tras «Usar el ejemplo de Yaritza»: la vista llena un solo bloque por horario."""
     return {**ejemplo, "horario_libre": ejemplo["horario_libre"][:1], "horario_clases": ejemplo["horario_clases"][:1]}
 
 
@@ -106,8 +105,12 @@ def test_los_dos_botones_traen_las_respuestas_del_guion() -> None:
     assert ejemplo["respuestas"] == RESPUESTAS_GUION
     assert respuestas_del_chat_js() == RESPUESTAS_GUION
     formulario = GUION["formulario"]
-    for campo in ("edad", "corregimiento", "horario_clases", "horario_libre", "salario_minimo", "presupuesto_pasaje_diario"):
+    for campo in ("edad", "corregimiento", "horario_clases", "salario_minimo", "presupuesto_pasaje_diario"):
         assert ejemplo[campo] == formulario[campo], campo
+    # Única diferencia con el guion, solo de pantalla: en /joven un horario libre vacío se vuelve lunes a viernes
+    # 07:00-17:30 y el resultado es el mismo, pero la vista diría «sin horario indicado». No entra al prompt.
+    assert formulario["horario_libre"] == []
+    assert ejemplo["horario_libre"] == [{"dias": L_V, "hora_inicio": "07:00", "hora_fin": "17:00"}]
     assert ejemplo["corregimiento"] in srv.corregimientos_con_traslado()
 
 
@@ -141,26 +144,6 @@ def test_formulario_y_chat_arman_el_prompt_de_la_grabacion_del_video(tmp_path: P
     assert GRABACION_CHAT.is_file()
 
 
-def test_sin_horario_libre_yaritza_queda_en_las_dos_listas_de_la_demo(reproducir) -> None:
-    """El guion no trae horario libre y el ejemplo tampoco: el Matching no recorta por días. Con las ofertas de la demo
-    por terminal, la Yaritza del formulario queda en las dos listas cortas; con lunes a viernes de 07:00 a 17:00
-    saldría de la de cocina, que es sábado y domingo."""
-    _, caso = cargar_caso()
-    taxonomia = cargar_taxonomia_grafo()
-    cuerpo = cuerpo_del_ejemplo(ejemplo_de_joven_js())
-    assert cuerpo["horario_libre"] == []
-
-    listas: dict[str, set[str]] = {}
-    lunes_a_viernes = [{"dias": L_V, "hora_inicio": "07:00", "hora_fin": "17:00"}]
-    for nombre, libre in (("sin horario libre", []), ("lunes a viernes", lunes_a_viernes)):
-        pedido = srv.PerfilJovenRequest.model_validate({**cuerpo, "horario_libre": libre})
-        perfil, _ = construir_perfil(
-            srv.preparar_entrada_joven(pedido), taxonomia=taxonomia, normalizar=normalizar_habilidad, llm=srv.llm_puente
-        )
-        cambios = nodo_matching_grafo({**caso, "perfiles": [perfil, *caso["perfiles"]]})
-        listas[nombre] = {m.oferta_id for m in cambios["lista_corta"] if m.perfil_id == perfil.id}
-    assert listas["sin horario libre"] == {"of-cajero-vista-alegre", "of-ayudante-cocina-chorrera"}
-    assert listas["lunes a viernes"] == {"of-cajero-vista-alegre"}
 
 
 def test_ejemplo_de_yaritza_arma_el_perfil_con_la_grabacion(entorno) -> None:

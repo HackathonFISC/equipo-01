@@ -10,14 +10,15 @@ const CLAVE_CODIGO = "puente.joven.codigo";
 // (#194): el prompt de Perfil solo depende de ellas y de la taxonomía, y su lectura está grabada en
 // data/grabaciones (la misma del chat, ver data/demo/grabaciones_video.json), así LLM_MODO=reproducir arma el
 // perfil sin red ni claves. Edad, corregimiento, horarios, salario y pasaje son los del formulario del guion.
-// Sin horario libre, como el guion y el caso de la terminal, el Matching no recorta por días: con lunes a
-// viernes, Yaritza saldría de la lista de la oferta de fin de semana. Los horarios van en listas, como los manda
-// datosDelFormulario(). Si cambias una respuesta, hay que volver a grabar (scripts/grabar_video.sh).
+// El horario libre (lunes a viernes, 07:00-17:00) es la única diferencia con el guion, que no trae: en /joven el
+// tablero cambia un horario vacío por lunes a viernes 07:00-17:30 y el resultado es el mismo, pero así la pantalla
+// muestra sus días y no «sin horario indicado». No entra al prompt ni al hash. Los horarios van en listas, como los
+// manda datosDelFormulario(). Si cambias una respuesta, hay que volver a grabar (scripts/grabar_video.sh).
 const EJEMPLO_YARITZA = {
   nombre: "Yaritza",
   edad: 20,
   corregimiento: "La Chorrera",
-  horario_libre: [],
+  horario_libre: [{ dias: ["lunes", "martes", "miercoles", "jueves", "viernes"], hora_inicio: "07:00", hora_fin: "17:00" }],
   horario_clases: [{ dias: ["lunes", "martes", "miercoles", "jueves", "viernes"], hora_inicio: "18:00", hora_fin: "22:00" }],
   salario_minimo: 400,
   presupuesto_pasaje_diario: 3,

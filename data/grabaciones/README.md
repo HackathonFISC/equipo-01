@@ -102,7 +102,8 @@ LLM_MODO=reproducir uv run python -m puente.agents.micromision --reto CAJA-01 --
 En `/joven` va el formulario del guion y cada respuesta pegada tal cual, en el chat o en el formulario de la fase 1: las
 dos vistas arman el mismo prompt. Una letra distinta cambia el hash y la vista responde que no hay lectura grabada. Los
 botones de ejemplo de Yaritza (`EJEMPLO_YARITZA` en `joven.js`, `EJEMPLO_CHAT_YARITZA` en `joven_fase2.js`) traen las
-respuestas y el formulario del guion, sin horario libre; `tests/test_vista_joven_reproducir.py` revisa que sean
+respuestas y el formulario del guion, más un horario libre de lunes a viernes 07:00-17:00 que solo cambia lo que
+se ve en pantalla; `tests/test_vista_joven_reproducir.py` revisa que sean
 idénticas y que den el hash de `llamadas.chat`.
 
 `tests/test_grabar_video.py` comprueba con un LLM espía que el script pide el mismo sistema, prompt, esquema y hash
