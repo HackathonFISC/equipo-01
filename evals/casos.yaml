@@ -1706,6 +1706,6 @@ casos:
     fallos:
       - fecha: "2026-10-17"
         observado: "listas_cortas de la cocina [carlos, maria, yaritza] (50, 50, 100): ordenada por id del perfil, no por puntaje; lo demás coincide (5 enviadas, CV, carta e .ics por pareja, 2 mensajes, 0 datos sensibles)"
-        cambio_hecho: "pendiente: ordenar la lista corta de cada vacante por puntaje, minutos e id (asignar() y solicitud_aprobacion)"
+        cambio_hecho: "puente/agents/matching.py: ordenar_lista_corta ordena cada vacante por puntaje de mayor a menor y, a igual puntaje, por id del perfil (sin minutos: la metodología los usa solo entre las vacantes de un mismo joven); el orientador y el mensaje a la empresa ven ese orden"
         issue: "#238"
-        nueva_ejecucion: "pendiente hasta que se arregle #238"
+        nueva_ejecucion: "2026-10-17: ok, listas cortas [yaritza, carlos, maria] en la cocina y [carlos, yaritza] en el cajero"
