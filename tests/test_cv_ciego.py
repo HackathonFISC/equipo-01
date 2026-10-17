@@ -249,7 +249,7 @@ def test_cegar_quita_estado_civil_embarazo_edad_en_palabras_y_nacimiento_del_ori
         ("Es viuda", "Es [dato omitido]"),
         ("Es padre soltero", "Es [dato omitido]"),
         ("Es mamá soltera", "Es [dato omitido]"),
-        ("Está unida con su pareja", "Está [dato omitido] con su pareja"),
+        ("Está unida con su pareja", "Está [dato omitido] [dato omitido]"),
         ("Estado civil: unido", "Estado civil: [dato omitido]"),
         ("Vive en unión libre", "Vive en [dato omitido]"),
         ("Tiene cinco meses de embarazo", "Tiene cinco meses de [dato omitido]"),
@@ -281,6 +281,7 @@ def test_cegar_fecha_numerica_de_nacimiento_y_conservar_fechas_de_experiencia():
     assert "[dato omitido]" in ciego
     assert "03/05/2024 al 2026-06-01 atendiendo clientes" in ciego
     assert cegar("2006-05-03", _perfil(), hoy=date(2026, 10, 16)) == "[dato omitido]"
+    assert cegar("20/11/2006", _perfil(), hoy=date(2026, 10, 16)) == "[dato omitido]"
 
     hoy_real = date.today()
     anio_nacimiento = hoy_real.year - 20 - ((hoy_real.month, hoy_real.day) < (5, 3))
@@ -294,12 +295,30 @@ def test_cegar_fecha_numerica_de_nacimiento_y_conservar_fechas_de_experiencia():
     assert "atendí clientes desde 03/05/2024" in cv
 
 
+def test_fecha_de_nacimiento_explicita_se_oculta_aunque_la_edad_no_coincida():
+    from datetime import date
+    from puente.tools.pdf import cegar
+
+    perfil = _perfil()
+    hoy = date(2026, 10, 16)
+    assert cegar("Nacida el 20/11/2006; atiendo clientes", perfil, hoy=hoy) == (
+        "[dato omitido]; atiendo clientes"
+    )
+    perfil.edad = None  # defensa para entradas incompletas que aún no pasaron el esquema Perfil
+    assert cegar("Nacida el 03/05/2006; atiendo clientes", perfil, hoy=hoy) == (
+        "[dato omitido]; atiendo clientes"
+    )
+
+
 @pytest.mark.parametrize(
     ("texto", "esperado"),
     [
         ("Está separada y atiende clientes", "Está [dato omitido] y atiende clientes"),
         ("Vive en unión consensual; vende en tienda", "Vive en [dato omitido]; vende en tienda"),
         ("Vivo en pareja y manejo caja", "Vivo [dato omitido] y manejo caja"),
+        ("Tengo 2 hijos y manejo caja", "[dato omitido] y manejo caja"),
+        ("Su esposo me apoya y atiendo clientes", "[dato omitido] me apoya y atiendo clientes"),
+        ("Estoy unida con mi pareja y atiendo clientes", "Estoy [dato omitido] [dato omitido] y atiendo clientes"),
         ("Trabajo en pareja preparando pedidos", "Trabajo en pareja preparando pedidos"),
     ],
 )

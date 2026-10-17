@@ -135,6 +135,12 @@ _ESTADO_CIVIL = re.compile(
 # unido" o "Estados Unidos" no es un dato de la persona. Se conserva el verbo.
 _UNIDO = re.compile(r"\b(soy|es|est[aá]|estoy|vive|vivo|civil\s*:?)\s+unid[oa]\b", re.IGNORECASE)
 _EN_PAREJA = re.compile(r"\b(vivo|vive|estoy|est[aá]|estado civil\s*:?)\s+en pareja\b", re.IGNORECASE)
+_PAREJA_NOMBRADA = re.compile(r"\b(?:mi|su)\s+(?:espos[oa]|marido|pareja)\b", re.IGNORECASE)
+_UNIDO_CON = re.compile(r"\bunid[oa]s?\s+con\b", re.IGNORECASE)
+_HIJOS = re.compile(
+    r"\b(?:tengo|tiene|con)\s+(?:(?:\d+|un[oa]?|dos|tres|cuatro|cinco)\s+)?hij[oa]s?\b",
+    re.IGNORECASE,
+)
 _EMBARAZO = re.compile(r"\b(?:embarazad[oa]s?|embarazos?|encinta|gestante)\b", re.IGNORECASE)
 # Edad en palabras, de 18 a 29 (la demo es con jóvenes de 18 a 29), solo seguida de "años" o
 # después de "edad": "dos años de experiencia" no es una edad y no se toca.
@@ -152,6 +158,11 @@ _NACIMIENTO = re.compile(
     r"(?:(?:\d{1,2}\s+de\s+)?[a-záéíóú]+\s+del?\s+)?(?:19|20)\d{2}\b"
     r"|\b(?:a[nñ]o|fecha)\s+de\s+nacimiento\b(?:\s*(?::|es|fue)?\s*"
     r"(?:(?:\d{1,2}\s+de\s+)?[a-záéíóú]+\s+del?\s+(?:19|20)\d{2}\b|\d[\d/.-]*\d))?",
+    re.IGNORECASE,
+)
+_NACIMIENTO_FECHA_NUMERICA = re.compile(
+    r"\bnac(?:id[oa]s?|i[oó]|í)\s+(?:en|el)\s+(?:el\s+)?\d{1,2}[/-]\d{1,2}[/-](?:19|20)\d{2}\b"
+    r"|\b(?:a[nñ]o|fecha)\s+de\s+nacimiento\s*(?::|es|fue)?\s*\d{1,2}[/-]\d{1,2}[/-](?:19|20)\d{2}\b",
     re.IGNORECASE,
 )
 # Una fecha numérica sin etiqueta solo se trata como nacimiento si corresponde a
@@ -203,9 +214,14 @@ def cegar(texto: str, perfil: Perfil, *, del_orientador: bool = False, hoy: date
         patrones.append(rf"\b{perfil.edad}\s*a[nñ]os\b")
     for patron in patrones:
         texto = re.sub(patron, "[dato omitido]", texto, flags=re.IGNORECASE)
+    texto = _NACIMIENTO_FECHA_NUMERICA.sub("[dato omitido]", texto)
+    texto = _UNIDO_CON.sub("[dato omitido]", texto)
     texto = _UNIDO.sub(lambda m: f"{m.group(1)} [dato omitido]", texto)
     texto = _EN_PAREJA.sub(lambda m: f"{m.group(1)} [dato omitido]", texto)
-    terminos = [_ESTADO_CIVIL, _EMBARAZO, _EDAD_EN_PALABRAS, _NACIMIENTO, _TERMINOS_GENERO]
+    terminos = [
+        _ESTADO_CIVIL, _PAREJA_NOMBRADA, _HIJOS, _EMBARAZO,
+        _EDAD_EN_PALABRAS, _NACIMIENTO, _TERMINOS_GENERO,
+    ]
     if del_orientador:
         terminos.append(_TERMINOS_SEXO_COLOQUIALES)
     for patron in terminos:
@@ -225,7 +241,7 @@ def cegar(texto: str, perfil: Perfil, *, del_orientador: bool = False, hoy: date
             edad_en_fecha = fecha_actual.year - nacimiento.year - (
                 (fecha_actual.month, fecha_actual.day) < (nacimiento.month, nacimiento.day)
             )
-            return "[dato omitido]" if edad_en_fecha == perfil.edad else coincidencia.group()
+            return "[dato omitido]" if abs(edad_en_fecha - perfil.edad) <= 1 else coincidencia.group()
 
         texto = _FECHA_NUMERICA.sub(ocultar_fecha, texto)
     return texto
