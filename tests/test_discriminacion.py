@@ -687,3 +687,131 @@ def test_hallazgos_del_puesto_van_primero_y_los_requisitos_se_revisan_igual_que_
     assert hallazgos[2:] == revisar_texto(requisitos)
     assert revisar_oferta("", requisitos) == revisar_texto(requisitos)
     assert revisar_oferta("Ayudante de cocina", "") == []
+
+
+# ---------------------------------------------------------------- revisión del PR #210: falsos positivos y negativos
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        # Apellidos y nombres de negocio: no piden un sexo.
+        "Contacto: Sr. José Caballero",
+        "Supermercados Caballero, S.A.",
+        "Boutique Damas",
+        "Tienda Damas & Caballeros",
+        "Barbería Los Caballeros busca barbero(a)",
+        # Lo que se vende o el lugar.
+        "Vendedor(a) de ropa para damas",
+        "Limpieza del baño de caballeros",
+        "Vendedor(a) de zapatos para caballeros",
+    ],
+)
+def test_damas_o_caballeros_en_nombres_y_negocios_no_bloquean(texto):
+    assert revisar_texto(texto) == []
+    assert revisar_oferta(texto, "Atención al cliente.") == []
+
+
+@pytest.mark.parametrize(
+    "texto, frase",
+    [
+        ("Recepcionista (mujer)", "(mujer)"),
+        ("Solo damas", "Solo damas"),
+        ("Mesero (masculino)", "masculino"),
+        ("Damas para recepción", "Damas"),
+        # El «para» o el «a» va detrás de la vacante o del verbo de contratar: sí pide un sexo.
+        ("Vacante para damas", "damas"),
+        ("Empleo para caballeros", "caballeros"),
+        ("Contratamos a damas", "Contratamos a damas"),
+        ("Vacante para señoritas", "señoritas"),
+    ],
+)
+def test_damas_caballeros_y_marcas_de_sexo_que_piden_un_sexo_bloquean(texto, frase):
+    hallazgos = revisar_texto(texto)
+    assert esta_bloqueada(hallazgos)
+    assert _reglas(texto) == [(SEXO, frase)]
+    assert hallazgos[0].como_texto().startswith("bloqueo · sexo") and "Ley 11 de 2005 art. 1" in hallazgos[0].como_texto()
+
+
+@pytest.mark.parametrize(
+    "texto, frase",
+    [
+        ("Embarazadas abstenerse", "Embarazadas abstenerse"),
+        ("Embarazadas, abstenerse", "Embarazadas, abstenerse"),
+        ("Mujeres embarazadas no aplican", "embarazadas no aplican"),
+        ("Prueba de embarazo obligatoria", "Prueba de embarazo obligatoria"),
+        ("Exámenes: VIH y prueba de embarazo", "prueba de embarazo"),
+        ("Examen de embarazo", "Examen de embarazo"),
+    ],
+)
+def test_embarazadas_abstenerse_o_pedir_prueba_de_embarazo_bloquea_por_sexo(texto, frase):
+    hallazgos = revisar_texto(texto)
+    assert esta_bloqueada(hallazgos)
+    assert _reglas(texto) == [(SEXO, frase)]
+    assert hallazgos[0].como_texto().startswith("bloqueo · sexo") and "Ley 11 de 2005 art. 1" in hallazgos[0].como_texto()
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Atención amable a la cliente embarazada",
+        "Licencia por maternidad",
+        "Fuero de maternidad según el Código de Trabajo",
+        "El seguro cubre embarazo y parto",
+        "Realizar pruebas de embarazo en el laboratorio",
+        "Venta de test de embarazo en farmacia",
+    ],
+)
+def test_beneficios_y_tareas_con_embarazo_no_bloquean(texto):
+    assert revisar_texto(texto) == []
+
+
+@pytest.mark.parametrize(
+    "texto, frase",
+    [
+        ("Imagen personal", "Imagen personal"),
+        ("Requisitos: imagen personal y puntualidad", "imagen personal"),
+        ("Buena presentación personal", "Buena presentación personal"),
+        ("Presentación personal impecable", "Presentación personal"),
+    ],
+)
+def test_imagen_y_presentacion_personal_alertan_como_buena_presencia_sin_bloquear(texto, frase):
+    hallazgos = revisar_texto(texto)
+    assert not esta_bloqueada(hallazgos)
+    assert _reglas(texto) == [(BUENA_PRESENCIA, frase)]
+    assert hallazgos[0].como_texto() == f"alerta · buena_presencia · solo alerta: la ley no menciona la apariencia · «{frase}»"
+
+
+@pytest.mark.parametrize("texto", ["Asesor(a) de imagen personal", "Buena presentación de los platos"])
+def test_imagen_personal_como_oficio_o_presentacion_de_una_cosa_no_alerta(texto):
+    assert revisar_texto(texto) == []
+
+
+@pytest.mark.parametrize(
+    "texto, frase",
+    [
+        ("Mayores de 18 años y menores de 35", "Mayores de 18 años y menores de 35"),
+        ("Mayor de 18 y menor de 30", "Mayor de 18 y menor de 30"),
+        ("Mayor de 18 años, menor de 30 años", "Mayor de 18 años, menor de 30 años"),
+        ("Edad: mayores de 18 y menores de 30 años", "mayores de 18 y menores de 30 años"),
+    ],
+)
+def test_mayores_de_18_y_menores_de_un_tope_bloquea_por_edad(texto, frase):
+    """El mínimo de 18 es la edad legal; el tope es el límite de edad del art. 2."""
+    hallazgos = revisar_texto(texto)
+    assert esta_bloqueada(hallazgos)
+    assert _reglas(texto) == [(EDAD, frase)]
+    assert hallazgos[0].como_texto().startswith("bloqueo · edad") and "Ley 11 de 2005 art. 2" in hallazgos[0].como_texto()
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Mayores de 18 años",
+        "Niños mayores de 10 y menores de 12 años",
+        "Atención a jóvenes mayores de 15 y menores de 24",
+        "Experiencia mayor de 10 y menor de 15 años",
+    ],
+)
+def test_mayor_y_menor_de_otros_o_de_experiencia_no_bloquea(texto):
+    assert revisar_texto(texto) == []

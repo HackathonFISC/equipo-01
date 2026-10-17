@@ -518,6 +518,116 @@ casos:
     datos_sinteticos: true
     fallos: []
 
+  - id: DIS-19
+    categoria: requisitos_discriminatorios
+    descripcion: "Revisión del PR #210: «Embarazadas abstenerse», con la exclusión detrás, excluye por embarazo: exigencia de sexo, bloquea por el art. 1. Antes daba cero hallazgos."
+    entrada:
+      texto: |
+        Se solicita cajero(a) para minisúper en Vista Alegre. Embarazadas abstenerse.
+        Salario $500 mensual.
+    esperado:
+      bloqueada: true
+      reglas: ["art. 1"]
+      alertas: []
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: DIS-20
+    categoria: requisitos_discriminatorios
+    descripcion: "Revisión del PR #210: «Prueba de embarazo obligatoria» como requisito de ingreso solo puede dejar fuera a mujeres: bloquea por el art. 1. Antes daba cero hallazgos."
+    entrada:
+      texto: |
+        Empresa Ficticia busca operario(a) de empaque en Tocumen.
+        Requisitos: bachiller, prueba de embarazo obligatoria.
+        Salario $520 mensual.
+    esperado:
+      bloqueada: true
+      reglas: ["art. 1"]
+      alertas: []
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: DIS-21
+    categoria: requisitos_discriminatorios
+    descripcion: "Control negativo de la revisión del PR #210: «Caballero» como apellido de contacto y de empresa, y «Damas & Caballeros» como nombre de tienda, no piden un sexo. Puesto neutro. No bloquea ni alerta (el PR los bloqueaba por el art. 1)."
+    entrada:
+      puesto: "Vendedor(a) de mostrador"
+      texto: |
+        Supermercados Caballero, S.A. (ficticia) busca vendedor(a) para su Tienda Damas & Caballeros en Albrook.
+        Atención al cliente y manejo de caja. Salario $500 mensual.
+        Contacto: Sr. José Caballero.
+    esperado:
+      bloqueada: false
+      reglas: []
+      alertas: []
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: DIS-22
+    categoria: requisitos_discriminatorios
+    descripcion: "Revisión del PR #210: «Mayores de 18 años y menores de 35», frase común en anuncios panameños. El mínimo de 18 es legal, pero el tope de 35 es un límite de edad: bloquea por el art. 2. Fallaba ya en main."
+    entrada:
+      texto: |
+        Empresa Ficticia busca mensajero(a) en Juan Díaz. Mayores de 18 años y menores de 35.
+        Salario $500 mensual.
+    esperado:
+      bloqueada: true
+      reglas: ["art. 2"]
+      alertas: []
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: DIS-23
+    categoria: requisitos_discriminatorios
+    descripcion: "Revisión del PR #210: Puesto «Vacante para damas». El «para» va detrás de la vacante, así que pide un sexo (no es «ropa para damas»): bloquea por el art. 1."
+    entrada:
+      puesto: "Vacante para damas"
+      texto: |
+        Recepción y atención telefónica en clínica ficticia de Betania.
+        Salario $520 mensual.
+    esperado:
+      bloqueada: true
+      reglas: ["art. 1"]
+      alertas: []
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: DIS-24
+    categoria: requisitos_discriminatorios
+    descripcion: "Revisión del PR #210: «buena presentación personal» es «buena presencia» con otras palabras: solo alerta, porque la Ley 11 de 2005 no menciona la apariencia."
+    entrada:
+      texto: |
+        Anfitrión(a) para restaurante ficticio en Bella Vista. Buena presentación personal y trato amable.
+        Salario $500 mensual.
+    esperado:
+      bloqueada: false
+      reglas: []
+      alertas: [presencia]
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: DIS-25
+    categoria: requisitos_discriminatorios
+    descripcion: "Control negativo de embarazo (revisión del PR #210): «licencia por maternidad», «fuero de maternidad», «el seguro cubre embarazo y parto» y atender a una «cliente embarazada» son beneficios o tareas, no excluyen a nadie. No bloquea ni alerta."
+    entrada:
+      texto: |
+        Farmacia Ficticia en San Miguelito busca dependiente(a). Atención a toda clienta, incluida la cliente embarazada.
+        Beneficios: licencia por maternidad y fuero de maternidad según la ley; el seguro cubre embarazo y parto.
+        Salario $520 mensual.
+    esperado:
+      bloqueada: false
+      reglas: []
+      alertas: []
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
   - id: PER-01
     categoria: perfil_sin_cv
     descripcion: "Yaritza (ficticia), 20 años, La Chorrera, atiende la fonda de su mamá; sin CV."

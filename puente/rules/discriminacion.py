@@ -2,10 +2,10 @@
 
 Solo regex sobre el texto original de la oferta, sin LLM: el modelo nunca decide si una
 oferta es legal. Bloquean el límite de edad (art. 2) y la exigencia de sexo (art. 1), que
-incluye excluir por embarazo ("no embarazadas", #191). Las demás causales del art. 1 (raza,
-nacimiento, discapacidad, clase social, religión e ideas políticas) y el puesto o el estado
-civil escritos solo en femenino ("cajera", "soltera") alertan citando el artículo, para que el
-orientador decida. "Buena presencia" o "buena apariencia", foto y estado civil solo alertan,
+incluye excluir por embarazo ("no embarazadas" o pedir una prueba de embarazo, #191). Las
+demás causales del art. 1 (raza, nacimiento, discapacidad, clase social, religión e ideas
+políticas) y el puesto o el estado civil escritos solo en femenino ("cajera", "soltera")
+alertan citando el artículo, para que el orientador decida. "Buena presencia" o "buena apariencia", foto y estado civil solo alertan,
 porque la ley no menciona la apariencia. Cada hallazgo guarda la regla, la frase literal y si
 bloquea. `revisar_oferta` aplica las mismas reglas al puesto y a los requisitos (#190).
 """
@@ -72,6 +72,13 @@ _TOPE_EDAD = re.compile(
     rf"(?:\s*(?:a|-|–|y|hasta)\s*\d{{2}}\b)?(?:\s*{_ANOS}\b)?{_EN_ADELANTE}"
     rf"|\b(?:joven(?:es)?|personas?)\s+(?:menor|mayor)(?:es)?\s+de\s+\d{{2}}\b"
 )
+# Rango con «mayor de» y «menor de» (#191): «Mayores de 18 años y menores de 35» o «Mayor de 18 y menor de 30».
+# El mínimo de 18 es la edad legal, pero el tope («menores de 35», con o sin «años») es un límite de edad y
+# bloquea por el art. 2. Va aparte de _TOPE_EDAD para que la frase sea el rango entero y para que el mínimo legal
+# del principio no lo deje pasar.
+_MAYOR_Y_MENOR = re.compile(
+    rf"\bmayor(?:es)?\s+de\s+\d{{2}}(?:\s*{_ANOS}\b)?\s*(?:,\s*)?(?:y|e|,)\s*menor(?:es)?\s+de\s+\d{{2}}\b(?:\s*{_ANOS}\b)?"
+)
 # Quién se contrata y quién se atiende (#191): «buscamos joven de 18 a 25» es la edad del candidato;
 # «atención a jóvenes de 15 a 24 años» o «cuidado de personas mayores de 65» es la de quien recibe el servicio.
 _CANDIDATO = rf"(?:joven(?:es)?|personas?|candidat[oa]s?|aspirantes?|postulantes?|{_PERSONA})"
@@ -105,39 +112,62 @@ _OBJETO_ANTES = re.compile(
 _FEMENINO_SUELTO = re.compile(r"\b(?:senoritas?|chicas|muchachas?)\b")
 _DESTINATARIO_ANTES = re.compile(r"\b(?:para|de|a|con|entre|cajas?)\s+(?:las?\s+|los\s+|el\s+|nuestr[oa]s\s+|sus\s+)?$")
 # «Damas» y «caballeros» sueltos (#190): «Damas para recepción» o un puesto «Bodeguero caballeros» piden un sexo;
-# «ropa de damas», «barbería para caballeros» o «sección caballeros» describen otra cosa.
-_DAMAS_CABALLEROS = re.compile(r"\b(?:damas?|caballeros?)\b")
-_DESTINATARIO_U_OBJETO_ANTES = re.compile(rf"(?:{_DESTINATARIO_ANTES.pattern})|(?:{_OBJETO_ANTES.pattern})")
+# «ropa de damas», «barbería para caballeros» o «sección caballeros» describen otra cosa. Solo en plural: en
+# singular casi siempre es un apellido («Sr. José Caballero», «Supermercados Caballero, S.A.»), y «se busca
+# caballero» o «solo dama» ya bloquean por las reglas de _PATRONES.
+_DAMAS_CABALLEROS = re.compile(r"\b(?:damas|caballeros)\b")
+# El nombre de un negocio tampoco pide un sexo: «Boutique Damas», «Barbería Los Caballeros».
+_NEGOCIO_ANTES = re.compile(
+    r"\b(?:boutiques?|tiendas?|almacen(?:es)?|salon(?:es)?|peluquerias?|barberias?|spa|gimnasios?|club(?:es)?"
+    r"|supermercados?|minisuper|farmacias?|sastrerias?|zapaterias?|restaurantes?|bar|cafeterias?|fondas?|hotel(?:es)?)"
+    r"\s+(?:las\s+|los\s+)?$"
+)
+_DESTINATARIO_U_OBJETO_ANTES = re.compile(
+    rf"(?:{_DESTINATARIO_ANTES.pattern})|(?:{_OBJETO_ANTES.pattern})|(?:{_NEGOCIO_ANTES.pattern})"
+)
+# Ninguna exclusión de _EXCLUSION_ANTES vale si el «para» o el «a» va detrás de la vacante o del verbo de
+# contratar (#190): «Vacante para damas», «Empleo para caballeros» o «Contratamos a damas» piden un sexo;
+# «ropa para damas» o «zapatos para caballeros» no. Vale también para «Vacante para señoritas».
+_VACANTE_ANTES = re.compile(
+    rf"\b(?:{_VERBO_CONTRATAR}|vacantes?|empleos?|plazas?|puestos?|trabajos?|oportunidad(?:es)?(?:\s+laboral(?:es)?)?)"
+    r"\s+(?:para|a)\s+(?:las\s+|los\s+)?$"
+)
 # Marca de sexo entre paréntesis (#190), típica del puesto: «Recepcionista (mujer)» o «Bodeguero (hombres)»
 # exigen un sexo igual que «Mesero (masculino)». «Cajero(a)» y «Vendedor(es)» no.
 _SEXO_ENTRE_PARENTESIS = re.compile(rf"\(\s*(?:solo\s+|solamente\s+|unicamente\s+)?{_PERSONA}\s*\)")
-_EXCLUSION_ANTES = {
-    _SEXO_SUELTO: _OBJETO_ANTES,
-    _FEMENINO_SUELTO: _DESTINATARIO_ANTES,
-    _DAMAS_CABALLEROS: _DESTINATARIO_U_OBJETO_ANTES,
-}
-
 # Excluir por embarazo (#191) solo puede dejar fuera a mujeres: es exigencia de sexo y bloquea por el art. 1.
-# «No embarazadas», «que no esté embarazada», «abstenerse embarazadas», «sin embarazo» o pedir una prueba de
-# embarazo negativa. «Atención a mujeres embarazadas» o «licencia por embarazo» no excluyen a nadie, y vender
-# pruebas de embarazo en una farmacia tampoco.
+# «No embarazadas», «que no esté embarazada», «abstenerse embarazadas», «Embarazadas, abstenerse», «sin
+# embarazo» o pedir una prueba de embarazo, negativa o no: «Prueba de embarazo obligatoria», «Exámenes: VIH y
+# prueba de embarazo». «Atención a mujeres embarazadas», «licencia por embarazo», «fuero de maternidad» o «el
+# seguro cubre embarazo y parto» no excluyen a nadie. La prueba cuenta en singular: «realizar pruebas de
+# embarazo» es una tarea de laboratorio, y venderlas en una farmacia tampoco excluye a nadie (_VENTA_ANTES).
 _EMBARAZO = re.compile(
     r"\b(?:no|ni)\s+(?:(?:estar|este|esten|encontrarse|se\s+encuentren?)\s+)?"
     r"(?:embarazadas?|en\s+(?:estado\s+de\s+)?(?:embarazo|gestacion|gravidez))\b"
     r"|\b(?:no\s+(?:se\s+)?(?:aceptan?|aceptamos|admiten?|admitimos|contratan?|contratamos|reciben?|recibimos)"
     r"|abstenerse|excepto|salvo)\s+(?:a\s+)?(?:(?:mujeres|personas|damas|senoras)\s+)?embarazadas\b"
+    r"|\bembarazadas?\s*[,:\-–]?\s*(?:abstenerse|abstente|no\s+(?:aplican?|aplicar|postularse|se\s+aceptan|se\s+admiten))\b"
     r"|\bsin\s+(?:estar\s+)?(?:embarazo|embarazada)\b"
-    r"|\b(?:prueba|test|examen)\s+(?:medic[oa]\s+)?de\s+embarazo\s+negativ[oa]\b"
-    r"|\b(?:prueba|test|examen|certificado|constancia)\s+(?:medic[oa]\s+)?de\s+no\s+(?:estar\s+)?embaraz(?:o|ada)\b"
     r"|\b(?:presentar|entregar|aportar|adjuntar|realizarse|hacerse)\s+(?:una?\s+)?(?:prueba|test|examen)\s+de\s+embarazo\b"
+    r"|\b(?:prueba|test|examen)\s+(?:medic[oa]\s+)?de\s+embarazo(?:\s+(?:negativ[oa]|obligatori[oa]))?\b"
+    r"|\b(?:prueba|test|examen|certificado|constancia)\s+(?:medic[oa]\s+)?de\s+no\s+(?:estar\s+)?embaraz(?:o|ada)\b"
 )
-# Apariencia (#191): «buena apariencia» es «buena presencia» con otra palabra y solo alerta. La de un lugar o
-# una cosa («mantener la buena apariencia del local») no habla del candidato.
+_VENTA_ANTES = re.compile(
+    r"\b(?:venta|ventas|vender|vendemos|venden|despacho|despachar|inventario|reponer|reposicion|surtir)"
+    r"\s+(?:de\s+)?(?:la\s+|las\s+|los\s+|el\s+|una?\s+)?$"
+)
+# Apariencia (#191): «buena apariencia» es «buena presencia» con otra palabra y solo alerta. También «imagen
+# personal» y «presentación personal», con o sin adjetivo delante. La de un lugar o una cosa («mantener la
+# buena apariencia del local») no habla del candidato, y «asesora de imagen personal» es un oficio.
 _APARIENCIA = re.compile(
     r"\b(?:buena|excelente|muy\s+buena)\s+presencia\b|\bpresencia\s+agradable\b|\bbuen\s+aspecto(?:\s+fisico)?\b"
     r"|\b(?:buena|excelente|muy\s+buena|agradable|impecable)\s+apariencia\b"
     r"|\bapariencia\s+(?:fisica|personal|agradable|impecable|atractiva)\b"
-    r"|\b(?:buena|excelente|muy\s+buena|impecable)\s+imagen\s+(?:personal|fisica)\b"
+    r"|\b(?:(?:buena|excelente|muy\s+buena|impecable)\s+)?imagen\s+(?:personal|fisica)\b"
+    r"|\b(?:(?:buena|excelente|muy\s+buena|impecable)\s+)?presentacion\s+personal\b"
+)
+_OFICIO_DE_IMAGEN_ANTES = re.compile(
+    r"\b(?:(?:asesor|consultor)(?:a|es|as|\(a\)|/a)?|asesoria|consultoria|cursos?|talleres?)\s+(?:de|en)\s+$"
 )
 _COSA_DESPUES = re.compile(
     r"\s+(?:del|de\s+(?:la|las|los|el|nuestr[oa]s?|sus?))\s+(?:locale?s?|tiendas?|negocios?|establecimientos?|oficinas?"
@@ -146,12 +176,19 @@ _COSA_DESPUES = re.compile(
     r"|salon(?:es)?|comedor(?:es)?|mesas?|cocina|banos?|fachada|edificio|jardin(?:es)?|vehiculos?|flota|uniformes?"
     r"|menu|platos?|pagina|sitio|redes)\b"
 )
+_EXCLUSION_ANTES = {
+    _SEXO_SUELTO: _OBJETO_ANTES,
+    _FEMENINO_SUELTO: _DESTINATARIO_ANTES,
+    _DAMAS_CABALLEROS: _DESTINATARIO_U_OBJETO_ANTES,
+    _EMBARAZO: _VENTA_ANTES,
+    _APARIENCIA: _OFICIO_DE_IMAGEN_ANTES,
+}
 _EXCLUSION_DESPUES = {_APARIENCIA: _COSA_DESPUES}
 
 _PATRONES: list[tuple[str, re.Pattern[str]]] = [
     (SEXO, re.compile(r"\b(?:sexo|genero)\s*:?\s*(?:femenino|masculino|mujer|hombre|f|m)\b")),
     (SEXO, re.compile(rf"\b(?:solo|solamente|unicamente|exclusivamente)\s+(?:para\s+)?(?:{_PERSONA}|personal\s+(?:femenino|masculino))\b")),
-    (SEXO, re.compile(rf"\b{_VERBO_CONTRATAR}\s+(?:una?\s+|\d+\s+)?{_PERSONA}\b")),
+    (SEXO, re.compile(rf"\b{_VERBO_CONTRATAR}\s+(?:a\s+)?(?:una?\s+|\d+\s+)?{_PERSONA}\b")),
     # Preferencia explícita de sexo (#121): "preferiblemente mujer" exige un sexo igual que
     # "preferiblemente masculino", que ya bloqueaba por la palabra suelta.
     (SEXO, re.compile(
@@ -198,11 +235,11 @@ _PATRONES: list[tuple[str, re.Pattern[str]]] = [
     )),
 ]
 
-# "masculino o femenino", "femenino y masculino", "masculino/femenino", "damas y caballeros" o
-# "chicos y chicas": no exige un sexo.
+# "masculino o femenino", "femenino y masculino", "masculino/femenino", "damas y caballeros",
+# "Damas & Caballeros" o "chicos y chicas": no exige un sexo.
 _MASC = r"(?:masculinos?|hombres?|varon(?:es)?|caballeros?|chicos?|muchachos?)"
 _FEM = r"(?:femeninos?|mujer(?:es)?|damas?|senoritas?|chicas?|muchachas?)"
-_O_SEXO = r"\s*(?:y\s*/\s*o|o|y|u|e|/|,)\s*"
+_O_SEXO = r"\s*(?:y\s*/\s*o|o|y|u|e|/|,|&)\s*"
 _AMBOS_SEXOS = re.compile(rf"\b(?:{_MASC}{_O_SEXO}{_FEM}|{_FEM}{_O_SEXO}{_MASC})\b")
 
 # Estado civil en femenino (#117): "se prefiere soltera" pide una mujer aunque el puesto sea neutro.
@@ -353,9 +390,18 @@ def revisar_texto(texto: str) -> list[Hallazgo]:
         vistos.add((regla, inicio, fin))
         encontrados.append((inicio, Hallazgo(regla, _frase(texto, inicio, fin), regla in REGLAS_BLOQUEO)))
 
+    # Primero el rango «mayores de 18 y menores de 35», para que la frase sea el rango entero. Si el rango es
+    # experiencia o la edad de otros («niños mayores de 10 y menores de 12 años»), sus partes tampoco cuentan.
+    descartados: list[tuple[int, int]] = []
+    for m in _MAYOR_Y_MENOR.finditer(plegado):
+        if _es_experiencia(plegado, m) or _describe_a_otros(plegado, m) or _atiende_a_otros(plegado, m.start()):
+            descartados.append((m.start(), m.end()))
+        else:
+            anotar(EDAD, m.start(), m.end())
     for m in _TOPE_EDAD.finditer(plegado):
         if (
-            _es_minimo_legal(m.group(0))
+            any(i <= m.start() and m.end() <= f for i, f in descartados)
+            or _es_minimo_legal(m.group(0))
             or _es_experiencia(plegado, m)
             or _describe_a_otros(plegado, m)
             or _atiende_a_otros(plegado, m.start())
@@ -373,7 +419,8 @@ def revisar_texto(texto: str) -> list[Hallazgo]:
         for m in patron.finditer(plegado):
             if regla == SEXO and any(i < m.end() and m.start() < f for i, f in ambos):
                 continue
-            if excluir is not None and excluir.search(plegado[max(0, m.start() - 30) : m.start()]):
+            antes = plegado[max(0, m.start() - 30) : m.start()]
+            if excluir is not None and excluir.search(antes) and not _VACANTE_ANTES.search(antes):
                 continue
             if excluir_despues is not None and excluir_despues.match(plegado, m.end()):
                 continue

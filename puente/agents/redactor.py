@@ -264,13 +264,27 @@ def _reescribir_linea(linea: str, cambios: Sequence[Cambio], usados: set[str]) -
     return f"{etiqueta}{texto}{final}"
 
 
+_HUECO = "\x00"
+_CONECTOR_PUESTO = r"(?:de|del|con|y|e|para|en)"
+_SIGNO_PUESTO = r"[-–,;:/]"
+
+
 def _quitar_del_puesto(puesto: str, cambios: Sequence[Cambio]) -> str:
+    """Quita del puesto las frases marcadas y arregla lo que queda alrededor del hueco (#190), sin tocar el resto:
+    «Auxiliar de caja y bodega (mujer)» -> «Auxiliar de caja y bodega»."""
     for cambio in cambios:
-        puesto = _patron_frase(cambio.frase).sub("", puesto)
-    # Sin paréntesis vacíos ni conector colgando (#190): «Mesero (masculino)» -> «Mesero», no «Mesero ()»;
-    # «Anfitriona de buena apariencia» -> «Anfitriona», no «Anfitriona de».
-    puesto = re.sub(r"\(\s*\)", "", puesto)
-    return re.sub(r"(?:\s*[-–,;:/]|\s+(?:de|del|con|y|e|para|en))+\s*$", "", " ".join(puesto.split())).strip() or puesto.strip()
+        puesto = _patron_frase(cambio.frase).sub(_HUECO, puesto)
+    # Sin paréntesis vacíos: «Mesero (masculino)» -> «Mesero», no «Mesero ()».
+    puesto = re.sub(rf"\(\s*{_HUECO}\s*\)", _HUECO, puesto)
+    # Sin conector colgando: el «de» que introducía la frase sobra si tras el hueco viene otro conector, un signo o
+    # el final. «Anfitriona de buena apariencia para restaurante» -> «Anfitriona para restaurante», no «… de para …».
+    puesto = re.sub(
+        rf"\s+{_CONECTOR_PUESTO}\s*{_HUECO}(?=\s*(?:{_CONECTOR_PUESTO}\b|{_SIGNO_PUESTO}|$))", _HUECO, puesto, flags=re.IGNORECASE
+    )
+    # Sin signos repetidos ni al principio: «Mesero, solo varones, turno noche» -> «Mesero, turno noche».
+    puesto = re.sub(rf"({_SIGNO_PUESTO})\s*{_HUECO}\s*{_SIGNO_PUESTO}", r"\1", puesto)
+    puesto = re.sub(rf"^\s*{_HUECO}\s*{_SIGNO_PUESTO}?", "", puesto).replace(_HUECO, "")
+    return re.sub(rf"(?:\s*{_SIGNO_PUESTO}|\s+{_CONECTOR_PUESTO})+\s*$", "", " ".join(puesto.split())).strip() or puesto.strip()
 
 
 def _sustituir_en_linea(texto: str, cambios: Sequence[Cambio]) -> str:

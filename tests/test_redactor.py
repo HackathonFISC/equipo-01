@@ -339,6 +339,12 @@ def test_puesto_en_femenino_se_cambia_en_el_sitio():
         ("Cajera - solo mujeres", "Cajero(a)"),
         ("Mesero, no embarazadas", "Mesero"),
         ("Anfitriona de buena apariencia", "Anfitrion(a)"),
+        # Revisión del PR #210: sin «de para» ni signos repetidos; lo que no toca el hueco queda igual.
+        ("Anfitriona de buena apariencia para restaurante", "Anfitrion(a) para restaurante"),
+        ("Auxiliar de caja y bodega (mujer)", "Auxiliar de caja y bodega"),
+        ("Mesero de buena presencia, turno noche", "Mesero, turno noche"),
+        ("Mesero, solo varones, turno noche", "Mesero, turno noche"),
+        ("Vacante para damas", "Vacante"),
     ],
 )
 def test_puesto_con_frase_de_la_ley_11_queda_limpio_y_sin_bloqueo(puesto, esperado):
@@ -346,6 +352,16 @@ def test_puesto_con_frase_de_la_ley_11_queda_limpio_y_sin_bloqueo(puesto, espera
     oferta = _oferta("Atención al cliente.", puesto=puesto)
     propuesta = r.proponer_version(oferta, [], redactar=r.redactor_plantilla, traslados=TRASLADOS)
     assert propuesta.puesto_nuevo == esperado
+    assert not propuesta.bloqueada_despues
+    assert revisar_oferta(propuesta.puesto_nuevo, propuesta.texto_nuevo) == []
+
+
+@pytest.mark.parametrize("puesto", ["Asistente de ventas", "Ayudante de cocina", "Auxiliar de caja y bodega"])
+def test_puesto_sin_frases_de_la_ley_11_queda_intacto_aunque_los_requisitos_cambien(puesto):
+    """Los conectores del puesto («de», «y») solo se quitan junto al hueco de una frase quitada."""
+    oferta = _oferta("Buena presencia. Edad: 18 a 25 años.", puesto=puesto, bloqueada=True)
+    propuesta = r.proponer_version(oferta, [], redactar=r.redactor_plantilla, traslados=TRASLADOS)
+    assert propuesta.puesto_nuevo == puesto
     assert not propuesta.bloqueada_despues
     assert revisar_oferta(propuesta.puesto_nuevo, propuesta.texto_nuevo) == []
 

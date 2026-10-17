@@ -623,9 +623,35 @@ def test_frase_del_puesto_que_no_esta_en_el_texto_no_bloquea_y_pasa_como_baja_co
     oferta, decision = _una_oferta(texto, puesto="Mesero (masculino)", empresa="Restaurante Ficticio", corregimiento="Bella Vista")
     assert not oferta.bloqueada
     assert oferta.alertas == [
-        "alerta · baja_confianza · frases del puesto que no están en el texto de la oferta: el orientador revisa la oferta original"
+        "alerta · baja_confianza · frases del puesto sin respaldo en el texto de la oferta: el orientador revisa la oferta original"
     ]
-    assert "frases del puesto que no están en el texto de la oferta: ['masculino']" in decision.razon
+    assert "frases del puesto sin respaldo en el texto de la oferta: ['masculino']" in decision.razon
+
+
+def test_frase_del_puesto_que_el_texto_usa_en_otro_contexto_tambien_pasa_como_baja_confianza():
+    """Revisión del PR #210: «masculino» está en el texto, pero describe el uniforme; el «(masculino)» del puesto
+    lo puso el extractor. No basta con que la palabra esté: la revisión del texto tiene que dar el mismo hallazgo."""
+    texto = "Se busca mesero para restaurante en Bella Vista. Uniforme masculino incluido. Salario B/. 500 mensual."
+    assert revisar_texto(texto) == []
+    oferta, decision = _una_oferta(texto, puesto="Mesero (masculino)", empresa="Restaurante Ficticio", corregimiento="Bella Vista")
+    assert not oferta.bloqueada
+    assert oferta.alertas == [
+        "alerta · baja_confianza · frases del puesto sin respaldo en el texto de la oferta: el orientador revisa la oferta original"
+    ]
+    assert "['masculino']" in decision.razon
+
+
+@pytest.mark.parametrize(
+    "texto, puesto",
+    [
+        ("Mesero (masculino) para restaurante en Bella Vista. Salario B/. 500 mensual.", "Mesero (masculino)"),
+        ("Se busca mujer para recepción en Bella Vista. Salario B/. 500 mensual.", "Recepcionista (mujer)"),
+    ],
+)
+def test_frase_del_puesto_con_el_mismo_hallazgo_en_el_texto_no_baja_la_confianza(texto, puesto):
+    oferta, _ = _una_oferta(texto, puesto=puesto, empresa="Empresa Ficticia", corregimiento="Bella Vista")
+    assert oferta.bloqueada
+    assert not any("baja_confianza" in a for a in oferta.alertas)
 
 
 def test_imagen_con_frase_del_puesto_que_no_esta_en_la_transcripcion_no_bloquea(tmp_path):
