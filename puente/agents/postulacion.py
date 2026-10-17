@@ -269,9 +269,10 @@ def _texto_lista_corta(
     saludo = mensaje_orientador.strip()
     if saludo:
         # El texto libre del orientador también sale hacia la empresa: puede traer la edad,
-        # el género o el corregimiento de alguien ("mujer de 20 años de Barrio Colón").
+        # el género, el estado civil o el corregimiento de alguien ("mujer de 20 años de Barrio
+        # Colón", "madre soltera", "una chica").
         for _, perfil, _ in filas:
-            saludo = cegar(saludo, perfil)
+            saludo = cegar(saludo, perfil, del_orientador=True)
         lineas += [saludo, ""]
     lineas += [
         f"Lista corta para {oferta.puesto} en {oferta.empresa} ({oferta.corregimiento})",
