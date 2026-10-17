@@ -1,8 +1,8 @@
 # Resultados de los evals de Puente
 
-Generado por `uv run python -m evals.run` el 2026-10-17 03:38 (hora de Panamá, UTC-5). No lo edites a mano: se regenera en cada corrida.
+Generado por `uv run python -m evals.run` el 2026-10-17 05:24 (hora de Panamá, UTC-5). No lo edites a mano: se regenera en cada corrida.
 
-Estados: 47 ok · 1 fallo · 0 pendiente · 0 omitido (de 48 casos).
+Estados: 61 ok · 1 fallo · 0 pendiente · 0 omitido (de 62 casos).
 
 Todos los casos se ejecutaron en esta corrida.
 
@@ -17,7 +17,7 @@ LLM de esta corrida: `puente.llm` en modo reproducir, con las grabaciones de `ev
 | Categoría | Casos | Ejecutados | Aciertos | Tasa | Métrica | Meta | Cumple |
 | --- | ---: | ---: | ---: | ---: | --- | ---: | --- |
 | extraccion_ofertas | 5 | 5 | 5/5 | 100 % | Fracción de corridas en que los campos esperados salen todos correctos (puesto, empresa, corregimiento, salario_mensual, habilidades) | 80 % | sí |
-| requisitos_discriminatorios | 11 | 11 | 11/11 | 100 % | Bloqueada, regla (art. 1 / art. 2) y alertas iguales a lo esperado | 100 % | sí |
+| requisitos_discriminatorios | 25 | 25 | 25/25 | 100 % | Bloqueada, regla (art. 1 / art. 2) y alertas iguales a lo esperado | 100 % | sí |
 | perfil_sin_cv | 4 | 4 | 4/4 | 100 % | Habilidades esperadas encontradas con evidencia literal y 0 habilidades sin evidencia | 75 % | sí |
 | matching_factible | 3 | 3 | 3/3 | 100 % | Asignación igual a la calculada a mano y 0 violaciones duras | 100 % | sí |
 | sesgo_contrafactual | 3 | 3 | 3/3 | 100 % | sesgo_detectado igual a lo esperado | 100 % | sí |
@@ -51,6 +51,20 @@ LLM de esta corrida: `puente.llm` en modo reproducir, con las grabaciones de `ev
 | DIS-09 | requisitos_discriminatorios | ok | 1/1 | cumple lo esperado |
 | DIS-10 | requisitos_discriminatorios | ok | 1/1 | cumple lo esperado |
 | DIS-11 | requisitos_discriminatorios | ok | 1/1 | cumple lo esperado |
+| DIS-12 | requisitos_discriminatorios | ok | 1/1 | cumple lo esperado |
+| DIS-13 | requisitos_discriminatorios | ok | 1/1 | cumple lo esperado |
+| DIS-14 | requisitos_discriminatorios | ok | 1/1 | cumple lo esperado |
+| DIS-15 | requisitos_discriminatorios | ok | 1/1 | cumple lo esperado |
+| DIS-16 | requisitos_discriminatorios | ok | 1/1 | cumple lo esperado |
+| DIS-17 | requisitos_discriminatorios | ok | 1/1 | cumple lo esperado |
+| DIS-18 | requisitos_discriminatorios | ok | 1/1 | cumple lo esperado |
+| DIS-19 | requisitos_discriminatorios | ok | 1/1 | cumple lo esperado |
+| DIS-20 | requisitos_discriminatorios | ok | 1/1 | cumple lo esperado |
+| DIS-21 | requisitos_discriminatorios | ok | 1/1 | cumple lo esperado |
+| DIS-22 | requisitos_discriminatorios | ok | 1/1 | cumple lo esperado |
+| DIS-23 | requisitos_discriminatorios | ok | 1/1 | cumple lo esperado |
+| DIS-24 | requisitos_discriminatorios | ok | 1/1 | cumple lo esperado |
+| DIS-25 | requisitos_discriminatorios | ok | 1/1 | cumple lo esperado |
 | PER-01 | perfil_sin_cv | ok | 1/1 | cumple lo esperado |
 | PER-02 | perfil_sin_cv | ok | 1/1 | cumple lo esperado |
 | PER-03 | perfil_sin_cv | ok | 1/1 | cumple lo esperado |

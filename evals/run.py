@@ -48,6 +48,7 @@ HUSO_PANAMA = timezone(timedelta(hours=-5), "America/Panama")  # Panamá no usa 
 # se ajustan aquí y en los adaptadores `_ejecutar_*`, y en ningún otro lugar.
 MERCADO_PROCESAR = ("puente.agents.mercado", "procesar_ofertas", 5)  # (entradas, *, extraer, taxonomia) -> Resultado
 DISCRIMINACION_REVISAR = ("puente.rules.discriminacion", "revisar_texto", 5)  # (texto) -> list[Hallazgo]
+DISCRIMINACION_REVISAR_OFERTA = ("puente.rules.discriminacion", "revisar_oferta", 190)  # (puesto, requisitos) -> list[Hallazgo]
 DISCRIMINACION_BLOQUEADA = ("puente.rules.discriminacion", "esta_bloqueada", 5)  # (hallazgos) -> bool
 TAXONOMIA_CARGAR = ("puente.rules.taxonomia", "cargar_taxonomia", 5)  # () -> {skill_id: {...}}
 TAXONOMIA_NORMALIZAR = ("puente.rules.taxonomia", "normalizar_habilidad", 5)  # (texto, taxonomia) -> skill_id | None
@@ -718,9 +719,14 @@ def _ejecutar_discriminacion(caso: dict) -> dict:
     """#5: revisar_texto(texto) -> list[Hallazgo]; esta_bloqueada(hallazgos) decide el bloqueo.
 
     Cada hallazgo trae `regla` (edad, sexo, buena_presencia, foto, estado_civil): edad y sexo se traducen al
-    artículo de la Ley 11 de 2005 que bloquea; las demás son alertas.
+    artículo de la Ley 11 de 2005 que bloquea; las demás son alertas. Con `entrada.puesto` (#190) el puesto
+    se revisa también, con revisar_oferta(puesto, texto).
     """
-    hallazgos = _lista(_resolver(DISCRIMINACION_REVISAR)(caso["entrada"]["texto"]))
+    entrada = caso["entrada"]
+    if "puesto" in entrada:
+        hallazgos = _lista(_resolver(DISCRIMINACION_REVISAR_OFERTA)(entrada["puesto"], entrada["texto"]))
+    else:
+        hallazgos = _lista(_resolver(DISCRIMINACION_REVISAR)(entrada["texto"]))
     bloqueada = bool(_resolver(DISCRIMINACION_BLOQUEADA)(hallazgos))
     reglas: set[str] = set()
     alertas: set[str] = set()

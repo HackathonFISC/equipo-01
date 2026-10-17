@@ -131,6 +131,35 @@ def test_traslado_faltante_no_inventa_45_min_y_descarta_con_motivo() -> None:
     assert "sin dato de traslado" in motivo_desc
 
 
+@pytest.mark.parametrize(
+    "puesto, bloqueada, regla, frase",
+    [
+        ("Mesero (masculino)", True, "sexo", "masculino"),
+        ("Recepcionista (mujer)", True, "sexo", "(mujer)"),
+        ("Recepcionista joven 18-25", True, "edad", "18-25"),
+        ("Vendedora", False, "sexo_implicito", "Vendedora"),
+    ],
+)
+def test_issue_190_el_puesto_pasa_por_la_ley_11_igual_que_los_requisitos(
+    puesto: str, bloqueada: bool, regla: str, frase: str
+) -> None:
+    estado = obtener_datos_iniciales_demo()
+    analizar_nueva_oferta_texto(
+        estado,
+        puesto=puesto,
+        empresa="Comercio Ficticio (Empresa de Prueba)",
+        corregimiento="Bella Vista",
+        salario_mensual=600.0,
+        requisitos_texto="Atención al cliente y manejo de caja.",
+        habilidades=["atencion_cliente"],
+    )
+    nueva = estado["ofertas"][-1]
+    assert nueva["puesto"] == puesto
+    assert nueva["bloqueada"] is bloqueada
+    assert [(a["frase"], a["tipo"]) for a in nueva["alertas"]] == [(frase, "bloqueo" if bloqueada else "alerta")]
+    assert f"({regla})" in nueva["alertas"][0]["regla"] and "Ley 11 de 2005" in nueva["alertas"][0]["regla"]
+
+
 def test_acciones_orientador_consentimiento_sqlite_editar_quitar_rechazar_y_desbloquear(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
