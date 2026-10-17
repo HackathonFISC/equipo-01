@@ -140,7 +140,11 @@ Los siete agentes mínimos que sugiere el documento del reto y dónde están en 
 
 LangGraph orquesta los agentes. Principio de diseño: **el LLM trabaja en los bordes y el código decide en el centro**. El LLM lee ofertas, CVs y entrevistas y redacta; el código normaliza, aplica las reglas legales, calcula traslados y horarios, asigna con CP-SAT, audita el sesgo y decide qué sale. El LLM nunca ordena candidatos, nunca calcula traslados y nunca decide si una oferta es legal. Metodología completa en [`docs/metodologia.md`](docs/metodologia.md).
 
-Diagrama del grafo real, generado sin red con `draw_mermaid()`:
+![Arquitectura de Puente: 14 nodos, regresos y aprobación humana](docs/arquitectura.png)
+
+*Diagrama de arquitectura: [`docs/arquitectura.png`](docs/arquitectura.png). Lo dibuja [`docs/generar_arquitectura.py`](docs/generar_arquitectura.py) con los mismos nodos y aristas que `construir_grafo()`, y `tests/test_arquitectura.py` falla si dejan de coincidir o si el PNG no se regeneró.*
+
+El mismo grafo, como texto, generado sin red con `draw_mermaid()`:
 
 ```bash
 uv run python -c "from puente.graph import construir_grafo; print(construir_grafo().get_graph().draw_mermaid())"
