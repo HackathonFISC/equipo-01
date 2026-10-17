@@ -321,7 +321,7 @@ def test_cegar_mas_estados_civiles_sin_borrar_experiencia(texto, esperado):
         "vendí productos de Estados Unidos",
         "fue una situación embarazosa",
         "limpio la casa de mi abuela",
-        "mi hija nació en el hospital",
+        "la clienta nació en el hospital",  # «nació en» sin año no es fecha de nacimiento («mi hija» sí se ciega, #148)
         "atiendo a muchachos del colegio",
     ],
 )
@@ -445,6 +445,41 @@ def test_cegar_pareja_e_hijos(texto, dato):
     ["atiendo la fonda de mi mamá", "trabajé en pareja con otra cajera", "cuidé a dos niños como niñera por horas"],
 )
 def test_cegar_no_toca_familia_que_no_es_dato_personal(texto):
+    from puente.tools.pdf import cegar
+
+    assert cegar(texto, _perfil()) == texto
+
+
+@pytest.mark.parametrize(
+    "texto, dato",
+    [
+        ("Necesito horario para cuidar a mis hijos", "mis hijos"),
+        ("Tengo hijos pequeños", "hijos"),
+        ("Soy madre de familia", "madre de familia"),
+        ("Tengo un bebé", "bebé"),
+        ("Vivo con mi esposo y mi hija", "mi hija"),
+        ("Nací en La Chorrera en 2006", "2006"),
+    ],
+)
+def test_cegar_fugas_de_la_segunda_revision(texto, dato):
+    """Fugas que encontró «Revisión general» en el PR #156."""
+    from puente.tools.pdf import cegar
+
+    ciego = cegar(texto, _perfil())
+    assert dato not in ciego and "[dato omitido]" in ciego
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "trabajé en la empresa nacional en Colón desde 2024",
+        "vendí ropa de niños en el mercado",
+        "ayudo a mi papá en el taller",
+        "trabajé con mi prima en la fonda",
+        "tengo habilidad para la caja",
+    ],
+)
+def test_cegar_familia_sin_falsos_positivos(texto):
     from puente.tools.pdf import cegar
 
     assert cegar(texto, _perfil()) == texto
