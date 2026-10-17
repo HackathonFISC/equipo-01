@@ -1197,11 +1197,23 @@ def recalcular_pipeline_tablero(
     # ve (#256). Si la pareja vuelve a la lista, se vuelve a crear desde SQLite. Las enviadas, rechazadas o
     # contratadas son historial y se quedan.
     en_lista_corta = {(m["perfil_id"], m["oferta_id"]) for m in matches_ui}
-    nuevas_postulaciones = [
+    quitadas = [
         post for post in nuevas_postulaciones
-        if post.get("estado") != EstadoPostulacion.PRESELECCIONADO.value
-        or (post["perfil_id"], post["oferta_id"]) in en_lista_corta
+        if post.get("estado") == EstadoPostulacion.PRESELECCIONADO.value
+        and (post["perfil_id"], post["oferta_id"]) not in en_lista_corta
     ]
+    nuevas_postulaciones = [post for post in nuevas_postulaciones if post not in quitadas]
+    # El joven tiene que enterarse de que salió de la lista corta (#257): lo quitado queda aquí, sin los datos de la
+    # postulación, hasta que la pareja vuelva a la lista (#270). Un segundo recálculo no lo olvida.
+    fuera = {(f["perfil_id"], f["oferta_id"]): f for f in estado.get("fuera_de_lista_corta") or []}
+    for post in quitadas:
+        fuera[(post["perfil_id"], post["oferta_id"])] = {
+            "perfil_id": post["perfil_id"],
+            "oferta_id": post["oferta_id"],
+            "puesto": post.get("puesto", ""),
+            "empresa": post.get("empresa", ""),
+        }
+    estado["fuera_de_lista_corta"] = [f for par, f in fuera.items() if par not in en_lista_corta]
     estado["postulaciones"] = nuevas_postulaciones
     estado["metricas"] = _calcular_metricas_impacto(estado)
     if registrar_trazas:
@@ -3568,6 +3580,30 @@ def _rutas_formacion_de(estado: dict[str, Any], perfil_id: str) -> list[dict[str
     return [dict(r) for r in rutas if isinstance(r, dict) and r.get("perfil_id") == perfil_id]
 
 
+def salieron_de_lista_corta(estado: dict[str, Any], perfil_id: str, ya_vistas: set[str]) -> list[dict[str, Any]]:
+    """Vacantes que el recálculo sacó de la lista corta del joven y ya no tienen postulación en el estado (#270).
+
+    `recalcular_pipeline_tablero` quita las «preseleccionado» que dejan de estar en la lista (#256) y las anota en
+    `fuera_de_lista_corta`; el aviso de #257 se arma también con ellas. `ya_vistas` son las vacantes que la vista ya
+    muestra, para no repetirlas.
+    """
+    ofertas = {o["id"]: o for o in estado.get("ofertas", [])}
+    avisos = []
+    for f in estado.get("fuera_de_lista_corta") or []:
+        oferta_id = f.get("oferta_id")
+        if f.get("perfil_id") != perfil_id or oferta_id in ya_vistas:
+            continue
+        oferta = ofertas.get(oferta_id, {})
+        avisos.append(
+            {
+                "oferta_id": oferta_id,
+                "puesto": f.get("puesto") or oferta.get("puesto", oferta_id),
+                "empresa": f.get("empresa") or oferta.get("empresa", ""),
+            }
+        )
+    return avisos
+
+
 def resultado_joven(estado: dict[str, Any], perfil_id: str) -> dict[str, Any]:
     """Lo que ve el joven: lista corta con estado y consentimiento, descartes con motivo y formación.
 
@@ -3630,6 +3666,9 @@ def resultado_joven(estado: dict[str, Any], perfil_id: str) -> dict[str, Any]:
             }
         )
 
+    salieron_de_lista += salieron_de_lista_corta(
+        estado, perfil_id, {v["oferta_id"] for v in vacantes} | {s["oferta_id"] for s in salieron_de_lista}
+    )
     descartes = [
         {
             "oferta_id": d.get("oferta_id"),
