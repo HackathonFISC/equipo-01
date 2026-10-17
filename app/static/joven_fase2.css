@@ -73,9 +73,10 @@
   gap: 0.6rem;
 }
 
+/* En el teléfono: día, desde y hasta en una fila; materia y «Quitar» en la siguiente. */
 .f2-bloque {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1.3fr 1fr 1fr;
   gap: 0.5rem;
   align-items: end;
   border: 1px solid var(--border);
@@ -84,15 +85,22 @@
   padding: 0.6rem;
 }
 
-.f2-bloque .campo:first-child,
-.f2-materia,
-.f2-bloque .f2-problemas {
-  grid-column: 1 / -1;
+.f2-bloque select,
+.f2-bloque input {
+  padding-left: 0.5rem;
+  padding-right: 0.4rem;
+}
+
+.f2-materia {
+  grid-column: 1 / 3;
 }
 
 .f2-quitar {
-  grid-column: 1 / -1;
   justify-self: end;
+}
+
+.f2-bloque .f2-problemas {
+  grid-column: 1 / -1;
 }
 
 .f2-problemas {
@@ -198,9 +206,7 @@
     grid-template-columns: 1.4fr 1fr 1fr 2fr auto;
   }
 
-  .f2-bloque .campo:first-child,
-  .f2-materia,
-  .f2-quitar {
+  .f2-materia {
     grid-column: auto;
   }
 }
