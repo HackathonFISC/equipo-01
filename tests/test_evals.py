@@ -32,6 +32,10 @@ CONTEO_ESPERADO = {
     "horario_validacion": 1,
     "redactor_puente": 3,  # #157: edad con presencia, sexo y «vivir cerca de».
     "micromision": 4,  # #158: correcta, incorrecta, vacía y el contrafactual del Auditor
+    "postulacion": 2,  # #225: sin consentimiento no sale nada; con consentimiento, CV, carta, .ics y mensaje ciegos
+    "reacomodo": 1,  # #225: la empresa rechaza y el grafo recalcula con aprobación pendiente
+    "formacion": 2,  # #225: un curso válido entre cuatro; ninguno si chocan horario o pasaje
+    "punta_a_punta": 1,  # #225: perfil -> lista corta -> aprobación -> outbox
 }
 
 
@@ -116,6 +120,10 @@ def test_ids_siguen_el_formato_pedido(casos):
         "horario_validacion": "HOR",
         "redactor_puente": "RED",
         "micromision": "MIC",
+        "postulacion": "POS",
+        "reacomodo": "REA",
+        "formacion": "FOR",
+        "punta_a_punta": "E2E",
     }
     for caso in casos["casos"]:
         assert caso["id"].startswith(prefijos[caso["categoria"]] + "-")
@@ -1200,3 +1208,31 @@ def test_cargar_casos_valida_la_taxonomia_en_linea(tmp_path):
     for malo in ([], {}, {"a": "texto"}, {"a": {"sinonimos": []}}, {"a": {"nombre_es": "A", "sinonimos": "aa"}}):
         with pytest.raises(ValueError, match="taxonom"):
             run.cargar_casos(con(malo))
+
+
+# ---------------------------------------------------------------------------- #225: postulación, reacomodo, formación y punta a punta
+def test_diferencias_campos_respeta_el_orden_solo_donde_importa():
+    esperado = {"listas": {"o1": ["a", "b"]}, "enviadas": ["x", "y"], "postulaciones": {"a@o1": "enviado"}}
+    igual_sin_orden = {"listas": {"o1": ["a", "b"]}, "enviadas": ["y", "x"], "postulaciones": {"a@o1": "enviado", "b@o1": "x"}}
+    assert run._diferencias_campos(esperado, igual_sin_orden, en_orden=("listas",), subconjunto=("postulaciones",)) == []
+    otro_orden = {**igual_sin_orden, "listas": {"o1": ["b", "a"]}}
+    assert run._diferencias_campos(esperado, otro_orden, en_orden=("listas",), subconjunto=("postulaciones",)) == ["listas"]
+    assert run._diferencias_campos(esperado, igual_sin_orden) == ["postulaciones"]  # sin subconjunto, sobra b@o1
+
+
+def test_casos_del_225_corren_sin_llm_y_sin_tocar_la_raiz(casos, monkeypatch):
+    """Los 6 casos con los ejecutores reales, en carpetas temporales: sin LLM, sin red y sin outbox ni base en la raíz.
+    E2E-01 puede fallar solo por el orden de la lista corta (#238) hasta que se arregle."""
+    import puente.llm as capa
+
+    monkeypatch.setattr(capa, "_cliente_por_defecto", lambda *a, **k: pytest.fail("llamada real al modelo"))
+    antes = {p.name for p in RAIZ.iterdir()}
+    nuevos = {"postulacion", "reacomodo", "formacion", "punta_a_punta"}
+    sub = {**casos, "casos": [c for c in casos["casos"] if c["categoria"] in nuevos]}
+    resultados = {r.id: r for r in run.correr(sub, repeticiones=1)}
+    assert set(resultados) == {"POS-01", "POS-02", "REA-01", "FOR-01", "FOR-02", "E2E-01"}
+    for caso_id in ("POS-01", "POS-02", "REA-01", "FOR-01", "FOR-02"):
+        assert resultados[caso_id].estado == "ok", resultados[caso_id].detalle
+    e2e = resultados["E2E-01"]
+    assert e2e.estado == "ok" or e2e.detalle.startswith("0/1 corridas acertaron; difiere en listas_cortas;"), e2e.detalle
+    assert {p.name for p in RAIZ.iterdir()} == antes

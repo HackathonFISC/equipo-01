@@ -395,7 +395,7 @@ Las palabras clave de inyección ("ignora tus instrucciones", "eres ahora", "sys
 
 ## Evals
 
-42 casos propios en [`evals/casos.yaml`](evals/casos.yaml), cada uno con el resultado esperado escrito antes de correr. El runner es [`evals/run.py`](evals/run.py) y los resultados, con el registro de fallos y su historial, están en [`evals/resultados.md`](evals/resultados.md). Esta tabla es de la corrida en modo reproducir sobre `main`. **Se regenera con `uv run python -m evals.run` sobre el commit final, antes del tag.**
+48 casos propios en [`evals/casos.yaml`](evals/casos.yaml), cada uno con el resultado esperado escrito antes de correr. El runner es [`evals/run.py`](evals/run.py) y los resultados, con el registro de fallos y su historial, están en [`evals/resultados.md`](evals/resultados.md). Esta tabla es de la corrida en modo reproducir sobre `main`. **Se regenera con `uv run python -m evals.run` sobre el commit final, antes del tag.**
 
 | Categoría | Casos | Aciertos | Métrica | Meta | Cumple |
 |---|---:|---:|---|---:|---|
@@ -409,10 +409,15 @@ Las palabras clave de inyección ("ignora tus instrucciones", "eres ahora", "sys
 | Horario: validación | 1 | 1/1 | Bloques inválidos rechazados y válidos convertidos | 100 % | sí |
 | Redactor | 3 | 3/3 | Versión legal sin hallazgos y viables antes y después iguales a lo calculado a mano | 100 % | sí |
 | Micromisión | 4 | 4/4 | Puntaje calculado en código, igual con nombre y género cambiados, scorecard sin datos personales | 100 % | sí |
+| Postulación | 2 | 2/2 | Sin consentimiento no sale nada; con consentimiento, CV, carta, .ics y mensaje sin datos sensibles | 100 % | sí |
+| Reacomodo | 1 | 1/1 | Tras el rechazo de la empresa: pareja excluida, aviso al joven y nueva aprobación pendiente | 100 % | sí |
+| Formación | 2 | 2/2 | Cursos calculados a mano, con cupo, horario sin cruce, traslado de hasta 60 min y pasaje dentro del presupuesto | 100 % | sí |
+| De punta a punta | 1 | 0/1 | Listas cortas calculadas a mano y CV, carta e .ics por pareja en outbox, sin datos sensibles | 100 % | no (#238) |
 
 Para leer esta tabla con honestidad:
 
 - **No siempre fue así.** El 16 de octubre, 4 de los 5 casos de extracción fallaban (#152 a #155). Se corrigieron en el código de Mercado, sin tocar lo esperado, y el historial queda en `evals/resultados.md`.
+- **Un caso falla hoy.** E2E-01 recorre el caso Yaritza de punta a punta. Coinciden las parejas enviadas, los archivos y la ausencia de datos sensibles, pero la lista corta de la cocina sale ordenada por id (Carlos 50, María 50, Yaritza 100) y no por puntaje. El fallo queda anotado y se sigue en #238.
 - **Las metas son provisionales.** Las propuso el equipo.
 - **No se mide la variación.** En modo reproducir cada caso con LLM usa una sola grabación.
 - **Todos los datos de los casos son sintéticos.**

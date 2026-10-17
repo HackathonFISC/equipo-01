@@ -42,6 +42,25 @@
 #                               (correcto | incorrecto | sin respuesta legible), puntaje, respuesta?, datos_personales?
 #                               (lo personal que quedó en el scorecard: []), mismo_puntaje? (con variantes)}
 #                               (#158, sin LLM: la respuesta sale del respaldo determinístico y la corrige el código)
+#   postulacion                 entrada {perfil, oferta, consentimiento (bool), minutos_traslado, sensibles[],
+#                               evidencia_presente[]} -> esperado {error (null | "consentimiento"), archivos[] (tipos en
+#                               outbox: cv | carta | ics | mensaje), estado (de la postulación o null), datos_sensibles[]
+#                               (los de `sensibles` que aparecen en CV, carta, .ics o mensaje), evidencia_presente}
+#                               (#7, #12, #212: postular() real con SQLite y outbox temporales, Telegram apagado)
+#   reacomodo                   entrada {caso_ruta, config_solver?, habilidades_extra?, evento {oferta_id, perfil_id, tipo,
+#                               nota}} -> esperado {excluidos[] ("perfil@oferta (origen)"), postulaciones {"perfil@oferta":
+#                               estado}, aviso_al_joven, siguiente[], aprobacion_pendiente, candidatos_nuevos[]}
+#                               (#54: el grafo real con Perfil de habilidades fijas, sin LLM)
+#   formacion                   entrada {perfil, brechas[], max_minutos?} -> esperado {cursos[] (ids), brechas_cubiertas[],
+#                               brechas_pendientes[], violaciones[] (cupo | traslado | pasaje | horario, medidas aparte)}
+#                               (#14, #53: catálogo data/cursos.csv y traslados de data/traslados.csv)
+#   punta_a_punta               entrada {caso_ruta, sensibles[]} -> esperado {listas_cortas {oferta: [perfiles]}, enviadas[]
+#                               ("perfil@oferta"), archivos_por_pareja {"perfil@oferta": [cv, carta, ics]},
+#                               mensajes_a_la_empresa, datos_sensibles[]}  (grafo real: perfil -> matching -> aprobación
+#                               con consentimiento -> postulación -> outbox, sin LLM)
+#
+# Las categorías postulacion, reacomodo, formacion y punta_a_punta (#225) usan data/cursos.csv, data/traslados.csv y
+# tests/fixtures/caso_yaritza.json, ya en main. Escriben solo en carpetas temporales.
 #
 # La taxonomía vigente se carga del CSV al ejecutar los casos.
 
@@ -97,6 +116,26 @@ categorias:
     issue: 158
     usa_llm: false
     metrica: "Resultado y puntaje del reto calculados en código iguales a lo esperado; mismo puntaje con nombre y género cambiados; scorecard sin datos personales"
+    meta: 1.0
+  postulacion:
+    issue: 225
+    usa_llm: false
+    metrica: "Sin consentimiento no se genera nada; con consentimiento salen CV, carta, .ics y mensaje, y ninguno trae edad, corregimiento, estado civil ni hijos"
+    meta: 1.0
+  reacomodo:
+    issue: 225
+    usa_llm: false
+    metrica: "Tras el rechazo de la empresa: pareja excluida, aviso al joven, lista nueva sin esa persona y aprobación pendiente"
+    meta: 1.0
+  formacion:
+    issue: 225
+    usa_llm: false
+    metrica: "Cursos iguales a los calculados a mano, con cupo, horario sin cruce con las clases, traslado de hasta 60 min y pasaje dentro del presupuesto"
+    meta: 1.0
+  punta_a_punta:
+    issue: 225
+    usa_llm: false
+    metrica: "Listas cortas iguales a las calculadas a mano y, tras aprobar con consentimiento, CV, carta e .ics por pareja en outbox, sin datos sensibles"
     meta: 1.0
 
 casos:
@@ -1275,3 +1314,177 @@ casos:
     escrito_el: "2026-10-17"
     datos_sinteticos: true
     fallos: []
+
+  # ------------------------------------------------------------------ Postulación, reacomodo, Formación y punta a punta (#225)
+  # Esperados calculados a mano antes de correr, con data/traslados.csv (búsqueda simétrica, «Barrio Colón» = La Chorrera)
+  # y los topes del solver: k = 3 candidatos por plaza y 2 vacantes por joven.
+  - id: POS-01
+    categoria: postulacion
+    descripcion: "Aprobada por el orientador pero sin consentimiento del joven: postular() se niega y no genera ningún archivo ni postulación (Ley 81 de 2019)."
+    entrada:
+      perfil:
+        id: yaritza
+        nombre: "Yaritza Ficticia"
+        edad: 20
+        corregimiento: "La Chorrera"
+        salario_minimo: 400
+        presupuesto_pasaje_diario: 3.0
+        habilidades:
+          - {skill_id: atencion_cliente, evidencia: "atiendo pedidos en la fonda"}
+      oferta:
+        id: of-cajero-prueba
+        puesto: "Cajero(a)"
+        empresa: "Minisúper Ficticio (Empresa de Prueba)"
+        corregimiento: "Vista Alegre"
+        salario_mensual: 650
+        habilidades: [atencion_cliente, manejo_caja]
+      consentimiento: false
+      minutos_traslado: 20
+      sensibles: []
+      evidencia_presente: []
+    esperado:
+      error: consentimiento
+      archivos: []
+      estado: null
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: POS-02
+    categoria: postulacion
+    descripcion: "Con aprobación y consentimiento salen CV, carta, .ics y el mensaje a la empresa (en outbox: Telegram apagado); la evidencia trae edad, estado civil, corregimiento e hijos y nada de eso llega a la empresa."
+    entrada:
+      perfil:
+        id: yaritza
+        nombre: "Yaritza Ficticia"
+        edad: 20
+        corregimiento: "La Chorrera"
+        salario_minimo: 400
+        presupuesto_pasaje_diario: 3.0
+        habilidades:
+          - {skill_id: atencion_cliente, evidencia: "atiendo pedidos en la fonda; tengo 20 años, soy soltera, vivo en La Chorrera y cuido a mis hijos"}
+          - {skill_id: manejo_caja, evidencia: "cobro en caja"}
+      oferta:
+        id: of-cajero-prueba
+        puesto: "Cajero(a)"
+        empresa: "Minisúper Ficticio (Empresa de Prueba)"
+        corregimiento: "Vista Alegre"
+        salario_mensual: 650
+        habilidades: [atencion_cliente, manejo_caja]
+      consentimiento: true
+      minutos_traslado: 20
+      sensibles: ["20 años", "soltera", "La Chorrera", "mis hijos"]
+      evidencia_presente: ["atiendo pedidos en la fonda", "cobro en caja"]
+    esperado:
+      error: null
+      archivos: [carta, cv, ics, mensaje]
+      estado: enviado
+      datos_sensibles: []
+      evidencia_presente: true
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: REA-01
+    categoria: reacomodo
+    descripcion: "La empresa del cajero rechaza a Yaritza ya enviada: sale de esa vacante (no de la cocina), se le avisa por outbox y la lista nueva del cajero, sin ella, espera al orientador. Con k = 2 y atención al cliente para María, la siguiente viable del cajero es María (50 puntos)."
+    entrada:
+      caso_ruta: tests/fixtures/caso_yaritza.json
+      config_solver: {max_candidatos_por_vacante: 2}
+      habilidades_extra:
+        maria: [{skill_id: atencion_cliente, evidencia: "atendía a las personas en eventos"}]
+      evento: {oferta_id: of-cajero-vista-alegre, perfil_id: yaritza, tipo: rechaza, nota: "eligió otro perfil"}
+    esperado:
+      excluidos: ["yaritza@of-cajero-vista-alegre (empresa)"]
+      postulaciones:
+        "yaritza@of-cajero-vista-alegre": no_seleccionado
+        "yaritza@of-ayudante-cocina-chorrera": enviado
+        "carlos@of-cajero-vista-alegre": enviado
+      aviso_al_joven: true
+      siguiente: [aprobacion]
+      aprobacion_pendiente: of-cajero-vista-alegre
+      candidatos_nuevos: [carlos, maria]
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: FOR-01
+    categoria: formacion
+    descripcion: "A Yaritza (La Chorrera, clases de 18:00 a 22:00, libre de 8 a 17, pasaje hasta 3.00) le falta excel_basico. Lo cubren 4 cursos y solo uno es válido: CHO-01 (La Chorrera, 15 min, 1.00 al día, 08:00-12:00, 20 cupos). TOC-04 está a 95 min, NOCHE-05 choca con sus clases y SINCUPO-06 no tiene cupo."
+    entrada:
+      perfil:
+        id: yaritza
+        nombre: "Yaritza Ficticia"
+        edad: 20
+        corregimiento: "La Chorrera"
+        salario_minimo: 400
+        presupuesto_pasaje_diario: 3.0
+        horario_clases: [{dias: [lunes, martes, miercoles, jueves, viernes], hora_inicio: "18:00", hora_fin: "22:00"}]
+        horario_libre: [{dias: [lunes, martes, miercoles, jueves, viernes], hora_inicio: "08:00", hora_fin: "17:00"}]
+      brechas: [excel_basico]
+    esperado:
+      cursos: [INADEH-CHO-01]
+      brechas_cubiertas: [excel_basico]
+      brechas_pendientes: []
+      violaciones: []
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: FOR-02
+    categoria: formacion
+    descripcion: "Joven de La Chorrera que estudia de 13:00 a 17:00, con pasaje hasta 3.00. Inventario solo lo cubre CHO-03 (13:00-17:00, choca con sus clases) y cocina solo CAL-08 (Calidonia, 55 min, pero 3.70 al día ida y vuelta): no se propone ninguno y las dos brechas quedan pendientes."
+    entrada:
+      perfil:
+        id: joven-tarde
+        nombre: "Alex Ficticio"
+        edad: 22
+        corregimiento: "La Chorrera"
+        salario_minimo: 400
+        presupuesto_pasaje_diario: 3.0
+        horario_clases: [{dias: [lunes, martes, miercoles, jueves, viernes], hora_inicio: "13:00", hora_fin: "17:00"}]
+        horario_libre:
+          - {dias: [lunes, martes, miercoles, jueves, viernes], hora_inicio: "08:00", hora_fin: "12:00"}
+          - {dias: [lunes, martes, miercoles, jueves, viernes], hora_inicio: "18:00", hora_fin: "22:00"}
+      brechas: [inventario, cocina]
+    esperado:
+      cursos: []
+      brechas_cubiertas: []
+      brechas_pendientes: [inventario, cocina]
+      violaciones: []
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: E2E-01
+    categoria: punta_a_punta
+    descripcion: "Caso Yaritza de punta a punta: ofertas + perfiles -> lista corta -> aprobación con consentimiento de todos -> CV, carta e .ics por pareja y un mensaje por oferta en outbox. A mano: cajero (Vista Alegre) = Carlos 100 y Yaritza 100; cocina (Barrio Colón = La Chorrera) = Yaritza 100, Carlos 50 y María 50 (desempate por id); la cajera bloqueada no entra."
+    entrada:
+      caso_ruta: tests/fixtures/caso_yaritza.json
+      sensibles: ["20 años", "Barrio Colón", "femenino"]
+    esperado:
+      listas_cortas:
+        of-cajero-vista-alegre: [carlos, yaritza]
+        of-ayudante-cocina-chorrera: [yaritza, carlos, maria]
+      enviadas:
+        - "carlos@of-cajero-vista-alegre"
+        - "yaritza@of-cajero-vista-alegre"
+        - "yaritza@of-ayudante-cocina-chorrera"
+        - "carlos@of-ayudante-cocina-chorrera"
+        - "maria@of-ayudante-cocina-chorrera"
+      archivos_por_pareja:
+        "carlos@of-cajero-vista-alegre": [carta, cv, ics]
+        "yaritza@of-cajero-vista-alegre": [carta, cv, ics]
+        "yaritza@of-ayudante-cocina-chorrera": [carta, cv, ics]
+        "carlos@of-ayudante-cocina-chorrera": [carta, cv, ics]
+        "maria@of-ayudante-cocina-chorrera": [carta, cv, ics]
+      mensajes_a_la_empresa: 2
+      datos_sensibles: []
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos:
+      - fecha: "2026-10-17"
+        observado: "listas_cortas de la cocina [carlos, maria, yaritza] (50, 50, 100): ordenada por id del perfil, no por puntaje; lo demás coincide (5 enviadas, CV, carta e .ics por pareja, 2 mensajes, 0 datos sensibles)"
+        cambio_hecho: "pendiente: ordenar la lista corta de cada vacante por puntaje, minutos e id (asignar() y solicitud_aprobacion)"
+        issue: "#238"
+        nueva_ejecucion: "pendiente hasta que se arregle #238"
