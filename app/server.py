@@ -69,6 +69,20 @@ class ErrorValidacionTablero(ValueError):
     """Error de validación de entrada o de transición de estado en el tablero (HTTP 422)."""
 
 
+def _postular_tablero(*args: Any, **kwargs: Any) -> Any:
+    """`postular()` desde el tablero: si se niega a enviar (por ejemplo, sin consentimiento del
+    joven, Ley 81 de 2019), el orientador recibe un 422 con el motivo y no un 500 (#12, #49).
+
+    postular() valida todo antes de tocar nada, así que su ValueError no deja efectos a medias.
+    """
+    try:
+        return postular(*args, **kwargs)
+    except ErrorValidacionTablero:
+        raise
+    except ValueError as exc:
+        raise ErrorValidacionTablero(str(exc)) from exc
+
+
 class AccionOrientadorRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -417,7 +431,7 @@ def recalcular_pipeline_tablero(
                 conn=conn,
                 outbox=RUTA_OUTBOX,
                 enviar=lambda _chat, _txt, _adj: None if False else {},  # pragma: no cover
-            ) if False else postular(
+            ) if False else _postular_tablero(
                 matches_aprob,
                 perfiles_map,
                 ofertas_map,
@@ -1173,7 +1187,7 @@ def procesar_accion_orientador(
             RUTA_OUTBOX.mkdir(parents=True, exist_ok=True)
             conn = _conectar_db_estado(estado)
             try:
-                res_post = postular(
+                res_post = _postular_tablero(
                     [m_schema],
                     perfiles_map,
                     ofertas_map,
@@ -1184,6 +1198,9 @@ def procesar_accion_orientador(
                     },
                     conn=conn,
                     outbox=RUTA_OUTBOX,
+                    # El consentimiento que el orientador confirmó arriba; sin él, postular() no
+                    # envía nada (#12, Ley 81 de 2019).
+                    consentimientos=[consentimiento],
                 )
             finally:
                 conn.close()

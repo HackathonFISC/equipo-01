@@ -227,6 +227,77 @@ def test_acciones_orientador_consentimiento_sqlite_editar_quitar_rechazar_y_desb
     )
 
 
+def _post(estado: dict, perfil_id: str, oferta_id: str) -> dict:
+    return next(
+        p
+        for p in estado["postulaciones"]
+        if p["perfil_id"] == perfil_id and p["oferta_id"] == oferta_id
+    )
+
+
+def test_aprobar_sin_grafo_postula_directo_con_el_consentimiento_confirmado(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sin el grafo en el hilo, el tablero llama a postular() directo y le pasa el consentimiento (#12, #49)."""
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path)
+    estado = obtener_datos_iniciales_demo(db_path=tmp_path / "test_puente.db")
+    estado["_grafo"] = None
+
+    with pytest.raises(ErrorValidacionTablero):
+        procesar_accion_orientador(
+            estado,
+            accion="aprobar",
+            perfil_id="PERFIL-YARITZA",
+            oferta_id="OF-CHORRERA-01",
+            consentimiento_joven=False,
+        )
+    assert list(tmp_path.glob("*.pdf")) == []
+
+    procesar_accion_orientador(
+        estado,
+        accion="aprobar",
+        perfil_id="PERFIL-YARITZA",
+        oferta_id="OF-CHORRERA-01",
+        consentimiento_joven=True,
+    )
+    post = _post(estado, "PERFIL-YARITZA", "OF-CHORRERA-01")
+    assert post["estado"] == "enviado"
+    assert len(post["archivos_generados"]) == 3
+    for nombre_arch in post["archivos_generados"]:
+        assert (tmp_path / nombre_arch).exists()
+
+
+@pytest.mark.parametrize("con_grafo", [True, False])
+def test_si_postular_se_niega_el_tablero_responde_error_de_validacion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, con_grafo: bool
+) -> None:
+    """El ValueError de postular() llega como ErrorValidacionTablero (422), no como un 500 (#12, #49)."""
+    import app.server as srv
+    from puente.agents.postulacion import MENSAJE_SIN_CONSENTIMIENTO
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path)
+    estado = obtener_datos_iniciales_demo(db_path=tmp_path / "test_puente.db")
+    if not con_grafo:
+        estado["_grafo"] = None
+
+    def _se_niega(*_args: object, **_kwargs: object) -> None:
+        raise ValueError(f"{MENSAJE_SIN_CONSENTIMIENTO}: PERFIL-YARITZA / OF-CHORRERA-01")
+
+    monkeypatch.setattr(srv, "postular", _se_niega)
+    with pytest.raises(ErrorValidacionTablero, match="Ley 81"):
+        procesar_accion_orientador(
+            estado,
+            accion="aprobar",
+            perfil_id="PERFIL-YARITZA",
+            oferta_id="OF-CHORRERA-01",
+            consentimiento_joven=True,
+        )
+    assert _post(estado, "PERFIL-YARITZA", "OF-CHORRERA-01")["estado"] == "preseleccionado"
+    assert list(tmp_path.glob("*.pdf")) == []
+
+
 def test_en_app_no_queda_logica_propia_de_matching_traslados_ni_auditoria() -> None:
     """Criterio 3 (#49): En app/ no queda lógica propia de matching, traslados ni auditoría."""
     codigo_server = (Path(__file__).resolve().parents[1] / "app" / "server.py").read_text(
