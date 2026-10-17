@@ -21,7 +21,7 @@ def pagina(monkeypatch, tmp_path):
 
 def test_las_dos_entradas_grandes_y_el_acceso_del_orientador(pagina):
     enlaces = set(re.findall(r'href="([^"#]*)', pagina))
-    assert {"/joven", "/empresa", "/"} <= enlaces
+    assert {"/joven", "/empresa", "/orientador"} <= enlaces
     assert "Busco empleo" in pagina and "Tengo una vacante" in pagina
     assert "Acceso orientador" in pagina
 
@@ -34,3 +34,15 @@ def test_no_pide_recursos_de_otro_servidor(pagina):
 
 def test_el_titulo_dice_skillmatch(pagina):
     assert re.search(r"<title>SkillMatch", pagina)
+
+
+def test_la_raiz_es_la_landing_y_el_tablero_vive_en_orientador(monkeypatch, tmp_path):
+    # #293: la landing es la entrada; el tablero del orientador se abre en /orientador.
+    monkeypatch.setenv("PUENTE_DB", str(tmp_path / "raiz.db"))
+    monkeypatch.setenv("PUENTE_OUTBOX", str(tmp_path / "outbox"))
+    import app.server as srv
+
+    cliente = TestClient(srv.app)
+    assert "Busco empleo" in cliente.get("/").text
+    tablero = cliente.get("/orientador")
+    assert tablero.status_code == 200 and 'id="flujo-pasos"' in tablero.text
