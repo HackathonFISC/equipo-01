@@ -23,6 +23,8 @@ from typing import Any, Literal
 from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Mount, Route
@@ -95,7 +97,22 @@ def es_modo_demo_publica() -> bool:
 
 
 if es_modo_demo_publica():
-    os.environ.setdefault("LLM_MODO", "reproducir")
+    os.environ["LLM_MODO"] = "reproducir"
+
+
+class MiddlewareDemoPublicaReadOnly(BaseHTTPMiddleware):
+    """En modo demo pública (Vercel / PUENTE_DEMO_PUBLICA=1), bloquea mutaciones (POST, PUT, DELETE, PATCH) con 403 (#161)."""
+
+    async def dispatch(self, request: Request, call_next):
+        if es_modo_demo_publica() and request.method not in ("GET", "HEAD", "OPTIONS"):
+            return JSONResponse(
+                {
+                    "detail": "Modo demostración pública en Vercel: el servidor opera en solo lectura para preservar la demo del hackathon (#161).",
+                    "modo_demo_publica": True,
+                },
+                status_code=403,
+            )
+        return await call_next(request)
 
 RUTA_APP = Path(__file__).resolve().parent
 RUTA_STATIC = RUTA_APP / "static"
@@ -641,21 +658,8 @@ def _compilar_grafo_tablero(
         if not estado.get("umbrales_editados_orientador"):
             return estado_g
         cfg_dict = dict(estado.get("config_solver") or {})
-        explicitos = set(estado.get("umbrales_explicitos") or [])
-        max_min = int(cfg_dict.get("max_minutos_traslado", 60))
-        if max_min >= 90 and "max_vacantes_por_perfil" not in explicitos:
-            cfg_dict["max_vacantes_por_perfil"] = max(int(cfg_dict.get("max_vacantes_por_perfil") or 2), 3)
         cfg_obj = ConfigSolver(**cfg_dict)
-        vista_g = {**estado_g, "config_solver": cfg_obj}
-        if max_min >= 90:
-            matriz_custom = dict(_mod_traslados.cargar_traslados())
-            par_tocumen = ("la chorrera", "tocumen")
-            if par_tocumen in matriz_custom:
-                matriz_custom[par_tocumen] = matriz_custom[par_tocumen].model_copy(
-                    update={"minutos_hora_pico": min(90, max_min), "pasaje_ida_usd": 1.40}
-                )
-            vista_g["traslados"] = matriz_custom
-        return vista_g
+        return {**estado_g, "config_solver": cfg_obj}
 
     def _nodo_matching_tablero(estado_g: dict[str, Any]) -> dict[str, Any]:
         return nodo_matching_grafo(_inyectar_umbrales_grafo(estado_g))
@@ -1057,7 +1061,7 @@ def obtener_datos_iniciales_demo(
             "modalidad_ingreso": "datos de ejemplo (sintéticos) · entrevista sin CV",
             "horario_libre": "Lunes a Viernes 07:00-17:30 (estudia de noche 18:00-22:00)",
             "salario_minimo": 600.0,
-            "presupuesto_pasaje_diario": 3.00,
+            "presupuesto_pasaje_diario": 5.00,
             "habilidades": [
                 {
                     "skill_id": "atencion_cliente",
@@ -1157,7 +1161,7 @@ def obtener_datos_iniciales_demo(
             "puesto": "Cajero/a de Sucursal Este",
             "empresa": "Comercial Aeropuerto S.A. (Empresa de Prueba)",
             "corregimiento": "Tocumen",
-            "salario_mensual": 650.0,
+            "salario_mensual": 700.0,
             "horario": "Lunes a Viernes 08:00-17:00",
             "habilidades": ["atencion_cliente", "manejo_caja"],
             "requisitos_texto": "Manejo de caja registradora y atención a clientes en sucursal de Tocumen.",
@@ -1967,7 +1971,7 @@ def cargar_escenario_cobertura_turnos(estado: dict[str, Any]) -> dict[str, Any]:
                     "hora_fin": "18:00",
                 }
             ],
-            "salario_minimo": 600.0,
+            "salario_minimo": 300.0,
             "presupuesto_pasaje_diario": 2.50,
             "habilidades": [
                 {
@@ -2004,7 +2008,7 @@ def cargar_escenario_cobertura_turnos(estado: dict[str, Any]) -> dict[str, Any]:
                     "hora_fin": "11:45",
                 }
             ],
-            "salario_minimo": 600.0,
+            "salario_minimo": 300.0,
             "presupuesto_pasaje_diario": 2.50,
             "habilidades": [
                 {
@@ -2100,36 +2104,119 @@ def aprobar_cobertura_turnos(
             )
         seg["consentimiento_joven"] = True
 
+    # Construir modelos desde estado para invocar al agente de postulación real (#165)
+    modelos_perfiles, _, modelos_ofertas, _ = _construir_modelos_desde_estado(estado)
+    perfiles_map = {p.id: p for p in modelos_perfiles}
+    ofertas_map = {o.id: o for o in modelos_ofertas}
+
+    for p_raw in estado.get("perfiles", []):
+        if p_raw.get("id") in (pid_m, pid_t) and p_raw.get("id") not in perfiles_map:
+            perfiles_map[p_raw["id"]] = Perfil.model_validate(p_raw)
+    for o_raw in estado.get("ofertas", []):
+        if o_raw.get("id") == req.oferta_id and o_raw.get("id") not in ofertas_map:
+            ofertas_map[o_raw["id"]] = Oferta.model_validate(o_raw)
+
+    def _desglose_segmento(seg_info: dict[str, Any]) -> dict[str, Any]:
+        d = dict(seg_info.get("desglose") or {})
+        d.setdefault("cobertura", 1.0)
+        d.setdefault("minutos_traslado", 0)
+        d.setdefault("pasaje_diario", 0.0)
+        d.setdefault("penalizacion", 0)
+        return d
+
+    matches_turnos = [
+        Match(
+            perfil_id=pid_m,
+            oferta_id=req.oferta_id,
+            puntaje=seg_m.get("puntaje", 80),
+            desglose=_desglose_segmento(seg_m),
+            brechas=list(seg_m.get("brechas") or []),
+            explicacion=f"Cobertura por turnos ({seg_m['inicio']}-{seg_m['fin']}) aprobada por {req.orientador}",
+        ),
+        Match(
+            perfil_id=pid_t,
+            oferta_id=req.oferta_id,
+            puntaje=seg_t.get("puntaje", 80),
+            desglose=_desglose_segmento(seg_t),
+            brechas=list(seg_t.get("brechas") or []),
+            explicacion=f"Cobertura por turnos ({seg_t['inicio']}-{seg_t['fin']}) aprobada por {req.orientador}",
+        ),
+    ]
+
+    aprobacion = {
+        "orientador": req.orientador,
+        "timestamp": ahora,
+        "aprobados": [
+            {"perfil_id": pid_m, "oferta_id": req.oferta_id},
+            {"perfil_id": pid_t, "oferta_id": req.oferta_id},
+        ],
+    }
+
+    previos = _consentimientos_combinados(estado)
+    consentimientos = consentimientos_para(
+        [(pid_m, req.oferta_id), (pid_t, req.oferta_id)],
+        previos,
+        ahora,
+    )
+    RUTA_OUTBOX.mkdir(parents=True, exist_ok=True)
     conn = _conectar_db_estado(estado)
     try:
-        for seg in (seg_m, seg_t):
-            pid = seg["perfil_id"]
-            post_existente = _buscar_postulacion(estado, pid, req.oferta_id)
-            if post_existente is None:
-                post_db_id = db.crear_postulacion(conn, pid, req.oferta_id, db.ENVIADO)
-                estado.setdefault("postulaciones", []).append(
-                    {
-                        "id": f"POST-{pid}-{req.oferta_id}",
-                        "db_id": post_db_id,
-                        "perfil_id": pid,
-                        "nombre_perfil": seg.get("nombre_perfil", pid),
-                        "oferta_id": req.oferta_id,
-                        "puesto": f"{cob.get('puesto', req.oferta_id)} · Turno {seg['inicio']}-{seg['fin']}",
-                        "empresa": cob.get("empresa", ""),
-                        "puntaje": seg.get("puntaje", 0),
-                        "estado": EstadoPostulacion.ENVIADO.value,
-                        "comentario_orientador": f"Cobertura por turnos ({seg['inicio']}-{seg['fin']}) aprobada por {req.orientador}",
-                        "mensaje_empresa": cob.get("explicacion", ""),
-                        "consentimiento_joven": True,
-                        "archivos_generados": [],
-                    }
-                )
-            else:
-                db.actualizar_estado(conn, int(post_existente["db_id"]), db.ENVIADO)
-                post_existente["estado"] = EstadoPostulacion.ENVIADO.value
-                post_existente["consentimiento_joven"] = True
+        res_post = postular(
+            matches_turnos,
+            perfiles_map,
+            ofertas_map,
+            aprobacion=aprobacion,
+            conn=conn,
+            outbox=RUTA_OUTBOX,
+            consentimientos=consentimientos,
+            mensaje_orientador=f"Propuesta de cobertura compartida por turnos ({seg_m['inicio']}-{seg_m['fin']} y {seg_t['inicio']}-{seg_t['fin']}) aprobada por {req.orientador}.",
+        )
+    except ValueError as error:
+        raise ErrorValidacionTablero(f"No se envió la cobertura por turnos a la empresa: {error}") from error
     finally:
         conn.close()
+
+    for d_post in res_post.decisiones:
+        d_ser = _serializar_decision(d_post)
+        if d_ser not in estado["decisiones"]:
+            estado["decisiones"].append(d_ser)
+
+    archivos_nombres = [arch.name for arch in res_post.archivos]
+
+    for idx, seg in enumerate((seg_m, seg_t)):
+        pid = seg["perfil_id"]
+        archivos_perfil = [
+            arch.name for arch in res_post.archivos
+            if pid in arch.name or req.oferta_id in arch.name
+        ] or archivos_nombres
+
+        post_existente = _buscar_postulacion(estado, pid, req.oferta_id)
+        db_id = res_post.postulaciones[idx] if idx < len(res_post.postulaciones) else None
+        if post_existente is None:
+            estado.setdefault("postulaciones", []).append(
+                {
+                    "id": f"POST-{pid}-{req.oferta_id}",
+                    "db_id": db_id,
+                    "perfil_id": pid,
+                    "nombre_perfil": seg.get("nombre_perfil", pid),
+                    "oferta_id": req.oferta_id,
+                    "puesto": f"{cob.get('puesto', req.oferta_id)} · Turno {seg['inicio']}-{seg['fin']}",
+                    "empresa": cob.get("empresa", ""),
+                    "puntaje": seg.get("puntaje", 0),
+                    "estado": EstadoPostulacion.ENVIADO.value,
+                    "comentario_orientador": f"Cobertura por turnos ({seg['inicio']}-{seg['fin']}) aprobada por {req.orientador}",
+                    "mensaje_empresa": cob.get("explicacion", ""),
+                    "consentimiento_joven": True,
+                    "archivos_generados": archivos_perfil,
+                }
+            )
+        else:
+            if db_id is not None:
+                post_existente["db_id"] = db_id
+            post_existente["estado"] = EstadoPostulacion.ENVIADO.value
+            post_existente["consentimiento_joven"] = True
+            post_existente["comentario_orientador"] = f"Cobertura por turnos ({seg['inicio']}-{seg['fin']}) aprobada por {req.orientador}"
+            post_existente["archivos_generados"] = archivos_perfil
 
     _registrar_decision_db(
         estado,
@@ -2260,12 +2347,8 @@ def registrar_evento_empresa_tablero(
     def _actualizar_post_sql(conn_db: sqlite3.Connection, post_id: int, nuevo_est: str, motivo_txt: str) -> None:
         try:
             db.cambiar_estado(conn_db, post_id, nuevo_est, motivo_txt)
-        except Exception:
-            conn_db.execute(
-                "UPDATE postulaciones SET estado = ?, actualizado = ? WHERE id = ?",
-                (nuevo_est, ahora, post_id),
-            )
-            conn_db.commit()
+        except ValueError as exc:
+            raise ErrorValidacionTablero(f"Transición no permitida para la postulación: {exc}") from exc
 
     conn = _conectar_db_estado(estado)
     try:
@@ -2589,6 +2672,9 @@ async def endpoint_reset(request: Request) -> JSONResponse:
 
 
 async def endpoint_cobertura_turnos_demo(request: Request) -> JSONResponse:
+    _, err_resp = await _leer_json_validado(request)
+    if err_resp is not None:
+        return err_resp
     cargar_escenario_cobertura_turnos(ESTADO_GLOBAL)
     anunciar_codigos_joven(ESTADO_GLOBAL)
     return await endpoint_estado(request)
@@ -2644,12 +2730,32 @@ async def endpoint_empresa_pagina(_request: Request) -> FileResponse:
     return FileResponse(RUTA_STATIC / "empresa.html")
 
 
+async def endpoint_empresa_postulaciones(_request: Request) -> JSONResponse:
+    """Devuelve las postulaciones enviadas a la empresa sin exponer datos internos del orientador (#168)."""
+    postulaciones_empresa = [
+        {
+            "id": p.get("id"),
+            "perfil_id": p.get("perfil_id"),
+            "nombre_perfil": p.get("nombre_perfil"),
+            "oferta_id": p.get("oferta_id"),
+            "puesto": p.get("puesto"),
+            "empresa": p.get("empresa"),
+            "estado": p.get("estado"),
+        }
+        for p in ESTADO_GLOBAL.get("postulaciones", [])
+        if p.get("estado") in (db.ENVIADO, db.ENTREVISTA, db.CONTRATADO, db.NO_SELECCIONADO)
+    ]
+    return JSONResponse({"postulaciones": postulaciones_empresa})
+
+
 async def endpoint_empresa_evento(request: Request) -> JSONResponse:
     datos, err_resp = await _leer_json_validado(request)
     if err_resp is not None or datos is None:
         return err_resp  # type: ignore[return-value]
     try:
         req = EventoEmpresaTableroRequest.model_validate(datos)
+        if req.perfil_id and not _buscar_perfil(ESTADO_GLOBAL, req.perfil_id):
+            return JSONResponse({"detail": f"Perfil '{req.perfil_id}' no encontrado."}, status_code=404)
         registrar_evento_empresa_tablero(
             ESTADO_GLOBAL,
             tipo=req.tipo,
@@ -2662,7 +2768,12 @@ async def endpoint_empresa_evento(request: Request) -> JSONResponse:
         return JSONResponse({"detail": exc.errors(include_context=False)}, status_code=422)
     except ErrorValidacionTablero as exc:
         return JSONResponse({"detail": str(exc)}, status_code=422)
-    return await endpoint_estado(request)
+    return JSONResponse({
+        "ok": True,
+        "tipo": req.tipo,
+        "oferta_id": req.oferta_id,
+        "perfil_id": req.perfil_id,
+    })
 
 
 # --- Vista del joven (#52, fase 1) ---
@@ -3634,6 +3745,7 @@ async def _ciclo_de_vida(_app: Starlette):
 app = Starlette(
     debug=False,
     lifespan=_ciclo_de_vida,
+    middleware=[Middleware(MiddlewareDemoPublicaReadOnly)],
     routes=[
         Route("/", endpoint_index, methods=["GET"]),
         Route("/api/estado", endpoint_estado, methods=["GET"]),
@@ -3651,6 +3763,7 @@ app = Starlette(
         Route("/api/orientador/umbrales", endpoint_umbrales_solver, methods=["POST"]),
         Route("/api/admin/operacion", endpoint_admin_operacion, methods=["GET"]),
         Route("/empresa", endpoint_empresa_pagina, methods=["GET"]),
+        Route("/api/empresa/postulaciones", endpoint_empresa_postulaciones, methods=["GET"]),
         Route("/api/empresa/evento", endpoint_empresa_evento, methods=["POST"]),
         # Vista del joven (#52)
         Route("/joven", endpoint_joven_pagina, methods=["GET"]),
