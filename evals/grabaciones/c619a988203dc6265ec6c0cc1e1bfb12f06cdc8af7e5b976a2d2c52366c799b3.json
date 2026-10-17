@@ -1,0 +1,43 @@
+{
+  "hash": "c619a988203dc6265ec6c0cc1e1bfb12f06cdc8af7e5b976a2d2c52366c799b3",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "mercado",
+  "esquema": "OfertaExtraida",
+  "salida": {
+    "puesto": "Cajero/a",
+    "empresa": "Super Rio Ficticio S.A.",
+    "corregimiento": null,
+    "ubicacion_texto": "La Chorrera, calle 5ta",
+    "salario_mensual": 520.0,
+    "salario_tipo": "exacto",
+    "horario": {
+      "dias": [
+        "lunes",
+        "martes",
+        "miércoles",
+        "jueves",
+        "viernes",
+        "sábado"
+      ],
+      "hora_inicio": "08:00",
+      "hora_fin": "16:00"
+    },
+    "horario_tipo": "fijo",
+    "plazas": null,
+    "franjas_entrevista": [],
+    "habilidades": [
+      "cobro en caja",
+      "atención al cliente",
+      "cuadre de caja"
+    ],
+    "requisitos_texto": null,
+    "transcripcion_literal": null
+  },
+  "uso": {
+    "entrada": 2574,
+    "salida": 236
+  },
+  "creado": "2026-10-17T04:22:13+00:00"
+}

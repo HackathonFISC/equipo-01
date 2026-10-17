@@ -8,8 +8,9 @@ Viven aquí y no en `data/grabaciones` para que los evals no dependan de los dat
 
 ## Cómo se usan
 
-`python -m evals.run` usa por defecto `LLM_MODO=reproducir` y `LLM_DIR_GRABACIONES=evals/grabaciones`.
-Si el entorno o el `.env` ya definen esas variables, se respetan.
+`uv run python -m evals.run` reproduce las grabaciones de `evals/grabaciones` sin llamar al modelo,
+aunque el `.env` tenga `LLM_MODO=vivo` o `grabar`. Cada grabación cuenta como una muestra; repetir
+el mismo hash no crea observaciones independientes.
 
 Si falta la grabación de un caso, ese caso sale **omitido (sin grabación)** en `evals/resultados.md`.
 No sale como fallo: no se midió.
@@ -17,15 +18,16 @@ No sale como fallo: no se midió.
 ## Cómo grabarlas (requiere clave, lo hace una persona)
 
 ```bash
-LLM_MODO=grabar uv run python -m evals.run
+uv run python -m evals.run --grabar --repeticiones 1
 ```
 
-Con `ANTHROPIC_API_KEY` en `.env` (o `GOOGLE_API_KEY` con `LLM_PROVEEDOR=gemini`). Después:
+Con `ANTHROPIC_API_KEY` en `.env` (o `GOOGLE_API_KEY` con `LLM_PROVEEDOR=gemini`). Se puede
+configurar `PUENTE_LLM_TOPE_USD=2` para acotar el gasto estimado del proceso. Después:
 
 1. Revisar que los JSON nuevos solo tengan datos sintéticos.
 2. Commitear los `<hash>.json` junto con el `evals/resultados.md` regenerado.
 3. Volver a correr sin variables para comprobar que todo se reproduce.
 
-La clave de cada grabación es un hash del prompt. Si cambia el prompt de un agente, su grabación deja de
-servir y el caso vuelve a quedar omitido hasta grabarlo de nuevo. Pasa, por ejemplo, con PER-04 cuando se
-arregle #63.
+La clave de cada grabación es un hash del proveedor, modelo, prompt y esquema. Si cambia el prompt
+o la taxonomía de Perfil, la grabación deja de servir y el caso vuelve a quedar omitido hasta grabarlo
+de nuevo. Los casos usan `data/taxonomia.csv`, el mismo catálogo de la demo.

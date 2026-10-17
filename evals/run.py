@@ -149,6 +149,12 @@ def cargar_casos(ruta: Path = RUTA_CASOS) -> dict:
         if not isinstance(info.get("usa_llm"), bool):
             raise ValueError(f"categoría {nombre}: 'usa_llm' debe ser true o false")
 
+    # La demo y los evals deben usar exactamente el mismo catálogo vigente.
+    # Un YAML alternativo puede seguir inyectando su taxonomía para pruebas.
+    if "taxonomia" not in datos:
+        datos["taxonomia"] = _resolver(TAXONOMIA_CARGAR)(
+            Path(__file__).resolve().parent.parent / "data" / "taxonomia.csv"
+        )
     taxonomia = datos.get("taxonomia")
     if taxonomia is not None:
         if not isinstance(taxonomia, dict) or not taxonomia:
@@ -895,13 +901,7 @@ def _registro_de_fallos(resultados: list[ResultadoCaso], casos: dict) -> list[st
 
 
 def _nota_taxonomia(casos: dict) -> str:
-    if casos.get("taxonomia"):
-        return (
-            "Taxonomía usada en esta corrida: la de `casos.yaml` (en línea), copia literal de `data/taxonomia.csv` de #3 "
-            "(rama issue-3-datos-puente, PR #27) con sus mismos sinónimos; no se agregaron sinónimos tomados de los "
-            "textos de los casos. Cuando se fusione #27, medir con `data/taxonomia.csv`."
-        )
-    return "Taxonomía usada en esta corrida: `data/taxonomia.csv`."
+    return "Taxonomía usada en esta corrida: `data/taxonomia.csv`, el mismo catálogo que usa la demo."
 
 
 def _nota_llm() -> str:

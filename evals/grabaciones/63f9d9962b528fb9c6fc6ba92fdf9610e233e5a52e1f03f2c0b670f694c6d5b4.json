@@ -1,0 +1,31 @@
+{
+  "hash": "63f9d9962b528fb9c6fc6ba92fdf9610e233e5a52e1f03f2c0b670f694c6d5b4",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "mercado",
+  "esquema": "OfertaExtraida",
+  "salida": {
+    "puesto": "Auxiliar de limpieza",
+    "empresa": "Servicios Limpios Ficticios",
+    "corregimiento": "Juan Díaz",
+    "ubicacion_texto": "Juan Díaz",
+    "salario_mensual": 400.0,
+    "salario_tipo": "exacto",
+    "horario": null,
+    "horario_tipo": "no_publicado",
+    "plazas": null,
+    "franjas_entrevista": [],
+    "habilidades": [
+      "limpieza",
+      "aseo de oficinas"
+    ],
+    "requisitos_texto": null,
+    "transcripcion_literal": null
+  },
+  "uso": {
+    "entrada": 2551,
+    "salida": 178
+  },
+  "creado": "2026-10-17T04:22:25+00:00"
+}
