@@ -1,0 +1,32 @@
+{
+  "hash": "3239f2fa91dd3508e864552715a102d6800f7535a751791c506b8f9b3aeab502",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "mercado",
+  "esquema": "OfertaExtraida",
+  "salida": {
+    "puesto": "Auxiliar Administrativo",
+    "empresa": "Distribuidora Ficticia Istmo",
+    "corregimiento": null,
+    "ubicacion_texto": "San Miguelito",
+    "salario_mensual": 550.0,
+    "salario_tipo": "exacto",
+    "horario": null,
+    "horario_tipo": "no_publicado",
+    "plazas": null,
+    "franjas_entrevista": [],
+    "habilidades": [
+      "Excel básico",
+      "registro de datos de facturas",
+      "archivo de documentos"
+    ],
+    "requisitos_texto": "Se requiere manejo basico de Excel, registrar datos de facturas y archivar documentos.",
+    "transcripcion_literal": null
+  },
+  "uso": {
+    "entrada": 2536,
+    "salida": 214
+  },
+  "creado": "2026-10-17T04:22:20+00:00"
+}

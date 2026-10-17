@@ -1,0 +1,31 @@
+{
+  "hash": "51e158910f4979584e277c481ef9c41a842a59fda4d05105eb351ea53b746822",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "mercado",
+  "esquema": "OfertaExtraida",
+  "salida": {
+    "puesto": "Dependiente",
+    "empresa": "Tienda Moda Ficticia",
+    "corregimiento": "Bella Vista",
+    "ubicacion_texto": "Via Espana, Bella Vista",
+    "salario_mensual": 480.0,
+    "salario_tipo": "exacto",
+    "horario": null,
+    "horario_tipo": "rotativo",
+    "plazas": null,
+    "franjas_entrevista": [],
+    "habilidades": [
+      "venta de mostrador",
+      "atención al cliente"
+    ],
+    "requisitos_texto": "exp. en venta de mostrador y atencion al cliente",
+    "transcripcion_literal": null
+  },
+  "uso": {
+    "entrada": 2498,
+    "salida": 193
+  },
+  "creado": "2026-10-17T04:22:23+00:00"
+}

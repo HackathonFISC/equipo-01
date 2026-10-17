@@ -23,11 +23,11 @@ from evals.run import DependenciaPendiente, ResultadoCaso
 RAIZ = Path(__file__).resolve().parents[1]
 CONTEO_ESPERADO = {
     "extraccion_ofertas": 5,
-    "requisitos_discriminatorios": 10,  # 6 del issue + DIS-07 («soltera, sin hijos»), seguimiento de #13, + DIS-08..10 (#121)
+    "requisitos_discriminatorios": 11,  # Incluye DIS-11: límite «menor de 28 años».
     "perfil_sin_cv": 4,
     "matching_factible": 3,
     "sesgo_contrafactual": 3,
-    "guardrails": 3,
+    "guardrails": 7,
 }
 
 
@@ -125,7 +125,7 @@ def test_entradas_de_matching_y_sesgo_cumplen_los_esquemas(casos):
             Oferta(**oferta)
 
 
-def test_nada_depende_de_la_carpeta_data(casos):
+def test_casos_de_matching_y_sesgo_no_dependen_de_datos_de_demo(casos):
     texto = run.RUTA_CASOS.read_text(encoding="utf-8")
     for linea in texto.splitlines():
         if linea.lstrip().startswith("#"):
@@ -590,7 +590,7 @@ def test_main_imprime_y_guarda_tabla(tmp_path, capsys):
     for seccion in ("## Tabla por categoría", "## Detalle por caso", "## Registro de fallos"):
         assert seccion in guardado
     assert "hora de Panamá" in guardado
-    assert "Taxonomía usada en esta corrida" in guardado and "copia literal de `data/taxonomia.csv`" in guardado
+    assert "Taxonomía usada en esta corrida" in guardado and "el mismo catálogo que usa la demo" in guardado
 
 
 def test_modulo_se_ejecuta_como_script(tmp_path):
@@ -796,7 +796,10 @@ def _oferta_extraida(**cambios):
     return OfertaExtraida(**{**datos, **cambios})
 
 
-def test_taxonomia_en_linea_cubre_los_skill_id_esperados(casos):
+def test_taxonomia_de_demo_cubre_los_skill_id_esperados(casos):
+    from puente.rules.taxonomia import cargar_taxonomia
+
+    assert casos["taxonomia"] == cargar_taxonomia(RAIZ / "data" / "taxonomia.csv")
     esperados = set()
     for caso in casos["casos"]:
         if caso["categoria"] in ("extraccion_ofertas", "perfil_sin_cv"):
