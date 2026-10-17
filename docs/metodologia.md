@@ -41,7 +41,7 @@ El diagrama sale del grafo real, sin red:
 uv run python -c "from puente.graph import construir_grafo; print(construir_grafo().get_graph().draw_mermaid())"
 ```
 
-A mano solo se marcó en rojo el nodo `aprobacion`, que es el `interrupt()` del orientador; el resto sale tal cual, igual que en el [README](../README.md). Las flechas punteadas son aristas condicionales.
+A mano solo se marcó en rojo el nodo `aprobacion`, que es el `interrupt()` del orientador; el resto sale tal cual. Las flechas punteadas son aristas condicionales.
 
 ```mermaid
 ---
@@ -120,7 +120,7 @@ Cómo se lee cada arista condicional:
 
 | Módulo | Issues | Qué hace |
 |---|---|---|
-| `puente/schemas.py` | #2, #42 | Contratos Pydantic: `Oferta`, `Perfil`, `Match`, `Decision`, `EstadoPuente` y `EstadoPostulacion`, más `OfertaExtraida` y `PerfilExtraido`, que es lo que produce el LLM en el flujo principal. Las extensiones tienen su propia salida del LLM, que el código también valida: `TirillaExtraida` (Horario), `TextoRedactado` (Redactor) y `RespuestaExtraida` (Micromisión). |
+| `puente/schemas.py` | #2, #42 | Contratos Pydantic: `Oferta`, `Perfil`, `Match`, `Decision`, `EstadoPuente` y `EstadoPostulacion`, más `OfertaExtraida` y `PerfilExtraido`, que es lo que produce el LLM en el flujo principal. Las extensiones tienen su propia salida del LLM, que el código también valida y que se define en el módulo de cada una, no aquí: `TirillaExtraida` (`horario.py`), `TextoRedactado` (`redactor.py`) y `RespuestaExtraida` (`micromision.py`). |
 | `puente/graph.py` | #10, #12, #54 | Grafo, router, `interrupt()` del orientador, checkpointer SQLite, reacomodo por evento de la empresa y demo por terminal. |
 | `puente/guardrails.py` | #9, #56, #128 | Validación de entradas y limpieza de datos personales, sin LLM. |
 | `puente/llm.py` | #45, #125, #137 | Capa única de acceso al LLM: Claude por defecto, modos vivo, grabar y reproducir, tope de gasto y esquema simplificado para la salida estructurada. |
@@ -140,7 +140,7 @@ Cómo se lee cada arista condicional:
 
 - **Contratos.** Los agentes se hablan solo a través de los modelos de `puente/schemas.py`. Ese archivo está congelado: cambiarlo exige un issue propio y actualizar todos los usos en el mismo PR, como se hizo con los contratos v2 (#42).
 - **Estado del caso.** Cada nodo recibe el estado y devuelve solo las claves que cambia.
-- **Trazabilidad.** Cada decisión de un agente queda como un `Decision` (agente, resumen de entrada y de salida, razón y hora), que se agrega con `agregar_decision()`.
+- **Trazabilidad.** Cada decisión de un agente queda como un `Decision` (agente, resumen de entrada y de salida, razón y hora). Los agentes devuelven sus `Decision` y los nodos del grafo las suman al estado con `agregar_decision()`.
 
 ---
 
@@ -207,8 +207,9 @@ Cómo se lee cada arista condicional:
    - **El puntaje** es la cobertura de habilidades. Los minutos de traslado no restan puntaje: filtran por el máximo y desempatan entre las vacantes de un mismo joven.
    - **La explicación** de cada match es una plantilla determinística, sin LLM.
    - **Ejemplo con Yaritza**, desde La Chorrera (`data/traslados.csv`):
-     - Calidonia son 55 minutos con 1.85 de pasaje: entra.
-     - Tocumen son 95 minutos: queda fuera.
+     - Vista Alegre: 20 minutos y 0.75 por viaje, o sea 1.50 al día ida y vuelta: entra.
+     - Calidonia: 55 minutos, dentro del tope de 60, pero 1.85 por viaje son 3.70 al día ida y vuelta, más que sus 3.00: queda fuera.
+     - Tocumen: 95 minutos: queda fuera.
 
 6. **Auditor** (#8, #50). Repite la evaluación con variantes contrafactuales:
    - 7 pares de nombre y género, con la concordancia del texto ajustada;
@@ -216,7 +217,7 @@ Cómo se lee cada arista condicional:
 
    El Auditor admite una línea base de 3 corridas que descuenta la variación propia del LLM de Perfil. **En el grafo esa línea base no descuenta nada:** `nodo_auditor_grafo` no le pasa un `fn_perfil`, así que el perfil se reprocesa con la identidad y las corridas dan siempre lo mismo. **Si una variante cambia el resultado, el grafo recalcula una sola vez. Si la diferencia persiste, no hay bucle:** pasa al orientador como alerta, con el texto «Tope de 1 recálculo alcanzado».
 
-7. **Formación** (#14, #53). Para las brechas de habilidades, propone cursos de `data/cursos.csv` (9 cursos con títulos del INADEH). Cada curso tiene que cumplir:
+7. **Formación** (#14, #53). Para las brechas de habilidades, propone cursos de `data/cursos.csv`: 9 cursos armados sobre 5 títulos reales del INADEH, con horarios y cupos de prueba (`data/FUENTES.md` los marca como dato mixto). Cada curso tiene que cumplir:
    - tener cupo;
    - traslado de 60 minutos o menos;
    - pasaje dentro del presupuesto;
@@ -246,7 +247,7 @@ Cómo se lee cada arista condicional:
     - **Si rechaza a un candidato:** su postulación pasa a `no_seleccionado`, la pareja queda excluida, la vacante vuelve a estar pendiente y el Matching recalcula. El orientador aprueba la lista nueva en la misma pausa de siempre.
     - **Si la vacante se cubre:** sale del Matching.
 
-    Los avisos al joven salen por Telegram o se escriben en `outbox/`, y el joven los ve en «Mis postulaciones» de `/joven`. El reacomodo funciona en el grafo, en la terminal (con `--auto` o escribiendo la respuesta de la empresa) y en la web: en `/empresa/lista-corta`, rechazar o dar la vacante por cubierta llama a `evento_empresa` y recalcula (#167). El tablero del orientador no tiene un botón propio para esto.
+    Los avisos al joven salen por Telegram solo en la terminal con `--telegram`; si no, y siempre en el tablero, se escriben en el outbox (ver [Estado persistente](#estado-persistente)). El joven los ve en «Mis postulaciones» de `/joven`. El reacomodo funciona en el grafo, en la terminal (con `--auto` o escribiendo la respuesta de la empresa) y en la web: en `/empresa/lista-corta`, rechazar o dar la vacante por cubierta llama a `evento_empresa` y recalcula (#167). El tablero del orientador no tiene un botón propio para esto.
 
 **Estados de una postulación:** `perfil_listo`, `preseleccionado`, `aprobado`, `consentido`, `enviado`, `entrevista`, `contratado` y `no_seleccionado`.
 
@@ -260,7 +261,7 @@ Cómo se lee cada arista condicional:
 Toda persona en los datos es sintética. `data/FUENTES.md` documenta la fuente de cada archivo y separa tres tipos de dato:
 
 - **Dato medido:**
-  - **Traslados** (`data/traslados.csv`): 13 corregimientos y 91 filas, medidos a las 07:00 en Google Maps Transit y Moovit con las tarifas de MiBus, el Metro y la ATTT.
+  - **Traslados** (`data/traslados.csv`): 13 nodos (10 corregimientos y 3 distritos: La Chorrera, Arraiján y San Miguelito) y 91 filas, medidos a las 07:00 en Google Maps Transit y Moovit con las tarifas de MiBus, el Metro y la ATTT.
   - **Ofertas** (`data/ofertas/`): 20 anuncios reales de Computrabajo (14) y Konzerta (6), con empresas renombradas como empresas de prueba.
 - **Dato de prueba:**
   - los 10 perfiles de `data/perfiles/`;
@@ -300,7 +301,7 @@ uv run python -m puente.graph
   - `claude` llama a Claude a través de `puente.llm`.
 - **`--auto`** decide sin preguntar, por ejemplo `--auto "aprobar,aprobar,empresa_rechaza:yaritza@of-cajero-vista-alegre,aprobar"`. Sin esta opción, la demo pregunta en cada vacante.
 - **`--telegram`**: en la demo por terminal es la única forma de que algo salga por Telegram. Sin esta opción, todo se escribe en `outbox/`, aunque `.env` traiga token.
-  - **El tablero no tiene esa opción.** Si el entorno del proceso trae `TELEGRAM_BOT_TOKEN` y los chats, envía de verdad; si no, escribe en `outbox/`.
+  - **El tablero no tiene esa opción y tiene dos caminos de salida.** La lista corta a la empresa (CV ciego, `.ics` y mensaje) sale por Telegram si el entorno del proceso trae `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID_EMPRESA`; si no, queda en `outbox/` de la raíz del repositorio. Los avisos del reacomodo al joven pasan por el nodo `avisos` del grafo, que el tablero no reemplaza: tiene Telegram apagado y escribe en `PUENTE_OUTBOX` o, si falta, en `outbox/` del directorio desde donde se arrancó el servidor.
 
 **Otras piezas:**
 
@@ -333,11 +334,11 @@ La vista de la empresa (`/empresa/lista-corta`) se abre con un código por empre
 
 | Archivo | Terminal y carga | Tablero | Variable | Contenido |
 |---|---|---|---|---|
-| Base de Puente | `puente.db` | `%TEMP%/puente_tablero.db` | `PUENTE_DB` | Perfiles, ofertas, postulaciones con su historial, `entrevistas`, `decisiones`, `descartes`, y las tablas de la carga `cargas` y `cargas_ofertas` |
+| Base de Puente | `puente.db` | `%TEMP%/puente_tablero.db` | `PUENTE_DB` | Perfiles, ofertas, postulaciones con su historial, `entrevistas`, `decisiones`, `descartes`, y las tablas de la carga `cargas` y `cargas_ofertas`; la del tablero guarda además su estado en `tablero_estado` (#122) |
 | Checkpoints del grafo | `checkpoints.db` | `<base>_checkpoints.db`, junto a la base | `PUENTE_CHECKPOINTS` | Cada caso por `thread_id`, para retomarlo después del `interrupt()` |
-| Salida de mensajes | `outbox/` | `outbox/` en la raíz del repositorio | `PUENTE_OUTBOX` (solo terminal) | CV ciego, `.ics` y mensajes a la empresa y al joven cuando no hay Telegram |
+| Salida de mensajes | `outbox/` | Lista corta: `outbox/` en la raíz del repositorio. Avisos del reacomodo: `PUENTE_OUTBOX` u `outbox/` del directorio de trabajo | `PUENTE_OUTBOX` (terminal y avisos del tablero) | CV ciego, `.ics` y mensajes a la empresa y al joven cuando no salen por Telegram |
 
-Hoy el tablero escribe siempre en `outbox/` de la raíz y no lee `PUENTE_OUTBOX`; eso cambia si se fusiona el #207. Para repetir la demo desde cero se usa otra `PUENTE_DB` o se borran esos archivos.
+Hoy la lista corta del tablero va siempre a `outbox/` de la raíz, sin mirar `PUENTE_OUTBOX`, y los avisos del reacomodo sí la respetan. Si el servidor se arranca desde la raíz y sin `PUENTE_OUTBOX`, los dos caminos terminan en la misma carpeta. Eso cambia si se fusiona el #207, que hace que el tablero respete `PUENTE_OUTBOX`. Para repetir la demo desde cero se usa otra `PUENTE_DB` o se borran esos archivos.
 
 ---
 
@@ -347,7 +348,7 @@ El registro completo está en [`decisiones.md`](decisiones.md). El horario y las
 
 1. **LLM en los bordes, código en el centro.**
    - **Por qué:** un modelo de lenguaje no da la misma respuesta dos veces, ni explica de forma verificable por qué descartó a alguien. La legalidad, el traslado, el pasaje, el horario, la asignación y la auditoría tienen que dar la misma salida con la misma entrada.
-   - **Cómo se aplica:** en el flujo principal el LLM solo produce `OfertaExtraida` y `PerfilExtraido`; todo lo demás es código. Hasta la explicación del match es una plantilla determinística (#48). Las extensiones de fase 1 tienen sus propios esquemas de salida: Horario, Redactor y Micro-misión.
+   - **Cómo se aplica:** en el flujo principal el LLM solo produce `OfertaExtraida` y `PerfilExtraido`, salvo la explicación opcional de las rutas de Formación (`usar_llm_formacion`, apagada por defecto); todo lo demás es código. Hasta la explicación del match es una plantilla determinística (#48). Las extensiones de fase 1 tienen sus propios esquemas de salida: Horario, Redactor y Micro-misión.
 2. **El traslado filtra y desempata, pero no pone a competir a unos jóvenes contra otros.**
    - **Por qué:** vivir lejos no debe dejar a nadie detrás de otro joven igual de apto para la misma vacante.
    - **Cómo se aplica:** los minutos descartan lo que el joven no puede alcanzar y desempatan entre las opciones de ese mismo joven. No restan puntaje: el peso por minuto es 0. El Auditor comprueba que cambiar solo el corregimiento, con el mismo traslado, no cambie el resultado.
@@ -412,6 +413,6 @@ El registro completo está en [`decisiones.md`](decisiones.md). El horario y las
 - **Dos extensiones sin conectar.** El redactor de una versión legal de la oferta (#157) y la micro-misión con *scorecard* ciego (#158) existen como módulos con su CLI y sus evals, pero no están en el grafo ni en el tablero. Horario (#164) sí está conectado: `/joven` lee la tirilla, la confirma y recalcula.
 - **La foto de la tirilla va completa a Claude**, con lo que traiga: nombre, cédula o número de carnet. `limpiar_entrada` solo limpia lo que vuelve del modelo, y la imagen no se guarda.
 - **`cegar()` es heurístico:** son expresiones regulares, y un dato escrito de una forma que no prevén puede pasar.
-- **Los evals y la CI corren con grabaciones**, no con el LLM en vivo. En modo reproducir cada caso con LLM usa una sola grabación, así que no se mide la variación entre corridas. La última corrida está en [`evals/resultados.md`](../evals/resultados.md); las metas por categoría son propuestas del equipo.
+- **Los evals y la CI corren con grabaciones**, no con el LLM en vivo. En modo reproducir cada caso con LLM usa una sola grabación, así que no se mide la variación entre corridas. La corrida de la entrega queda en [`evals/resultados.md`](../evals/resultados.md), que se regenera sobre el commit final antes del tag (#17); las metas por categoría son propuestas del equipo.
 - **Notas de voz: fuera de alcance.** Se rechazan con un mensaje claro; #55 se cerró sin implementar.
-- **Cobertura geográfica:** la matriz de traslados tiene 13 corregimientos del corredor Panamá Oeste, Centro, San Miguelito y Este. Diez de las 20 ofertas no indican un lugar de esa matriz, así que el Matching no las puede asignar (`data/FUENTES.md`).
+- **Cobertura geográfica:** la matriz de traslados tiene 13 nodos (10 corregimientos y 3 distritos) del corredor Panamá Oeste, Centro, San Miguelito y Este. Diez de las 20 ofertas no indican un lugar de esa matriz, así que el Matching no las puede asignar (`data/FUENTES.md`).
