@@ -6,20 +6,24 @@
 const CLAVE_CODIGO = "puente.joven.codigo";
 
 // Caso guía de la demo: datos sintéticos, no de una persona real.
+// Las respuestas son las de tests/fixtures/caso_yaritza.json, en el mismo orden (#192): el prompt de Perfil
+// solo depende de ellas, y su lectura está grabada en data/grabaciones, así LLM_MODO=reproducir arma el
+// perfil sin red ni claves. El salario sigue a la quinta respuesta; el corregimiento queda en La Chorrera
+// porque es el que tiene traslados en la lista. Si cambias una respuesta, hay que volver a grabar.
 const EJEMPLO_YARITZA = {
   nombre: "Yaritza",
   edad: 20,
   corregimiento: "La Chorrera",
   horario_libre: { dias: ["lunes", "martes", "miercoles", "jueves", "viernes"], hora_inicio: "07:00", hora_fin: "17:00" },
   horario_clases: { dias: ["lunes", "martes", "miercoles", "jueves", "viernes"], hora_inicio: "18:00", hora_fin: "22:00" },
-  salario_minimo: 600,
+  salario_minimo: 400,
   presupuesto_pasaje_diario: 3,
   respuestas: [
+    "Tengo 20 años y vivo en La Chorrera.",
+    "Estudio de noche, de lunes a viernes de 6 a 10 de la noche. En el día ayudo en la fonda.",
     "Atiendo la fonda de mi mamá todas las mañanas. Atiendo a los clientes y les tomo el pedido, cobro y doy el vuelto.",
-    "Los sábados ayudo en una tienda del barrio a acomodar la mercancía en los estantes.",
     "No he hecho voluntariado.",
-    "Sé usar el celular y ayudo a cocinar en la fonda.",
-    "Mis vecinos me piden ayuda para sacar cuentas de sus ventas.",
+    "Sé usar el celular y ayudo a cocinar el almuerzo. Necesito ganar al menos 400 al mes.",
   ],
 };
 
