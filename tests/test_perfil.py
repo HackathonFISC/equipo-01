@@ -419,7 +419,6 @@ def test_acepta_llm_que_devuelve_texto_json_como_el_grabado_del_grafo(taxonomia)
     texto = json.dumps(caso["respuesta_llm"], ensure_ascii=False)
     perfil, _ = construir_perfil(caso["entrada"], taxonomia=taxonomia, normalizar=normalizar_falso, llm=lambda _p: texto)
     assert {"atencion_cliente", "manejo_caja", "inventario"} <= {h.skill_id for h in perfil.habilidades}
-    assert agente.llm_gemini is agente.llm_puente, "alias temporal mientras graph.py importe llm_gemini"
 
 
 def test_sin_edad_en_el_formulario_es_error_aunque_el_llm_la_diga(taxonomia):

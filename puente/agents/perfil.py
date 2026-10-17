@@ -372,7 +372,7 @@ def extraer_texto_cv(ruta: str | Path, ocr: Callable[[Path], str] | None = None)
 
 
 def _ocr_local(ruta: Path) -> str:  # pragma: no cover - depende del entorno
-    # OCR local a propósito: mandar la foto a Gemini expondría la cédula antes de poder borrarla.
+    # OCR local a propósito: mandar la foto al LLM expondría la cédula antes de poder borrarla.
     try:
         import pytesseract
         from PIL import Image
@@ -538,10 +538,6 @@ def llm_puente(prompt: str) -> PerfilExtraido:
     except ImportError as exc:
         raise RuntimeError("falta puente/llm.py (#45): no hay LLM; usa --reproducir o un llm inyectado") from exc
     return generar_estructurado(prompt, PerfilExtraido, agente=AGENTE)
-
-
-# Alias temporal: puente/graph.py (#10, PR #69) lo importa con este nombre. Se quita cuando graph.py use llm_puente.
-llm_gemini = llm_puente
 
 
 def construir_prompt(texto: str, modo: str, taxonomia: dict[str, dict]) -> str:
