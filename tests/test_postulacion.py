@@ -12,7 +12,7 @@ from puente.tools.telegram import ResultadoEnvio
 
 PANAMA = timezone(timedelta(hours=-5))
 INICIO = datetime(2026, 10, 20, 10, 0, tzinfo=PANAMA)  # SINTÉTICO: fecha de prueba
-ACCIONES = 7  # crear, aprobar, consentir, CV, .ics, envío, enviado
+ACCIONES = 8  # crear, aprobar, consentir, CV, carta (#212), .ics, envío, enviado
 
 
 def _perfil(id_="p1", nombre="Yaritza Ficticia"):
@@ -475,3 +475,32 @@ def test_la_aprobacion_acepta_pares_como_match(conn, tmp_path, enviador, monkeyp
     aprobacion = {**_aprobacion([_match()]), "aprobados": [_match()]}
     r = _correr(conn, tmp_path, aprobacion=aprobacion, enviar=enviador)
     assert db.obtener_postulacion(conn, r.postulaciones[0])["estado"] == "enviado"
+
+
+# ---------------------------------------------------------------- #212: carta de presentación
+
+
+def test_la_carta_va_a_la_empresa_junto_al_cv_y_es_ciega(conn, tmp_path, monkeypatch, enviador):
+    from pypdf import PdfReader
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token-ficticio")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID_EMPRESA", "chat-de-prueba")
+    r = _correr(conn, tmp_path, enviar=enviador)
+
+    (carta,) = (tmp_path / "outbox").glob("carta_*.pdf")
+    assert carta.name == "carta_p1_o1.pdf" and carta in r.archivos
+    _, _, texto, adjuntos = enviador.mensajes[0]
+    assert carta in adjuntos and "carta de presentación" in texto
+    contenido = " ".join(PdfReader(carta).pages[0].extract_text().split())
+    assert "Al equipo de selección de Super Demo:" in contenido and "Cajera" in contenido
+    assert "«atiendo la fonda de mi mamá»" in contenido and "Yaritza Ficticia" in contenido
+    for dato in ("La Chorrera", "20 años", "excel", "300", "2.0"):
+        assert dato not in contenido, dato
+    (decision,) = [d for d in r.decisiones if d.salida_resumen == carta.name]
+    assert "sin LLM" in decision.razon
+
+
+def test_sin_consentimiento_no_se_genera_la_carta(conn, tmp_path, enviador):
+    with pytest.raises(ValueError, match="consentimiento"):
+        _correr(conn, tmp_path, consentimientos=_consentimientos([_match()], otorgado=False), enviar=enviador)
+    assert not list(tmp_path.glob("**/carta_*")) and enviador.mensajes == []
