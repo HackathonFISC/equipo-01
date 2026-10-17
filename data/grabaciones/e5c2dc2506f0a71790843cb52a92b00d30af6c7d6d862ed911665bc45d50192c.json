@@ -1,0 +1,42 @@
+{
+  "hash": "e5c2dc2506f0a71790843cb52a92b00d30af6c7d6d862ed911665bc45d50192c",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "nota": "Grabación sintética determinística de prueba para fixtures de ingesta multicanal (issue #170).",
+  "tipo": "estructurado",
+  "agente": "mercado",
+  "esquema": "OfertaExtraida",
+  "salida": {
+    "puesto": "Ayudante de mostrador",
+    "empresa": "Minisuper El Faro (sintético)",
+    "corregimiento": "La Chorrera",
+    "ubicacion_texto": "La Chorrera",
+    "salario_mensual": 650.0,
+    "salario_tipo": "exacto",
+    "horario": {
+      "dias": [
+        "lunes",
+        "martes",
+        "miercoles",
+        "jueves",
+        "viernes"
+      ],
+      "hora_inicio": "08:00",
+      "hora_fin": "17:00"
+    },
+    "horario_tipo": "fijo",
+    "plazas": 1,
+    "franjas_entrevista": [],
+    "habilidades": [
+      "atención al cliente",
+      "cobro en caja"
+    ],
+    "requisitos_texto": "de 18 a 25 años, excelente buena presencia. Atención al cliente y cobro en caja.",
+    "transcripcion_literal": "SE BUSCA\nAyudante de mostrador\nMinisuper El Faro (sintético)\nLa Chorrera\nRequisitos: de 18 a 25 años,\nexcelente buena presencia.\nAtención al cliente y cobro en caja.\nSalario B/. 650.00 mensuales\nLunes a viernes de 08:00 a 17:00"
+  },
+  "uso": {
+    "entrada": 0,
+    "salida": 0
+  },
+  "creado": "2026-10-17T05:50:08+00:00"
+}
