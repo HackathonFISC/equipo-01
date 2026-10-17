@@ -710,6 +710,11 @@ def _compilar_grafo_tablero(
 ) -> tuple[Any, dict[str, Any]]:
     """Compila el grafo del tablero respaldado por `checkpointer_sqlite` (#122, #168)."""
     inyeccion_sesgo = bool(estado.get("sesgo_inyectado_demo", False))
+    # El nodo de postulación escribe en estos dos contenedores, creados aquí y compartidos por referencia:
+    # tras `/api/reset`, `ESTADO_GLOBAL.update(nuevo)` copia la misma referencia, y lo que el nodo anota
+    # lo ve el estado vivo. Escribir en `estado[...]` de la clausura lo dejaba en un estado que ya no se lee (#227).
+    archivos_por_par: dict[tuple[str, str], list[str]] = estado.setdefault("_ultimos_archivos_postulacion", {})
+    agenda_registrada: set[tuple[str, str]] = estado.setdefault("_agenda_registrada", set())
 
     def _inyectar_umbrales_grafo(estado_g: dict[str, Any]) -> dict[str, Any]:
         if not estado.get("umbrales_editados_orientador"):
@@ -777,7 +782,7 @@ def _compilar_grafo_tablero(
             for decision in de_agenda:
                 db.registrar_decision(conn, decision)
             # La ruta de respaldo vuelve a agendar si el grafo no generó archivos: que no repita estas.
-            estado.setdefault("_agenda_registrada", set()).update(par for par, _, _ in avisos)
+            agenda_registrada.update(par for par, _, _ in avisos)
             if not matches_aprob:
                 return {"decisiones": [*(estado_g.get("decisiones") or []), *de_agenda]} if de_agenda else {}
             res = postular(
@@ -794,11 +799,8 @@ def _compilar_grafo_tablero(
             )
         finally:
             conn.close()
-        estado.setdefault("_ultimos_archivos_postulacion", {})
         for pid, oid in pares_aprob:
-            estado["_ultimos_archivos_postulacion"][(pid, oid)] = [
-                arch.name for arch in res.archivos
-            ]
+            archivos_por_par[(pid, oid)] = [arch.name for arch in res.archivos]
         return {
             "decisiones": [*(estado_g.get("decisiones") or []), *de_agenda, *res.decisiones],
         }

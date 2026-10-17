@@ -1499,3 +1499,70 @@ def test_joven_que_no_cumple_ninguna_oferta_sigue_diciendo_restricciones() -> No
 def test_tarjeta_usa_la_explicacion_que_manda_el_servidor() -> None:
     js = (Path(__file__).resolve().parents[1] / "app" / "static" / "app.js").read_text(encoding="utf-8")
     assert "estadoActual.sin_opcion?.[perfil.id]" in js and "sin?.titulo" in js and "sin?.texto" in js
+
+
+def test_despues_de_reiniciar_la_demo_aprobar_deja_sus_archivos_en_la_tarjeta(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#227: tras «Reiniciar demo» el nodo de postulación escribía en el estado viejo y la tarjeta quedaba sin chips."""
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path)
+    monkeypatch.setenv("PUENTE_DB", str(tmp_path / "reinicio.db"))
+    monkeypatch.setitem(srv.ESTADO_GLOBAL, "_db_path", str(tmp_path / "reinicio.db"))  # el reinicio la reutiliza
+    aprobar = {
+        "accion": "aprobar",
+        "perfil_id": "PERFIL-YARITZA",
+        "oferta_id": "OF-CHORRERA-01",
+        "consentimiento_joven": True,
+    }
+
+    async def _ejecutar() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            assert (await client.post("/api/reset")).status_code == 200
+            r = await client.post("/api/orientador/accion", json=aprobar)
+            assert r.status_code == 200, r.text
+            estado = (await client.get("/api/estado")).json()
+        post = next(
+            p for p in estado["postulaciones"]
+            if p["perfil_id"] == "PERFIL-YARITZA" and p["oferta_id"] == "OF-CHORRERA-01"
+        )
+        assert post["estado"] == "enviado"
+        archivos = post["archivos_generados"]
+        assert any(a.startswith("cv_") for a in archivos) and any(a.endswith(".ics") for a in archivos)
+        assert any(a.startswith("carta_") for a in archivos)
+
+    asyncio.run(_ejecutar())
+
+
+def test_despues_de_reiniciar_sin_ninguna_hora_la_decision_queda_una_sola_vez(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#227: tras el reinicio, el grafo y la ruta de respaldo comparten lo ya registrado y no duplican la Decision."""
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path)
+    ruta_db = tmp_path / "reinicio_sin_hora.db"
+    monkeypatch.setenv("PUENTE_DB", str(ruta_db))
+    monkeypatch.setitem(srv.ESTADO_GLOBAL, "_db_path", str(ruta_db))  # el reinicio la reutiliza
+    sin_hora = lambda matches, *a, **k: ([], {}, [((m.perfil_id, m.oferta_id), "aviso de prueba", None) for m in matches])  # noqa: E731
+    monkeypatch.setattr(srv, "agendar_entrevistas", sin_hora)
+    aprobar = {
+        "accion": "aprobar",
+        "perfil_id": "PERFIL-YARITZA",
+        "oferta_id": "OF-CHORRERA-01",
+        "consentimiento_joven": True,
+    }
+
+    async def _ejecutar() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            assert (await client.post("/api/reset")).status_code == 200
+            r = await client.post("/api/orientador/accion", json=aprobar)
+            assert r.status_code == 422, r.text
+
+    asyncio.run(_ejecutar())
+    sin_envio = [t for t in _trazas_postulacion(ruta_db)
+                 if t["salida_resumen"] == "no se envió nada" and "aviso de prueba" in t["razon"]]
+    assert len(sin_envio) == 1
