@@ -673,7 +673,9 @@ def url_publica(request: Request) -> str:
 
 
 def twiml(mensajes: list[str]) -> str:
-    cuerpo = "".join(f"<Message>{escape(m[: wa.LIMITE_TEXTO])}</Message>" for m in mensajes if m)
+    """Un solo <Message> por respuesta: Twilio cobra y limita por mensaje (error 63038, límite diario)."""
+    texto = "\n\n".join(m for m in mensajes if m)[: wa.LIMITE_TEXTO]
+    cuerpo = f"<Message>{escape(texto)}</Message>" if texto else ""
     return f'<?xml version="1.0" encoding="UTF-8"?><Response>{cuerpo}</Response>'
 
 
