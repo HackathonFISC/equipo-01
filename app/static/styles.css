@@ -2408,6 +2408,24 @@ mark.m-alerta {
   margin-bottom: 0.2rem;
 }
 
+.dialog__alertas {
+  margin-top: 0.85rem;
+  padding: 0.65rem 0.8rem;
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-s, 6px);
+  background: var(--warn-soft);
+  font-size: 0.84rem;
+}
+
+.dialog__alertas p {
+  margin: 0.15rem 0 0;
+  color: var(--text-2);
+}
+
+.dialog__text .dialog__alertas .reglas {
+  padding-left: 0;
+}
+
 .dialog__actions {
   display: flex;
   justify-content: flex-end;
