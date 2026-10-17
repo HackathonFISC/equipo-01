@@ -1,0 +1,44 @@
+{
+  "hash": "a71eb4d329a286778d9364bda9a636def0094ad096c1fe33d1eeb7e323d8fa9b",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "mercado",
+  "esquema": "OfertaExtraida",
+  "salida": {
+    "puesto": "Runner de restaurante - Asistente de servicio",
+    "empresa": "Empresa E",
+    "corregimiento": null,
+    "ubicacion_texto": "Panamá, Panamá",
+    "salario_mensual": 650.0,
+    "salario_tipo": "exacto",
+    "horario": null,
+    "horario_tipo": "no_publicado",
+    "plazas": null,
+    "franjas_entrevista": [],
+    "habilidades": [
+      "Comunicación",
+      "Dinamismo",
+      "Gestión de equipos",
+      "Proactividad",
+      "Trabajo en equipo",
+      "Cocina",
+      "Organización",
+      "Pedidos",
+      "Presentación",
+      "Elaboración de bebidas"
+    ],
+    "requisitos_texto": "Educación mínima: Bachillerato / Educación Media; años de experiencia; Conocimientos: Comunicación, Dinamismo, Gestión de equipos, Proactividad, Trabajo en equipo, Cocina, Organización, Pedidos, Presentacion, Elaboración de bebidas",
+    "transcripcion_literal": null
+  },
+  "uso": {
+    "entrada": 2113,
+    "salida": 513
+  },
+  "creado": "2026-10-17T03:30:12+00:00",
+  "atendido_por": {
+    "proveedor": "anthropic",
+    "modelo": "claude-opus-5-5",
+    "modo": "json_libre_por_timeout_esquema"
+  }
+}

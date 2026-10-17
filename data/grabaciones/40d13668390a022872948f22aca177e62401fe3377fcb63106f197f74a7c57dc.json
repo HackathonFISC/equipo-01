@@ -1,0 +1,49 @@
+{
+  "hash": "40d13668390a022872948f22aca177e62401fe3377fcb63106f197f74a7c57dc",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "mercado",
+  "esquema": "OfertaExtraida",
+  "salida": {
+    "puesto": "Oficial de verificación",
+    "empresa": "Empresa R",
+    "corregimiento": "Juan Díaz",
+    "ubicacion_texto": "Juan Díaz",
+    "salario_mensual": null,
+    "salario_tipo": "no_publicado",
+    "horario": {
+      "dias": [
+        "lunes",
+        "martes",
+        "miércoles",
+        "jueves",
+        "viernes"
+      ],
+      "hora_inicio": "08:00",
+      "hora_fin": "17:00"
+    },
+    "horario_tipo": "fijo",
+    "plazas": null,
+    "franjas_entrevista": [],
+    "habilidades": [
+      "Entrada de datos",
+      "Documentación de préstamos",
+      "Verificación de documentos",
+      "Registro de información en sistema",
+      "Comunicación con clientes y personal interno"
+    ],
+    "requisitos_texto": "Experiencia en entrada de datos y documentación de préstamos; lunes a viernes 08:00-17:00 y sábado 08:30-12:00.",
+    "transcripcion_literal": null
+  },
+  "uso": {
+    "entrada": 2030,
+    "salida": 762
+  },
+  "creado": "2026-10-17T03:31:20+00:00",
+  "atendido_por": {
+    "proveedor": "anthropic",
+    "modelo": "claude-opus-5-5",
+    "modo": "json_libre_por_timeout_esquema"
+  }
+}

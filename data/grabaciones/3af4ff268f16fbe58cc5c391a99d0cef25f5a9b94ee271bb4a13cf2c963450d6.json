@@ -1,0 +1,41 @@
+{
+  "hash": "3af4ff268f16fbe58cc5c391a99d0cef25f5a9b94ee271bb4a13cf2c963450d6",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "mercado",
+  "esquema": "OfertaExtraida",
+  "salida": {
+    "puesto": "Telemercadeo - Vendedora",
+    "empresa": "Empresa G",
+    "corregimiento": null,
+    "ubicacion_texto": "Panamá, Panamá",
+    "salario_mensual": 500.0,
+    "salario_tipo": "exacto",
+    "horario": null,
+    "horario_tipo": "no_publicado",
+    "plazas": null,
+    "franjas_entrevista": [],
+    "habilidades": [
+      "B2B",
+      "Enfoque a resultados",
+      "Prospección",
+      "Prospección de clientes",
+      "Seguimiento",
+      "Telemercadeo",
+      "Ventas"
+    ],
+    "requisitos_texto": "Educación mínima: Educación Técnico/Profesional; años de experiencia; Conocimientos: B2b, Enfoque a resultados, Prospección, Prospección de clientes, Seguimiento, Telemercadeo, Ventas",
+    "transcripcion_literal": null
+  },
+  "uso": {
+    "entrada": 2087,
+    "salida": 663
+  },
+  "creado": "2026-10-17T03:30:23+00:00",
+  "atendido_por": {
+    "proveedor": "anthropic",
+    "modelo": "claude-opus-5-5",
+    "modo": "json_libre_por_timeout_esquema"
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "hash": "1f3aeb87b207a776b7a4d34e9bb8b23bc2b0dd7db6799b8c7a19d81ed1420953",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "mercado",
+  "esquema": "OfertaExtraida",
+  "salida": {
+    "puesto": "Mercaderista",
+    "empresa": "Empresa S",
+    "corregimiento": "Juan Díaz",
+    "ubicacion_texto": "Juan Díaz",
+    "salario_mensual": null,
+    "salario_tipo": "no_publicado",
+    "horario": null,
+    "horario_tipo": "no_publicado",
+    "plazas": null,
+    "franjas_entrevista": [],
+    "habilidades": [
+      "Rotación de mercancía",
+      "Control de inventarios",
+      "Productos de consumo masivo"
+    ],
+    "requisitos_texto": "Bachiller completo; un año de experiencia similar; carné de salud blanco y verde.",
+    "transcripcion_literal": null
+  },
+  "uso": {
+    "entrada": 2001,
+    "salida": 397
+  },
+  "creado": "2026-10-17T03:31:25+00:00",
+  "atendido_por": {
+    "proveedor": "anthropic",
+    "modelo": "claude-opus-5-5",
+    "modo": "json_libre_por_timeout_esquema"
+  }
+}

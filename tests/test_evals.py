@@ -36,6 +36,9 @@ def _entorno_sin_claves(monkeypatch):
     for nombre in ("GOOGLE_API_KEY", "ANTHROPIC_API_KEY", "LLM_MODO", "LLM_DIR_GRABACIONES", "LLM_PROVEEDOR"):
         monkeypatch.delenv(nombre, raising=False)
     monkeypatch.setenv("LANGSMITH_TRACING", "false")
+    # Ni el runner ni puente.llm leen el .env de quien corre las pruebas: con una clave real y LLM_MODO=vivo,
+    # main() llamaría al modelo de verdad.
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *args, **kwargs: False)
 
 
 @pytest.fixture
@@ -382,6 +385,16 @@ def test_entorno_llm_respeta_lo_que_ya_esta_definido(monkeypatch):
         assert os.environ["LLM_MODO"] == "grabar"
         assert os.environ["LLM_DIR_GRABACIONES"] == str(run.DIR_GRABACIONES)
     assert os.environ["LLM_MODO"] == "grabar" and "LLM_DIR_GRABACIONES" not in os.environ
+
+
+def test_entorno_llm_trata_el_valor_vacio_como_no_definido(monkeypatch):
+    """.env.example trae «LLM_DIR_GRABACIONES=» vacío: las grabaciones de los evals no deben irse a data/."""
+    monkeypatch.setenv("LLM_DIR_GRABACIONES", "")
+    monkeypatch.setenv("LLM_MODO", "  ")
+    with run._entorno_llm():
+        assert os.environ["LLM_DIR_GRABACIONES"] == str(run.DIR_GRABACIONES)
+        assert os.environ["LLM_MODO"] == run.MODO_LLM_POR_DEFECTO
+    assert os.environ["LLM_DIR_GRABACIONES"] == "" and os.environ["LLM_MODO"] == "  "
 
 
 def test_categorias_sin_llm_corren_una_sola_vez(casos):

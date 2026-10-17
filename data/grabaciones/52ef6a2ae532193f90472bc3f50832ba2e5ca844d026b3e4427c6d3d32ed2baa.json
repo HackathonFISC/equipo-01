@@ -1,0 +1,37 @@
+{
+  "hash": "52ef6a2ae532193f90472bc3f50832ba2e5ca844d026b3e4427c6d3d32ed2baa",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "mercado",
+  "esquema": "OfertaExtraida",
+  "salida": {
+    "puesto": "Auxiliar de cocina temporal",
+    "empresa": "Empresa I",
+    "corregimiento": null,
+    "ubicacion_texto": "Panamá, Panamá",
+    "salario_mensual": 650.0,
+    "salario_tipo": "exacto",
+    "horario": null,
+    "horario_tipo": "no_publicado",
+    "plazas": null,
+    "franjas_entrevista": [],
+    "habilidades": [
+      "Apoyo en cocina",
+      "Preparación",
+      "Limpieza del área de trabajo"
+    ],
+    "requisitos_texto": "Educación mínima: Educación Básica Primaria; años de experiencia; Edad: A partir de 18 años",
+    "transcripcion_literal": null
+  },
+  "uso": {
+    "entrada": 2041,
+    "salida": 477
+  },
+  "creado": "2026-10-17T03:30:34+00:00",
+  "atendido_por": {
+    "proveedor": "anthropic",
+    "modelo": "claude-opus-5-5",
+    "modo": "json_libre_por_timeout_esquema"
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "hash": "8c7928f0a8adec49ee43d94d9218c1657161b267bc803a43a08eda27a6aa75be",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "mercado",
+  "esquema": "OfertaExtraida",
+  "salida": {
+    "puesto": "Fundraiser - Solo si vives en Ciudad de Panamá",
+    "empresa": "Empresa H",
+    "corregimiento": null,
+    "ubicacion_texto": "Panamá, Panamá",
+    "salario_mensual": 650.0,
+    "salario_tipo": "exacto",
+    "horario": null,
+    "horario_tipo": "no_publicado",
+    "plazas": null,
+    "franjas_entrevista": [],
+    "habilidades": [
+      "Capacidad de negociación",
+      "Comunicación",
+      "Ventas",
+      "Energía",
+      "Motivar a otros",
+      "Atención al cliente"
+    ],
+    "requisitos_texto": "Educación mínima: Bachillerato / Educación Media; años de experiencia; Edad: entre 23 y 30 años; Conocimientos: Capacidad de negociación, Comunicación, Ventas, Energía, Motivar a otros, Atención al cliente",
+    "transcripcion_literal": null
+  },
+  "uso": {
+    "entrada": 2111,
+    "salida": 668
+  },
+  "creado": "2026-10-17T03:30:29+00:00",
+  "atendido_por": {
+    "proveedor": "anthropic",
+    "modelo": "claude-opus-5-5",
+    "modo": "json_libre_por_timeout_esquema"
+  }
+}
