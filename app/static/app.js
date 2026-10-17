@@ -2,9 +2,23 @@
 
 let estadoActual = null;
 
-// Límites que aplica el solver; solo se usan para dibujar las barras de cada opción.
-const LIMITE_TRASLADO_MIN = 60;
-const LIMITE_PASAJE_PCT = 15;
+// <limites-solver>
+// Límites que aplica el solver, para dibujar las barras y los textos de cada opción. Salen del estado
+// (`operacion.umbrales_solver`), que el orientador puede editar: con el traslado en 95 min la barra dice «máx. 95 min».
+// 60 min y 15 % son los de ConfigSolver y solo valen mientras el estado no los trae (#255).
+const LIMITE_TRASLADO_POR_DEFECTO = 60;
+const LIMITE_PASAJE_PCT_POR_DEFECTO = 15;
+
+function limitesSolver(estado) {
+  const umbrales = (estado && estado.operacion && estado.operacion.umbrales_solver) || {};
+  const minutos = Number(umbrales.max_minutos_traslado);
+  const fraccion = Number(umbrales.max_porcentaje_salario_pasaje); // 0.15 = 15 % del salario
+  return {
+    minutos: minutos > 0 ? minutos : LIMITE_TRASLADO_POR_DEFECTO,
+    pasajePct: fraccion > 0 ? Math.round(fraccion * 1000) / 10 : LIMITE_PASAJE_PCT_POR_DEFECTO,
+  };
+}
+// </limites-solver>
 
 const NOMBRES_HABILIDAD = {
   atencion_cliente: "Atención al cliente",
@@ -430,6 +444,13 @@ function renderizarKPIs() {
   document.getElementById("kpi-matches").textContent = String(matches.length);
   document.getElementById("kpi-auditoria").textContent = porcentaje(pct);
 
+  // Los textos que nombran los límites del solver salen del mismo lugar que las barras (#255).
+  const limites = limitesSolver(estadoActual);
+  document.getElementById("kpi-matches-foot").textContent =
+    `Traslado ≤ ${limites.minutos} min · pasaje ≤ ${limites.pasajePct} % del salario`;
+  document.getElementById("hint-limite-min").textContent = String(limites.minutos);
+  document.getElementById("hint-limite-pct").textContent = String(limites.pasajePct);
+
   const footAud = document.getElementById("kpi-auditoria-foot");
   const tarjetaAud = footAud.closest(".kpi");
   if (aud.sesgo_detectado) {
@@ -570,14 +591,15 @@ function partirCurso(texto) {
 }
 
 function motivosDescarte(motivo) {
+  const limites = limitesSolver(estadoActual);
   return String(motivo || "")
     .split(/;\s*/)
     .filter(Boolean)
     .map((parte) => {
       if (/bloqueada/i.test(parte)) return pill("Bloqueada por Ley 11", "bad", "ban");
       const traslado = parte.match(/traslado (\d+) min/i);
-      if (traslado) return pill(`Traslado ${traslado[1]} min (máx. ${LIMITE_TRASLADO_MIN})`, "warn", "clock");
-      if (/% del salario/i.test(parte)) return pill(`Pasaje > ${LIMITE_PASAJE_PCT} % del salario`, "warn", "wallet");
+      if (traslado) return pill(`Traslado ${traslado[1]} min (máx. ${limites.minutos})`, "warn", "clock");
+      if (/% del salario/i.test(parte)) return pill(`Pasaje > ${limites.pasajePct} % del salario`, "warn", "wallet");
       if (/presupuesto/i.test(parte)) {
         const diario = parte.match(/pasaje diario (\$[\d.]+)/i);
         return pill(`Pasaje ${diario ? diario[1] + "/día " : ""}> su presupuesto`, "warn", "wallet");
@@ -620,6 +642,7 @@ function renderizarOpcion(m, indice, perfil, oferta) {
   const minutos = Number(d.minutos_traslado ?? 0);
   const salario = Number(m.salario_mensual || oferta?.salario_mensual || 0);
   const pctPasaje = salario > 0 ? (Number(d.pasaje_mensual || 0) / salario) * 100 : 0;
+  const limites = limitesSolver(estadoActual);
 
   const evidencias = evidenciasDe(m, perfil, oferta);
   const itemsEvidencia = evidencias.length
@@ -708,13 +731,13 @@ function renderizarOpcion(m, indice, perfil, oferta) {
         </div>
         <div class="metrica">
           <dt>${icono("clock")}Traslado</dt>
-          <dd>${minutos} min <span class="metrica__sub">máx. ${LIMITE_TRASLADO_MIN} min</span></dd>
-          <div class="barra barra--warn"><i style="--v:${Math.min(100, (minutos / LIMITE_TRASLADO_MIN) * 100)}"></i></div>
+          <dd>${minutos} min <span class="metrica__sub">máx. ${limites.minutos} min</span></dd>
+          <div class="barra barra--warn"><i style="--v:${Math.min(100, (minutos / limites.minutos) * 100)}"></i></div>
         </div>
         <div class="metrica">
           <dt>${icono("wallet")}Pasaje</dt>
           <dd>${dinero(d.pasaje_diario)}/día <span class="metrica__sub">${pctPasaje.toFixed(1)} % del salario</span></dd>
-          <div class="barra barra--warn"><i style="--v:${Math.min(100, (pctPasaje / LIMITE_PASAJE_PCT) * 100)}"></i></div>
+          <div class="barra barra--warn"><i style="--v:${Math.min(100, (pctPasaje / limites.pasajePct) * 100)}"></i></div>
         </div>
       </dl>
       ${d.fuente_traslado ? `<p class="metricas__fuente">${icono("info")}Traslado y pasaje: ${escaparHtml(d.fuente_traslado)}</p>` : ""}

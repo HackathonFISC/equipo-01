@@ -124,6 +124,28 @@ class MiddlewareDemoPublicaReadOnly(BaseHTTPMiddleware):
             )
         return await call_next(request)
 
+
+# Páginas HTML que cargan sus propios .js y .css con `?v=`: si el navegador las guarda, el número nuevo no se pide nunca.
+PAGINAS_SIN_CACHE = frozenset({"/", "/joven", "/empresa", "/empresa/lista-corta"})
+
+
+class MiddlewareSinCache(BaseHTTPMiddleware):
+    """`Cache-Control: no-cache` en las páginas y en `/static` (#255).
+
+    Sin esta cabecera, el navegador decide por su cuenta cuánto tiempo guarda un archivo que no cambió de URL, y
+    un JS corregido puede tardar en llegar (o no llegar) a una pantalla que ya estaba abierta. `no-cache` no
+    desactiva la caché: obliga a preguntar al servidor, que responde 304 si el archivo no cambió, así que no
+    cuesta transferir nada. El `?v=` de cada página sigue siendo la segunda protección.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        respuesta = await call_next(request)
+        ruta = request.url.path
+        if request.method in ("GET", "HEAD") and (ruta.startswith("/static/") or ruta in PAGINAS_SIN_CACHE):
+            respuesta.headers["Cache-Control"] = "no-cache"
+        return respuesta
+
+
 from app import joven_fase2  # Vista del joven, fase 2 (#166): la lógica vive en app/joven_fase2.py
 
 RUTA_APP = Path(__file__).resolve().parent
@@ -4226,7 +4248,7 @@ async def _ciclo_de_vida(_app: Starlette):
 app = Starlette(
     debug=False,
     lifespan=_ciclo_de_vida,
-    middleware=[Middleware(MiddlewareDemoPublicaReadOnly)],
+    middleware=[Middleware(MiddlewareDemoPublicaReadOnly), Middleware(MiddlewareSinCache)],
     routes=[
         Route("/", endpoint_index, methods=["GET"]),
         Route("/api/estado", endpoint_estado, methods=["GET"]),
