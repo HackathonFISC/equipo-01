@@ -4,11 +4,14 @@ Sin LLM: todo es aritmética de horarios. ``elegir_franja`` devuelve el primer i
 entrevista que
 - cae dentro de una franja de la oferta (o, si la oferta no publica franjas, dentro del
   horario libre del joven en horario laboral),
-- deja un margen igual al traslado antes y después, sin cruzarse con sus clases, y
-- cuando el joven declara horario libre, cabe completo (margen incluido) en uno de sus bloques.
+- deja un margen igual al traslado antes y después, sin cruzarse con sus clases,
+- cuando el joven declara horario libre, cabe completo (margen incluido) en uno de sus bloques, y
+- no se cruza con las entrevistas que la empresa ya tiene (``ocupadas``): dos candidatos de la
+  misma oferta no reciben la misma hora.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime, timedelta
 
 from puente.schemas import DIAS_VALIDOS, Horario, Oferta, Perfil
@@ -77,12 +80,17 @@ def elegir_franja(
     dias_horizonte: int = 14,
     base: Horario = HORARIO_LABORAL,
     recortar_libre: bool = True,
+    ocupadas: Iterable[tuple[datetime, datetime]] = (),
 ) -> datetime | None:
     """Primer inicio de entrevista compatible, aware en ZONA_PANAMA y posterior a ``desde``; None si no hay.
 
     ``base`` es el horario en que se agenda cuando la oferta no publica franjas (por defecto el
     laboral) y ``recortar_libre=False`` deja que el horario libre del joven valga entero, aunque
     caiga fuera de ``base``. Ambos los usa ``elegir_franja_con_respaldo``.
+
+    ``ocupadas`` son las entrevistas (inicio, fin) que la empresa ya tiene: la nueva no se cruza
+    con ninguna (tocarse en un extremo no cuenta). El margen de traslado es del joven, no de la
+    empresa, así que no se suma aquí. Un datetime sin zona se toma como hora de Panamá.
     """
     if duracion_min <= 0:
         raise ValueError("La duración debe ser mayor que cero")
@@ -93,6 +101,9 @@ def elegir_franja(
         desde = desde.replace(tzinfo=ZONA_PANAMA)
     else:
         desde = desde.astimezone(ZONA_PANAMA)
+    tomadas = [
+        tuple(t if t.tzinfo else t.replace(tzinfo=ZONA_PANAMA) for t in entrevista) for entrevista in ocupadas
+    ]
 
     for offset in range(max(dias_horizonte, 0)):
         fecha = desde.date() + timedelta(days=offset)
@@ -112,8 +123,12 @@ def elegir_franja(
             if perfil.horario_libre and not any(l_ini <= ventana[0] and ventana[1] <= l_fin for l_ini, l_fin in libres):
                 continue
             resultado = datetime(fecha.year, fecha.month, fecha.day, tzinfo=ZONA_PANAMA) + timedelta(minutes=inicio)
-            if resultado > desde:
-                return resultado
+            if resultado <= desde:
+                continue
+            entrevista = (resultado, resultado + timedelta(minutes=duracion_min))
+            if any(_se_cruzan(entrevista, tomada) for tomada in tomadas):
+                continue
+            return resultado
     return None
 
 
@@ -139,6 +154,7 @@ def elegir_franja_con_respaldo(
     *,
     desde: datetime | None = None,
     duracion_min: int = 45,
+    ocupadas: Iterable[tuple[datetime, datetime]] = (),
 ) -> tuple[datetime | None, str]:
     """``elegir_franja`` y, si no hay, respaldos que nunca caen sobre las clases del joven.
 
@@ -147,8 +163,9 @@ def elegir_franja_con_respaldo(
     (2) lo normal en un horizonte mayor; (3) el horario libre del joven sin recortarlo al
     horario laboral; (4) fuera de su horario libre pero sin cruzar clases ni traslado, sin las
     franjas de la oferta; (5) lo mismo en un horario amplio. Sin ninguna, (None, aviso).
+    Ningún intento se cruza con las entrevistas ``ocupadas`` de la empresa.
     """
-    comunes = {"desde": desde, "duracion_min": duracion_min}
+    comunes = {"desde": desde, "duracion_min": duracion_min, "ocupadas": list(ocupadas)}
     inicio = elegir_franja(oferta, perfil, minutos_traslado, **comunes)
     if inicio is not None:
         return inicio, ""
