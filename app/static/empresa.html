@@ -4,28 +4,37 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="color-scheme" content="light dark" />
-  <title>Puente · Vista Empresa</title>
+  <title>Puente · Publicar vacante</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23e2a11b'/%3E%3Cg fill='none' stroke='%231d1604' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M5 23h22M8 23V10M24 23V10M8 12c2.6 3.4 5.3 5 8 5s5.4-1.6 8-5M12 23v-6M16 23v-5.5M20 23v-6'/%3E%3C/g%3E%3C/svg%3E" />
   <link rel="stylesheet" href="/static/joven.css?v=1" />
+  <style>
+    .habilidades { display: flex; gap: 0.5rem 1.25rem; flex-wrap: wrap; }
+    .habilidades label { display: inline-flex; align-items: center; gap: 0.4rem; }
+    .habilidades input { width: 1.1rem; height: 1.1rem; min-height: 0; margin: 0; }
+  </style>
 </head>
 <body>
+  <!-- /empresa solo publica vacantes (#258). Los candidatos, ciegos y con código, se ven y se responden en
+       /empresa/lista-corta: esta página no pide ni muestra a ninguna persona. -->
   <header class="barra">
     <div class="barra-in">
-      <a class="marca" href="/empresa">
+      <a class="marca" href="/empresa/lista-corta">
         <svg class="marca-icono" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 18h20"/><path d="M4 18V7"/><path d="M20 18V7"/><path d="M4 8.5c2.5 3.2 5.2 4.8 8 4.8s5.5-1.6 8-4.8"/><path d="M8 18v-5"/><path d="M12 18v-4.6"/><path d="M16 18v-5"/></svg>
-        Puente · Vista Empresa
+        Puente · Empresas
       </a>
       <nav aria-label="Cambiar rol" style="display:flex;gap:0.75rem;">
         <a class="barra-enlace" href="/">Orientador (Admin)</a>
         <a class="barra-enlace" href="/joven">Vista Aplicante</a>
+        <a class="barra-enlace" href="/empresa/lista-corta">Lista corta</a>
       </nav>
     </div>
   </header>
 
   <main class="pagina">
     <section class="intro">
-      <h1>Publica una vacante y reporta contrataciones</h1>
-      <p>El agente Mercado revisa automáticamente cada oferta según la Ley 11 de 2005 antes de que entre al Matching. Cada acción queda firmada con <code>agente="empresa"</code> en la tabla de decisiones.</p>
+      <h1>Publica una vacante</h1>
+      <p>Puente revisa cada oferta con las reglas de la Ley 11 de 2005 antes de que entre al Matching.</p>
+      <p>Los candidatos no se ven aquí. <a href="/empresa/lista-corta">Entra a la lista corta ciega con el código de tu empresa</a>: allí ves lo que sabe hacer cada persona, sin nombre, edad, género ni dónde vive, y respondes.</p>
     </section>
 
     <form id="form-empresa-oferta" class="tarjeta" style="margin-bottom:1.25rem;">
@@ -59,100 +68,105 @@
             <input id="emp-requisitos" required value="Atención amable a clientes, cobro en caja y apoyo en inventario." />
           </label>
         </div>
+        <fieldset style="margin-top:0.75rem;border:0;padding:0;">
+          <legend>Habilidades que pide el puesto (elige al menos una)</legend>
+          <div class="habilidades">
+            <label><input type="checkbox" name="habilidad" value="atencion_cliente" checked /> Atención al cliente</label>
+            <label><input type="checkbox" name="habilidad" value="manejo_caja" checked /> Manejo de caja</label>
+            <label><input type="checkbox" name="habilidad" value="inventario" /> Inventario</label>
+            <label><input type="checkbox" name="habilidad" value="excel_basico" /> Excel básico</label>
+          </div>
+        </fieldset>
         <div style="margin-top:0.75rem;">
-          <button type="submit" class="boton boton-primario">Publicar y validar con Ley 11</button>
+          <button type="submit" class="btn btn-pri">Publicar y validar con Ley 11</button>
         </div>
       </fieldset>
     </form>
 
-    <section class="tarjeta">
-      <h2 style="margin-top:0;">Candidatos postulados y seguimiento</h2>
-      <p>Reporta el resultado de entrevista (<code>contratado</code> o <code>no_seleccionado</code>) para cerrar el ciclo del embudo.</p>
-      <div id="lista-postulaciones-empresa">Cargando postulaciones...</div>
+    <section id="resultado" class="tarjeta" aria-live="polite" hidden>
+      <h2 id="resultado-titulo" style="margin-top:0;"></h2>
+      <p id="resultado-detalle"></p>
+      <ul id="resultado-alertas"></ul>
+      <p><a href="/empresa/lista-corta">Ver la lista corta ciega de mis vacantes</a></p>
     </section>
     <p id="msg-empresa" class="aviso" hidden></p>
   </main>
 
   <script>
     "use strict";
-    function esc(texto) {
-      if (texto == null) return "";
-      const div = document.createElement("div");
-      div.textContent = String(texto);
-      return div.innerHTML;
+    // Todo lo que viene del servidor se escribe con textContent: nada se interpreta como HTML.
+    const $ = (id) => document.getElementById(id);
+
+    function mostrarAviso(texto) {
+      const msg = $("msg-empresa");
+      msg.hidden = false;
+      msg.textContent = texto;
     }
 
-    async function cargarPostulaciones() {
-      const resp = await fetch("/api/empresa/postulaciones");
-      const data = await resp.json();
-      const cont = document.getElementById("lista-postulaciones-empresa");
-      const posts = data.postulaciones || [];
-      if (!posts.length) {
-        cont.innerHTML = "<p>No hay postulaciones activas enviadas a la empresa.</p>";
+    function pintarResultado(oferta) {
+      const alertas = oferta.alertas || [];
+      $("resultado").hidden = false;
+      $("resultado-titulo").textContent = oferta.bloqueada
+        ? `«${oferta.puesto}» quedó bloqueada por la Ley 11 de 2005`
+        : `«${oferta.puesto}» pasó la revisión de la Ley 11 de 2005`;
+      $("resultado-detalle").textContent = oferta.bloqueada
+        ? "Puente no propone candidatos mientras el aviso pida estos requisitos. Cambia esas frases y vuelve a publicar."
+        : alertas.length
+          ? "Entra al Matching. Estas frases solo generan una alerta para el orientador:"
+          : "Entra al Matching sin alertas.";
+      $("resultado-alertas").replaceChildren(
+        ...alertas.map((a) => {
+          const li = document.createElement("li");
+          li.textContent = `«${a.frase}» · ${a.regla}`;
+          return li;
+        }),
+      );
+    }
+
+    $("form-empresa-oferta").addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const habilidades = [...document.querySelectorAll('input[name="habilidad"]:checked')].map((c) => c.value);
+      if (!habilidades.length) {
+        mostrarAviso("Elige al menos una habilidad que pida el puesto.");
         return;
       }
-      cont.innerHTML = posts.map((p) => `
-        <div style="border-top:1px solid #d8d2c5;padding:0.75rem 0;display:flex;justify-content:space-between;align-items:center;gap:0.75rem;flex-wrap:wrap;">
-          <div>
-            <strong>${esc(p.nombre_perfil || "Candidato ciego")}</strong> → <span>${esc(p.puesto)} (${esc(p.empresa)})</span>
-            <div><small>Estado actual: <code>${esc(p.estado)}</code></small></div>
-          </div>
-          <div style="display:flex;gap:0.4rem;">
-            <button type="button" class="boton" data-perfil="${esc(p.perfil_id)}" data-oferta="${esc(p.oferta_id)}" data-empresa="${esc(p.empresa)}" data-tipo="acepta">Citar a entrevista</button>
-            <button type="button" class="boton" data-perfil="${esc(p.perfil_id)}" data-oferta="${esc(p.oferta_id)}" data-empresa="${esc(p.empresa)}" data-tipo="cubierta">Contratar (vacante cubierta)</button>
-            <button type="button" class="boton" data-perfil="${esc(p.perfil_id)}" data-oferta="${esc(p.oferta_id)}" data-empresa="${esc(p.empresa)}" data-tipo="rechaza">Rechazar</button>
-          </div>
-        </div>
-      `).join("");
-    }
-
-    document.getElementById("form-empresa-oferta").addEventListener("submit", async (ev) => {
-      ev.preventDefault();
       const payload = {
-        puesto: document.getElementById("emp-puesto").value,
-        empresa: document.getElementById("emp-empresa").value,
-        corregimiento: document.getElementById("emp-corregimiento").value,
-        salario_mensual: parseFloat(document.getElementById("emp-salario").value || "650"),
-        requisitos_texto: document.getElementById("emp-requisitos").value,
-        habilidades: ["atencion_cliente", "manejo_caja"],
+        puesto: $("emp-puesto").value,
+        empresa: $("emp-empresa").value,
+        corregimiento: $("emp-corregimiento").value,
+        salario_mensual: parseFloat($("emp-salario").value || "650"),
+        requisitos_texto: $("emp-requisitos").value,
+        habilidades,
       };
-      const resp = await fetch("/api/ofertas", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const msg = document.getElementById("msg-empresa");
-      msg.hidden = false;
-      msg.textContent = resp.ok
-        ? "Vacante procesada por el agente Mercado (Ley 11 de 2005). Revisa el resultado en el Tablero del Orientador."
-        : "Error al publicar la vacante.";
-      await cargarPostulaciones();
+      let resp;
+      try {
+        resp = await fetch("/api/ofertas", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      } catch (err) {
+        mostrarAviso(`Sin respuesta del servidor: ${err.message}`);
+        return;
+      }
+      let datos = null;
+      try {
+        datos = await resp.json();
+      } catch {
+        datos = null;
+      }
+      if (!resp.ok) {
+        const detalle = datos && datos.detail;
+        mostrarAviso(typeof detalle === "string" ? detalle : "Error al publicar la vacante.");
+        return;
+      }
+      $("msg-empresa").hidden = true;
+      // La respuesta es el estado del tablero: solo se lee la vacante recién publicada, que queda al final.
+      const ofertas = (datos && datos.ofertas) || [];
+      const nueva = ofertas[ofertas.length - 1];
+      if (nueva) pintarResultado(nueva);
+      else mostrarAviso("Vacante procesada por Puente (Ley 11 de 2005).");
     });
-
-    document.getElementById("lista-postulaciones-empresa").addEventListener("click", async (ev) => {
-      const btn = ev.target.closest("button[data-tipo]");
-      if (!btn) return;
-      const payload = {
-        tipo: btn.dataset.tipo,
-        perfil_id: btn.dataset.perfil,
-        oferta_id: btn.dataset.oferta,
-        empresa: btn.dataset.empresa || "Empresa",
-        nota: `Acción '${btn.dataset.tipo}' reportada desde /empresa`,
-      };
-      const resp = await fetch("/api/empresa/evento", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const msg = document.getElementById("msg-empresa");
-      msg.hidden = false;
-      msg.textContent = resp.ok
-        ? `Evento '${payload.tipo}' registrado con agente='empresa'.`
-        : "No se pudo actualizar el estado.";
-      await cargarPostulaciones();
-    });
-
-    cargarPostulaciones();
   </script>
 </body>
 </html>
