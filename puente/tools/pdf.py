@@ -147,7 +147,8 @@ _EDAD_EN_PALABRAS = re.compile(
 _NACIMIENTO = re.compile(
     r"\bnac(?:id[oa]s?|i[oó]|í)\s+(?:en|el)\s+(?:el\s+)?(?:a[nñ]o\s+)?"
     r"(?:(?:\d{1,2}\s+de\s+)?[a-záéíóú]+\s+del?\s+)?(?:19|20)\d{2}\b"
-    r"|\b(?:a[nñ]o|fecha)\s+de\s+nacimiento\b(?:\s*(?::|es|fue)?\s*\d[\d/.-]*\d)?",
+    r"|\b(?:a[nñ]o|fecha)\s+de\s+nacimiento\b(?:\s*(?::|es|fue)?\s*"
+    r"(?:(?:\d{1,2}\s+de\s+)?[a-záéíóú]+\s+del?\s+(?:19|20)\d{2}\b|\d[\d/.-]*\d))?",
     re.IGNORECASE,
 )
 # Sexo dicho de forma coloquial. Solo en el mensaje del orientador: en la evidencia literal del

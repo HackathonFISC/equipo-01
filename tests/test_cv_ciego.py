@@ -261,6 +261,8 @@ def test_cegar_quita_estado_civil_embarazo_edad_en_palabras_y_nacimiento_del_ori
         ("Nacido en el año 2005", "[dato omitido]"),
         ("Año de nacimiento: 2006", "[dato omitido]"),
         ("Fecha de nacimiento: 12/05/2006", "[dato omitido]"),
+        ("Fecha de nacimiento: 3 de mayo de 2006", "[dato omitido]"),
+        ("fecha de nacimiento mayo de 2006, disponible", "[dato omitido], disponible"),
     ],
 )
 def test_cegar_quita_datos_que_no_son_del_trabajo(texto, queda):
