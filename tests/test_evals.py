@@ -30,7 +30,8 @@ CONTEO_ESPERADO = {
     "guardrails": 7,
     "horario_tirilla": 1,
     "horario_validacion": 1,
-    "micromision": 4,  # correcta, incorrecta, vacía y el contrafactual del Auditor (#158)
+    "redactor_puente": 3,  # #157: edad con presencia, sexo y «vivir cerca de».
+    "micromision": 4,  # #158: correcta, incorrecta, vacía y el contrafactual del Auditor
 }
 
 
@@ -113,6 +114,7 @@ def test_ids_siguen_el_formato_pedido(casos):
         "guardrails": "GRD",
         "horario_tirilla": "HOR",
         "horario_validacion": "HOR",
+        "redactor_puente": "RED",
         "micromision": "MIC",
     }
     for caso in casos["casos"]:
@@ -246,6 +248,16 @@ def test_cargar_casos_rechaza_archivos_invalidos(tmp_path):
         ("guardrails", {"veredicto": "rechazar", "llamo_llm": False}, {"veredicto": "rechazar", "llamo_llm": True}, False),
         ("guardrails", {"veredicto": "marcar", "sigue_como_dato": True}, {"veredicto": "marcar", "sigue_como_dato": False}, False),
         ("guardrails", {"veredicto": "fuera_de_alcance"}, {"veredicto": "aceptar"}, False),
+        (
+            "redactor_puente",
+            {"cambios": [{"regla": "edad", "frase": "Edad entre 18 a 25 años"}], "viables_antes": [], "viables_despues": ["a", "b"]},
+            {"cambios": [{"regla": "edad", "frase": "edad entre 18 a 25 anos"}], "viables_antes": [], "viables_despues": ["b", "a"]},
+            True,
+        ),
+        ("redactor_puente", {"viables_despues": ["a", "b"]}, {"viables_despues": ["a"]}, False),
+        ("redactor_puente", {"hallazgos_despues": []}, {"hallazgos_despues": ["buena_presencia «buena presencia»"]}, False),
+        ("redactor_puente", {"texto_contiene": ["en 30 minutos o menos"]}, {"texto_nuevo": "Llegar en 60 minutos o menos."}, False),
+        ("redactor_puente", {"decision_pendiente": True}, {"decision_pendiente": False}, False),
     ],
 )
 def test_comparar_por_categoria(categoria, esperado, observado, cumple):
@@ -1074,6 +1086,28 @@ def test_guardrails_contra_evaluar_entrada_real(casos):
     assert ejecutor(_caso(casos, "GRD-02"))["sigue_como_dato"] is True
     aceptado = {"entrada": {"tipo": "texto", "texto": "Busco trabajo de cajero en La Chorrera"}}
     assert ejecutor(aceptado)["veredicto"] == "aceptar"
+
+
+def test_redactor_contra_proponer_version_real_sin_llm(casos, monkeypatch):
+    """#157: los tres casos corren sin clave ni red. Si algo llamara a puente.llm, la prueba falla."""
+    from puente.schemas import Oferta, Perfil
+
+    def prohibido(*args, **kwargs):
+        raise AssertionError("los casos del redactor no llaman al LLM")
+
+    monkeypatch.setattr("puente.llm.generar_estructurado", prohibido)
+    ejecutor = run.ejecutores_por_defecto()["redactor_puente"]
+    propios = [c for c in casos["casos"] if c["categoria"] == "redactor_puente"]
+    assert [c["id"] for c in propios] == ["RED-01", "RED-02", "RED-03"]
+    for caso in propios:
+        for perfil in caso["entrada"]["perfiles"]:
+            Perfil(**perfil)
+        if "oferta" in caso["entrada"]:
+            Oferta(**caso["entrada"]["oferta"])
+        observado = ejecutor(caso)
+        assert run.comparar("redactor_puente", caso["esperado"], observado), (caso["id"], run._diferencias("redactor_puente", caso["esperado"], observado))
+        assert len(observado["viables_despues"]) > len(observado["viables_antes"]), caso["id"]
+    assert ejecutor(_caso(casos, "RED-01"))["viables"] == "0 → 3"
 
 
 def test_guardrails_envuelve_el_archivo_y_traduce_el_veredicto(casos, monkeypatch):

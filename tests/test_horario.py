@@ -231,6 +231,8 @@ def test_extraer_horario_acepta_pdf_en_bytes():
         (b"\x89PNG\r\n\x1a\n" + b"0" * (5 * 1024 * 1024), "tirilla.png", "5 MB"),
         (b"", "tirilla.png", "vacío"),
     ],
+    # Ids cortos: sin ellos el id lleva los 5 MB de bytes y en Windows no cabe en PYTEST_CURRENT_TEST.
+    ids=["texto", "firma-falsa", "mas-de-5mb", "vacio"],
 )
 def test_archivo_rechazado_no_llama_al_llm(archivo, nombre, motivo):
     llamadas = []
