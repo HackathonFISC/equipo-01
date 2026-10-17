@@ -132,7 +132,7 @@ Cómo se lee cada arista condicional:
 | `puente/agents/postulacion.py`, `puente/tools/` | #7, #12, #84, #212 | SQLite, CV ciego y carta de presentación en PDF, Telegram con respaldo en `outbox/`, `.ics` y agenda de la entrevista. |
 | `puente/cargar.py` | #46 | Carga inicial de `data/` en `puente.db`. |
 | `puente/metricas.py` | #47, #198 | Indicadores ilustrativos con datos de la demo, rotulados como tales, y tendencias del mercado sobre las ofertas de `puente.db`. |
-| `app/server.py`, `app/empresa.py`, `app/joven_fase2.py`, `app/static/` | #11, #33, #49, #52, #166, #167 | Starlette y Uvicorn, con HTML, CSS y JS sin framework. Sirve tres vistas: el tablero del orientador (`/`); la vista del joven (`/joven`), con formulario, entrevista de una vez o por chat, tirilla de matrícula y «Mis postulaciones»; y la lista corta ciega de la empresa (`/empresa/lista-corta`), con aceptar, rechazar o vacante cubierta. |
+| `app/server.py`, `app/empresa.py`, `app/joven_fase2.py`, `app/static/` | #11, #33, #49, #52, #166, #167 | Starlette y Uvicorn, con HTML, CSS y JS sin framework. Sirve tres vistas: el tablero del orientador (`/`); la vista del joven (`/joven`), con formulario, entrevista de una vez o por chat, tirilla de matrícula y «Mis postulaciones»; y la lista corta ciega de la empresa (`/empresa/lista-corta`), con aceptar, rechazar o vacante cubierta, más `/empresa` para publicar una vacante, que responde solo con el resultado de su oferta. |
 | `evals/run.py`, `evals/casos.yaml` | #13, #129 | Evals propios, con el resultado esperado escrito antes de correr. |
 | `puente/agents/horario.py`, `redactor.py`, `micromision.py` | #164, #157, #158 | Fase 1 de tres extensiones. Horario ya lee la tirilla desde `/joven`. Redactor y Micromisión se usan desde su propia CLI y desde los evals, sin conexión al grafo ni al tablero (ver [Límites](#5-límites)). |
 
@@ -205,7 +205,7 @@ Cómo se lee cada arista condicional:
      - hasta 3 candidatos por plaza (una vacante con 2 plazas admite 6) y hasta 2 vacantes por joven.
    - **Si falta un dato** de la oferta, como el salario, el horario o las habilidades, no se descarta por ese dato. El par baja 10 puntos por cada dato que falta y queda «por confirmar». La excepción es el traslado: un par sin fila en la matriz de traslados no es viable.
    - **El puntaje** es la cobertura de habilidades. Los minutos de traslado no restan puntaje: filtran por el máximo y desempatan entre las vacantes de un mismo joven.
-   - **El orden de la lista corta** de cada vacante es por puntaje, de mayor a menor, y a igual puntaje por id del perfil. Los minutos de traslado no cuentan: así ve primero a los más aptos el orientador y así se presentan a la empresa (#238).
+   - **El orden de la lista corta** de cada vacante es por puntaje, de mayor a menor, y a igual puntaje por id del perfil. Los minutos de traslado no cuentan: así ve primero a los más aptos el orientador y así se presentan a la empresa (#238, #269). En la vista de la empresa, en cambio, «Candidato N» se numera por la hora de entrevista propuesta, no por puntaje.
    - **La explicación** de cada match es una plantilla determinística, sin LLM.
    - **Ejemplo con Yaritza**, desde La Chorrera (`data/traslados.csv`):
      - Vista Alegre: 20 minutos y 0.75 por viaje, o sea 1.50 al día ida y vuelta: entra.
@@ -317,7 +317,7 @@ uv run python -m app.server                    # tablero en http://127.0.0.1:800
 uv run python -m evals.run                     # evals (escribe evals/resultados.md)
 ```
 
-La vista de la empresa (`/empresa/lista-corta`) se abre con un código por empresa. El servidor imprime cada código en la consola al arrancar y en cada `/api/reset`, con el enlace `/empresa/lista-corta#codigo=<empresa>.<token>`. Lo mismo pasa con los códigos de `/joven`.
+La vista de la empresa (`/empresa/lista-corta`) se abre con un código por empresa. El servidor imprime cada código en la consola al arrancar y en cada `/api/reset`, con el enlace `/empresa/lista-corta#codigo=<empresa>.<token>`. Lo mismo pasa con los códigos de `/joven`, y una empresa nueva recibe el suyo cuando publica su primera vacante.
 
 ### Modo sin red y sin claves
 
@@ -418,5 +418,7 @@ El registro completo está en [`decisiones.md`](decisiones.md). El horario y las
 - **La foto de la tirilla va completa a Claude**, con lo que traiga: nombre, cédula o número de carnet. `limpiar_entrada` solo limpia lo que vuelve del modelo, y la imagen no se guarda.
 - **`cegar()` es heurístico:** son expresiones regulares, y un dato escrito de una forma que no prevén puede pasar.
 - **Los evals y la CI corren con grabaciones**, no con el LLM en vivo. En modo reproducir cada caso con LLM usa una sola grabación, así que no se mide la variación entre corridas. La corrida de la entrega queda en [`evals/resultados.md`](../evals/resultados.md), que se regenera sobre el commit final antes del tag (#17); las metas por categoría son propuestas del equipo.
+- **Publicar una vacante no pide código.** En la demo, `/empresa` y `POST /api/empresa/ofertas` no piden código y el nombre de empresa es libre, así que cualquiera puede publicar a nombre de cualquiera. Por eso esa ruta pasa por la misma Ley 11 y responde solo con el resultado de su oferta, nunca con datos de los jóvenes. En Vercel todo POST da 403.
+- **El tablero del orientador no tiene login:** `GET /api/estado` y `POST /api/ofertas` devuelven el estado completo, con los jóvenes, a quien llegue al servidor.
 - **Notas de voz: fuera de alcance.** Se rechazan con un mensaje claro; #55 se cerró sin implementar.
 - **Cobertura geográfica:** la matriz de traslados tiene 13 nodos (10 corregimientos y 3 distritos) del corredor Panamá Oeste, Centro, San Miguelito y Este. Diez de las 20 ofertas no indican un lugar de esa matriz, así que el Matching no las puede asignar (`data/FUENTES.md`).

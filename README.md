@@ -127,7 +127,7 @@ Los siete agentes mínimos que sugiere el documento del reto y dónde están en 
 **Más allá de los siete agentes (stretch).** Verificado en `main` el 17 de octubre, sin red:
 
 - **Cobertura por turnos (#165).** Cuando ningún joven puede cubrir un turno completo porque le cruza con sus clases, `puente/solver/turnos.py` usa CP-SAT para proponer una dupla de mañana y tarde. En el tablero se prueba con «Probar escenario cobertura por turnos» (`POST /api/orientador/cobertura-turnos/demo`). Aprobar exige el consentimiento de los dos jóvenes. Pruebas en `tests/test_turnos.py`.
-- **Vista por rol y panel de operación (#168).** La cabecera del tablero tiene un selector de rol: «Orientador (Admin)», «Vista Aplicante» (`/joven`) y «Vista Empresa» (`/empresa/lista-corta`). El desplegable «Umbrales del solver editables y panel de operación (Admin)» hace dos cosas:
+- **Vista por rol y panel de operación (#168).** La cabecera del tablero tiene un selector de rol: «Orientador (Admin)», «Vista Aplicante» (`/joven`) y «Vista Empresa» (`/empresa/lista-corta`, y `/empresa` para publicar vacantes). El desplegable «Umbrales del solver editables y panel de operación (Admin)» hace dos cosas:
   - recalcula con otros topes (`POST /api/orientador/umbrales`), por ejemplo 95 min de traslado, con lo que Tocumen deja de quedar fuera para Yaritza, y deja una `Decision` firmada;
   - muestra el uso del LLM por agente y el estado de los canales (`GET /api/admin/operacion`).
 - **Ofertas y CV por archivo (#170).** En el tablero, «Subir oferta (PDF o foto con cámara)» y «Subir CV (PDF)» (`POST /api/ofertas/archivo` y `POST /api/perfiles/archivo`).
@@ -312,7 +312,9 @@ uv run python -m app.server
 - **`/joven`**: el joven llena el formulario, hace la entrevista de una vez o por chat, sube su tirilla de matrícula, da su consentimiento y sigue sus postulaciones. Detalle en [Vista del joven](#vista-del-joven-joven).
 - **`/empresa/lista-corta`**: la empresa ve su lista corta ciega y puede aceptar, rechazar o dar la vacante por cubierta; rechazar o cubrir dispara el reacomodo.
 
-Los códigos de acceso de `/joven` y `/empresa/lista-corta` se imprimen en la consola al arrancar y en cada reinicio.
+Los códigos de acceso de `/joven` y `/empresa/lista-corta` se imprimen en la consola al arrancar, en cada reinicio y cuando una empresa nueva publica su primera vacante.
+
+La empresa publica vacantes en `/empresa`, que no muestra a ninguna persona: `POST /api/empresa/ofertas` pasa por la misma Ley 11 y responde solo con su oferta (id, bloqueo y alertas con su frase). El estado completo del tablero (con los jóvenes) lo piden solo la página del orientador, por `POST /api/ofertas` y `GET /api/estado`; en la demo esas dos rutas no piden código, así que lo recibe quien llegue al servidor (en Vercel, solo lectura).
 
 El selector de rol, los umbrales y el panel de operación, subir ofertas o CV por archivo y la cobertura por turnos están en el mismo tablero: ver «Más allá de los siete agentes».
 
@@ -351,7 +353,7 @@ uv run python -m evals.run
 
 Con `LLM_MODO=reproducir` (sin red) solo se leen las entradas que tienen grabación: en el chat, el botón «Usar la respuesta de Yaritza», y la tirilla `tests/fixtures/tirilla_sintetica.png`. Con otras respuestas el agente Perfil responde con un error claro y no inventa el perfil.
 
-**Limitación de la demo: no hay login.** El joven se identifica con un código `PERFIL-….<token>` que recibe al abrir la entrevista. El token viaja en el encabezado `X-Token-Joven` y, en la página, en el fragmento `#codigo=` de la URL, que el navegador no manda al servidor (el enlace `.ics` de la fase 1 aún lo lleva en la URL). Quien tenga el código ve y decide por ese perfil. Los códigos de los perfiles semilla salen en la consola del servidor. Una entrevista por chat sin terminar vive en memoria: si el servidor se reinicia, se empieza de nuevo.
+**Limitación de la demo: no hay login.** El joven se identifica con un código `PERFIL-….<token>` que recibe al abrir la entrevista. El token viaja en el encabezado `X-Token-Joven` y, en la página, en el fragmento `#codigo=` de la URL, que el navegador no manda al servidor (el enlace `.ics` de la fase 1 aún lo lleva en la URL). Quien tenga el código ve y decide por ese perfil. Los códigos de los perfiles semilla salen en la consola del servidor. Una entrevista por chat sin terminar vive en memoria: si el servidor se reinicia, se empieza de nuevo. Publicar una vacante en `/empresa` tampoco pide código en la demo y el nombre de empresa es libre: por eso esa ruta devuelve solo el resultado de la oferta y nunca datos de los jóvenes (en Vercel todo POST da 403).
 
 ## Credenciales de demo
 

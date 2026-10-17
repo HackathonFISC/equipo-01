@@ -79,7 +79,7 @@ Columna «Rúbrica»: Impacto, Diseño agéntico (agentes, herramientas, código
 
 **Se dice:** (sobre la terminal B) «El agente Mercado leyó con un LLM 20 ofertas reales de Computrabajo y Konzerta. Pero la ley no la decide el modelo: reglas en código aplican la Ley 11 de 2005 y bloquearon 7, por edad o por sexo, citando la frase exacta.» (sobre el tablero) «El orientador carga un anuncio real y pasa lo mismo: Mercado lo lee y la regla lo bloquea por la edad.»
 
-**Plan B:** si `cargar` falla, muestra `grep -l '"agente": "mercado"' data/grabaciones/*.json | wc -l` (da 20) y explica que las respuestas están grabadas; sigue con el tablero.
+**Plan B:** si `cargar` falla, muestra `grep -l '"agente": "mercado"' data/grabaciones/*.json | wc -l` (da 21: las 20 ofertas y el volante escrito a mano, #266) y explica que las respuestas están grabadas; sigue con el tablero.
 
 ### 3 · Perfil sin CV (0:58–1:18) · Diseño agéntico
 
@@ -150,7 +150,8 @@ El chat corre sin red con la grabación de #209, verificada en `LLM_MODO=reprodu
 - **Archivos del tablero:** el tablero escribe el CV, la carta, el mensaje y el `.ics` en `PUENTE_OUTBOX` (`$DEMO/outbox-tablero`) (#207).
 - **Navegador:** si un diálogo de confirmación no responde, recarga (F5) y sigue: el estado queda guardado en SQLite.
 - **Casillas de consentimiento:** no dejes marcadas casillas «El joven consintió» sin enviar en otras tarjetas: frenan la actualización automática del tablero.
-- **Evals:** si los mencionas, no digas «62 de 62»: hoy son 61 ok y 1 fallo (E2E-01, #238). El README ya lo cuenta así.
+- **Evals:** hoy son 62 de 62 en ok. E2E-01 falló el primer día y se corrigió con el #269; el README cuenta qué pasó.
+- **`/empresa`:** es la página para publicar vacantes y no muestra candidatos. Para la lista ciega, usa `/empresa/lista-corta`.
 
 ## Plan B general
 
