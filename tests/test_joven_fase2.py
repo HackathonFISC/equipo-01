@@ -735,6 +735,62 @@ def test_si_un_recalculo_la_saca_de_la_lista_corta_se_le_avisa(entorno) -> None:
     assert [s["oferta_id"] for s in resultado["salieron_de_lista"]] == [VISTA_ALEGRE]
 
 
+def _umbrales(cliente: TestClient, k: int) -> None:
+    r = cliente.post("/api/orientador/umbrales", json={"k": k, "max_vacantes_por_perfil": 3})
+    assert r.status_code == 200, r.text
+
+
+def test_con_k_1_el_recalculo_real_saca_a_daniela_de_la_lista_y_se_le_avisa(entorno) -> None:
+    """#270: el #262 quita del estado la postulación «preseleccionado» que sale de la lista corta y el aviso de #257
+    la buscaba justo ahí, así que nunca salía. Aquí el recálculo es el real (umbral k=1), no un `matches` editado."""
+    cliente, estado, _, _ = entorno
+    h = _cred(estado["_tokens_joven"]["PERFIL-DANIELA"])
+    ruta = "/api/joven/PERFIL-DANIELA"
+    antes = cliente.get(f"{ruta}/postulaciones", headers=h).json()
+    assert {p["oferta_id"] for p in antes["postulaciones"]} == {CHORRERA, VISTA_ALEGRE}
+    assert antes["salieron_de_lista"] == []
+
+    _umbrales(cliente, 1)
+    assert not [p for p in estado["postulaciones"] if p["perfil_id"] == "PERFIL-DANIELA"]  # esto lo hace el #262
+    for _ in range(2):  # lo quitado no se olvida: un segundo recálculo con el mismo umbral deja el mismo aviso
+        datos = cliente.get(f"{ruta}/postulaciones", headers=h).json()
+        assert datos["postulaciones"] == []
+        assert {s["oferta_id"] for s in datos["salieron_de_lista"]} == {CHORRERA, VISTA_ALEGRE}
+        assert all(s["puesto"] and s["empresa"] for s in datos["salieron_de_lista"])
+        resultado = cliente.get(f"{ruta}/resultado", headers=h).json()
+        assert resultado["vacantes"] == []
+        assert {s["oferta_id"] for s in resultado["salieron_de_lista"]} == {CHORRERA, VISTA_ALEGRE}
+        _umbrales(cliente, 1)
+
+    # Los demás jóvenes no ven ese aviso, y sin sus postulaciones no se les inventa ninguno.
+    yaritza = cliente.get(
+        "/api/joven/PERFIL-YARITZA/postulaciones", headers=_cred(estado["_tokens_joven"]["PERFIL-YARITZA"])
+    ).json()
+    assert all(s["oferta_id"] not in {p["oferta_id"] for p in yaritza["postulaciones"]} for s in yaritza["salieron_de_lista"])
+
+    # Si el cupo se abre, vuelve a la lista corta: el aviso se va y las postulaciones regresan.
+    _umbrales(cliente, 3)
+    datos = cliente.get(f"{ruta}/postulaciones", headers=h).json()
+    assert {p["oferta_id"] for p in datos["postulaciones"]} == {CHORRERA, VISTA_ALEGRE}
+    assert datos["salieron_de_lista"] == []
+    assert cliente.get(f"{ruta}/resultado", headers=h).json()["salieron_de_lista"] == []
+    assert estado["fuera_de_lista_corta"] == []
+
+
+def test_reiniciar_la_demo_olvida_a_quien_habia_salido_de_la_lista_corta(entorno) -> None:
+    cliente, estado, _, _ = entorno
+    _umbrales(cliente, 1)
+    assert "PERFIL-DANIELA" in {f["perfil_id"] for f in estado["fuera_de_lista_corta"]}  # con k=1 salen varios
+    assert cliente.post("/api/reset").status_code == 200
+    assert estado["fuera_de_lista_corta"] == []
+
+
+def test_el_texto_del_resultado_ya_no_manda_a_una_casilla_que_no_existe() -> None:
+    html = (RAIZ / "app" / "static" / "joven.html").read_text(encoding="utf-8")
+    assert "marcas la casilla" not in html
+    assert "solo sale si dices que sí en «Mis postulaciones»" in html
+
+
 def test_el_resultado_trae_por_que_no_hay_opciones_y_la_vista_lo_dice(entorno) -> None:
     """#245 en la vista del joven: con el cupo lleno ya no se le dice que ninguna vacante cumple sus requisitos."""
     cliente, estado, _, _ = entorno
