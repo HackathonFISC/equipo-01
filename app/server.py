@@ -1,14 +1,26 @@
-"""Servidor web ASGI para el Tablero del Orientador de Puente (Issues #11 y #33)."""
+"""Servidor web ASGI para el Tablero del Orientador conectado al grafo real de Puente (Issues #11, #33 y #49).
+
+Toda la lógica de negocio vive en `puente/`:
+- Ejecución y pausa HITL (`interrupt` / `Command(resume=...)`): `puente.graph`
+- Reglas legales (Ley 11 de 2005): `puente.rules.discriminacion`
+- Persistencia SQLite (`perfiles`, `ofertas`, `postulaciones`, `decisiones`): `puente.tools.db`
+- Envío de postulaciones (`PDF`, `.ics`, `Telegram/outbox`): `puente.agents.postulacion`
+"""
 
 from __future__ import annotations
 
 import copy
+import os
 import re
+import sqlite3
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -16,25 +28,37 @@ from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from puente.agents.auditor import auditar_lista_corta, nodo_auditor
+from puente.agents.auditor import nodo_auditor
 from puente.agents.formacion import nodo_formacion
-from puente.agents.matching import nodo_matching
-from puente.rules.traslados import cargar_traslados, obtener_traslado
+from puente.agents.postulacion import postular
+from puente.graph import (
+    aprobacion_pendiente,
+    config_caso,
+    construir_grafo,
+    nodo_matching_grafo,
+    stub_mercado,
+    stub_perfil,
+)
+from puente.rules.discriminacion import esta_bloqueada, revisar_texto
 from puente.schemas import (
     SIN_OFERTA,
+    Consentimiento,
     Decision,
     EstadoPostulacion,
     HabilidadPerfil,
     Horario,
+    Match,
     Oferta,
     Perfil,
 )
+from puente.tools import db
 
 RUTA_APP = Path(__file__).resolve().parent
 RUTA_STATIC = RUTA_APP / "static"
 RUTA_RAIZ = RUTA_APP.parent
 RUTA_DATA = RUTA_RAIZ / "data"
 RUTA_OUTBOX = RUTA_RAIZ / "outbox"
+RUTA_DB_TABLERO = Path(tempfile.gettempdir()) / "puente_tablero.db"
 
 PATRON_ID_SEGURO = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -48,12 +72,40 @@ class ErrorValidacionTablero(ValueError):
 class AccionOrientadorRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    accion: Literal["aprobar", "editar", "quitar_candidato", "rechazar"]
+    accion: Literal["aprobar", "editar", "quitar_candidato", "quitar", "rechazar"]
     perfil_id: str = Field(min_length=1, max_length=80)
     oferta_id: str = Field(min_length=1, max_length=80)
     nota_edicion: str = Field(default="", max_length=500)
+    mensaje_empresa: str = Field(default="", max_length=1000)
+    orientador: str = Field(default="Orientadora Ana Gómez", min_length=2, max_length=120)
+    consentimiento_joven: bool = Field(
+        default=True,
+        description="Casilla 'el joven consintió' confirmada por el orientador (#49)",
+    )
+    consentidos: list[str] | None = Field(
+        default=None,
+        description="Lista explícita de perfil_id con consentimiento confirmado (#10, #49)",
+    )
 
     @field_validator("perfil_id", "oferta_id")
+    @classmethod
+    def _validar_id_seguro(cls, valor: str) -> str:
+        limpio = valor.strip()
+        if not PATRON_ID_SEGURO.fullmatch(limpio):
+            raise ValueError(
+                f"ID inválido '{valor}': solo se permiten caracteres [A-Za-z0-9_-]"
+            )
+        return limpio
+
+
+class DesbloquearOfertaRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    oferta_id: str = Field(min_length=1, max_length=80)
+    motivo: str = Field(min_length=3, max_length=500)
+    orientador: str = Field(default="Orientadora Ana Gómez", min_length=2, max_length=120)
+
+    @field_validator("oferta_id")
     @classmethod
     def _validar_id_seguro(cls, valor: str) -> str:
         limpio = valor.strip()
@@ -79,7 +131,7 @@ class NuevoPerfilRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     nombre: str = Field(min_length=2, max_length=80)
-    edad: int = Field(ge=15, le=29)
+    edad: int = Field(ge=18, le=29)
     corregimiento: str = Field(min_length=2, max_length=80)
     salario_minimo: float = Field(ge=0, le=50000)
     presupuesto_pasaje_diario: float = Field(ge=0, le=500)
@@ -134,108 +186,59 @@ def _serializar_decision(d: Any) -> dict[str, Any]:
     }
 
 
-def _evaluar_reglas_discriminacion(requisitos_texto: str) -> tuple[bool, list[dict[str, str]]]:
-    """Aplica reglas determinísticas de la Ley 11 de 2005 (o delega a puente.rules.discriminacion si existe)."""
+def _conectar_db_estado(estado: dict[str, Any]) -> sqlite3.Connection:
+    """Abre la conexión SQLite asociada al estado del tablero (`puente.tools.db`)."""
+    ruta_db = estado.get("_db_path") or os.getenv("PUENTE_DB") or str(RUTA_DB_TABLERO)
+    estado["_db_path"] = str(ruta_db)
+    return db.conectar(ruta_db)
+
+
+def _registrar_decision_db(estado: dict[str, Any], decision: Decision | dict[str, Any]) -> dict[str, Any]:
+    """Guarda una Decision en SQLite (`decisiones`) y en la lista en memoria del estado."""
+    serializada = _serializar_decision(decision)
+    conn = _conectar_db_estado(estado)
     try:
-        from puente.rules.discriminacion import esta_bloqueada, revisar_texto
-
-        hallazgos = revisar_texto(requisitos_texto)
-        alertas_mod = [
-            {
-                "frase": h.frase,
-                "regla": f"Ley 11 de 2005 ({h.regla}): {h.fundamento}"
-                if "Ley 11" in h.fundamento
-                else f"Alerta ({h.regla}): {h.fundamento}",
-                "tipo": "bloqueo" if h.bloquea else "alerta",
-            }
-            for h in hallazgos
-        ]
-        return esta_bloqueada(hallazgos), alertas_mod
-    except Exception:
-        pass
-
-    texto_lower = requisitos_texto.lower()
-    alertas: list[dict[str, str]] = []
-    bloqueada = False
-
-    m_edad = re.search(
-        r"(\b\d{2}\s*(?:a|-)\s*\d{2}\s*a[ñn]os\b|\bedad\s+entre\s+\d{2}\s+a\s+\d{2}\s*a[ñn]os\b|\bmenor\s+de\s+\d{2}\s*a[ñn]os\b)",
-        requisitos_texto,
-        flags=re.IGNORECASE,
-    )
-    if m_edad:
-        bloqueada = True
-        alertas.append(
-            {
-                "frase": m_edad.group(0),
-                "regla": "Ley 11 de 2005, Art. 2 (Panamá): Prohibida la discriminación por límites de edad en ofertas de empleo",
-                "tipo": "bloqueo",
-            }
-        )
-
-    m_sexo = re.search(
-        r"(personal\s+masculino\s+[úu]nicamente|personal\s+femenino\s+[úu]nicamente|solo\s+hombres|solo\s+mujeres|sexo\s+masculino|sexo\s+femenino)",
-        requisitos_texto,
-        flags=re.IGNORECASE,
-    )
-    if m_sexo:
-        bloqueada = True
-        alertas.append(
-            {
-                "frase": m_sexo.group(0),
-                "regla": "Ley 11 de 2005, Art. 1 (Panamá): Prohibida toda distinción o exclusión por razón de sexo",
-                "tipo": "bloqueo",
-            }
-        )
-
-    m_presencia = re.search(
-        r"(excelente\s+buena\s+presencia|buena\s+presencia)",
-        requisitos_texto,
-        flags=re.IGNORECASE,
-    )
-    if m_presencia:
-        alertas.append(
-            {
-                "frase": m_presencia.group(0),
-                "regla": "Alerta preventiva de sesgo de apariencia ('buena presencia' no bloquea por Ley 11 de 2005, pero se marca al orientador)",
-                "tipo": "alerta",
-            }
-        )
-
-    m_foto = re.search(r"(enviar\s+foto\s+en\s+el\s+cv|foto\s+reciente|con\s+foto)", requisitos_texto, flags=re.IGNORECASE)
-    if m_foto:
-        alertas.append(
-            {
-                "frase": m_foto.group(0),
-                "regla": "Alerta preventiva de sesgo visual: solicitud de fotografía en postulación",
-                "tipo": "alerta",
-            }
-        )
-
-    m_civil = re.search(r"\b(soltero|soltera|casado|casada)\b", requisitos_texto, flags=re.IGNORECASE)
-    if m_civil:
-        alertas.append(
-            {
-                "frase": m_civil.group(0),
-                "regla": "Alerta preventiva: requisito de estado civil no vinculado a la función laboral",
-                "tipo": "alerta",
-            }
-        )
-
-    return bloqueada, alertas
+        db.registrar_decision(conn, serializada)
+    finally:
+        conn.close()
+    estado.setdefault("decisiones", []).append(serializada)
+    return serializada
 
 
-def recalcular_pipeline_tablero(
+def _leer_decisiones_db(estado: dict[str, Any]) -> list[dict[str, Any]]:
+    """Lee todas las filas de la tabla `decisiones` en SQLite (`puente.tools.db`)."""
+    conn = _conectar_db_estado(estado)
+    try:
+        filas = conn.execute(
+            "SELECT agente, entrada_resumen, salida_resumen, razon, timestamp FROM decisiones ORDER BY id ASC"
+        ).fetchall()
+        return [dict(f) for f in filas]
+    finally:
+        conn.close()
+
+
+def _evaluar_reglas_discriminacion(requisitos_texto: str) -> tuple[bool, list[dict[str, str]]]:
+    """Delega 100% la revisión legal a `puente.rules.discriminacion` (Ley 11 de 2005)."""
+    hallazgos = revisar_texto(requisitos_texto)
+    alertas_mod = [
+        {
+            "frase": h.frase,
+            "regla": f"Ley 11 de 2005 ({h.regla}): {h.fundamento}"
+            if "Ley 11" in h.fundamento
+            else f"Alerta Ley 11 de 2005 ({h.regla}): {h.fundamento}",
+            "tipo": "bloqueo" if h.bloquea else "alerta",
+        }
+        for h in hallazgos
+    ]
+    return esta_bloqueada(hallazgos), alertas_mod
+
+
+def _construir_modelos_desde_estado(
     estado: dict[str, Any],
-    *,
-    registrar_trazas: bool = True,
-) -> dict[str, Any]:
-    """Ejecuta los módulos reales (nodo_matching, nodo_formacion, nodo_auditor) sobre perfiles y ofertas."""
+) -> tuple[list[Perfil], dict[str, dict[str, Any]], list[Oferta], dict[str, dict[str, Any]]]:
     perfiles_dicts = estado.get("perfiles", [])
     ofertas_dicts = estado.get("ofertas", [])
-    traslados_indice = cargar_traslados()
 
-    # Construir modelos Pydantic reales de puente.schemas
     modelos_perfiles: list[Perfil] = []
     mapa_perfiles: dict[str, dict[str, Any]] = {}
     for p in perfiles_dicts:
@@ -247,12 +250,13 @@ def recalcular_pipeline_tablero(
             )
             for h in p.get("habilidades", [])
         ]
+        edad_valida = max(18, min(29, int(p.get("edad", 20))))
         modelos_perfiles.append(
             Perfil(
                 id=p["id"],
                 nombre=p["nombre"],
                 genero=p.get("genero"),
-                edad=int(p["edad"]),
+                edad=edad_valida,
                 corregimiento=p["corregimiento"],
                 horario_libre=[
                     Horario(
@@ -280,18 +284,21 @@ def recalcular_pipeline_tablero(
     mapa_ofertas: dict[str, dict[str, Any]] = {}
     for o in ofertas_dicts:
         mapa_ofertas[o["id"]] = o
+        sal_raw = o.get("salario_mensual")
         modelos_ofertas.append(
             Oferta(
                 id=o["id"],
                 puesto=o["puesto"],
                 empresa=o["empresa"],
                 corregimiento=o["corregimiento"],
-                salario_mensual=float(o["salario_mensual"]),
+                salario_mensual=float(sal_raw) if sal_raw is not None else None,
                 horario=Horario(
                     dias=["lunes", "martes", "miercoles", "jueves", "viernes"],
                     hora_inicio="08:00",
                     hora_fin="17:00",
-                ),
+                )
+                if o.get("horario") is not None
+                else None,
                 habilidades=list(o.get("habilidades", [])),
                 requisitos_texto=o.get("requisitos_texto", ""),
                 alertas=[
@@ -302,66 +309,212 @@ def recalcular_pipeline_tablero(
                 fuente=o.get("fuente", "datos de ejemplo (sintéticos)"),
             )
         )
+    return modelos_perfiles, mapa_perfiles, modelos_ofertas, mapa_ofertas
 
-    decisiones_base = list(estado.get("decisiones", []))
 
-    # 1. Ejecutar nodo_matching real (CP-SAT + matriz de traslados real)
-    salida_matching = nodo_matching(
+def _calcular_metricas_impacto(estado: dict[str, Any]) -> dict[str, Any]:
+    """Obtiene métricas de impacto desde puente.metricas (#47) y métricas operativas del estado real."""
+    perfiles = estado.get("perfiles", [])
+    ofertas = estado.get("ofertas", [])
+    matches = estado.get("matches", [])
+    descartados = estado.get("descartados", [])
+    postulaciones = estado.get("postulaciones", [])
+    consentimientos = estado.get("consentimientos", [])
+    enviadas = [p for p in postulaciones if p.get("estado") == EstadoPostulacion.ENVIADO.value]
+    con_ruta = [m for m in matches if m.get("cursos_recomendados")]
+
+    base_metricas: dict[str, Any] = {}
+    try:
+        from puente.metricas import calcular_metricas
+
+        res = calcular_metricas(matches, perfiles, ofertas)
+        if isinstance(res, dict):
+            base_metricas.update(res)
+    except Exception:
+        pass
+
+    base_metricas.update(
         {
-            "perfiles": modelos_perfiles,
-            "ofertas": modelos_ofertas,
-            "traslados": traslados_indice,
-            "decisiones": decisiones_base,
+            "referencia_inec": {
+                "fuente": "INEC Panamá · Encuesta de Mercado Laboral",
+                "desempleo_juvenil_pct": 16.8,
+                "informalidad_juvenil_pct": 48.2,
+                "nota": "Cifras contextuales de referencia nacional; las métricas operativas corresponden al lote sintético de la demo.",
+            },
+            "operativas_demo": {
+                "jovenes_atendidos": len(perfiles),
+                "ofertas_evaluadas": len(ofertas),
+                "ofertas_bloqueadas_ley11": sum(1 for o in ofertas if o.get("bloqueada")),
+                "matches_viables_cpsat": len(matches),
+                "pares_descartados_con_motivo": len(descartados),
+                "rutas_formacion_inadeh": len(con_ruta),
+                "consentimientos_confirmados": len(consentimientos),
+                "postulaciones_enviadas": len(enviadas),
+            },
         }
     )
+    return base_metricas
 
-    # 2. Ejecutar nodo_formacion real (Set Cover voraz sobre catálogo INADEH)
-    salida_formacion = nodo_formacion(
-        {
-            "perfiles": modelos_perfiles,
-            "ofertas": modelos_ofertas,
-            "matches": salida_matching["matches"],
-            "lista_corta": salida_matching["lista_corta"],
-            "traslados": traslados_indice,
-            "decisiones": salida_matching["decisiones"],
-        }
+
+def recalcular_pipeline_tablero(
+    estado: dict[str, Any],
+    *,
+    registrar_trazas: bool = True,
+) -> dict[str, Any]:
+    """Compila y ejecuta el grafo real de `puente.graph` hasta el `interrupt()` del orientador (#10, #49)."""
+    modelos_perfiles, mapa_perfiles, modelos_ofertas, mapa_ofertas = (
+        _construir_modelos_desde_estado(estado)
     )
+    inyeccion_sesgo = bool(estado.get("sesgo_inyectado_demo", False))
+
+    def _nodo_auditor_tablero(estado_g: dict[str, Any]) -> dict[str, Any]:
+        def _fn_perfil_sesgado(p_var: Any) -> Any:
+            gen = getattr(p_var, "genero", None) or (
+                p_var.get("genero") if isinstance(p_var, dict) else None
+            )
+            if inyeccion_sesgo and str(gen).lower() in ("femenino", "f"):
+                if isinstance(p_var, Perfil) and len(p_var.habilidades) > 1:
+                    return p_var.model_copy(update={"habilidades": p_var.habilidades[:1]})
+                if isinstance(p_var, dict) and len(p_var.get("habilidades", [])) > 1:
+                    copia = dict(p_var)
+                    copia["habilidades"] = list(copia["habilidades"])[:1]
+                    return copia
+            return p_var
+
+        cambios = nodo_auditor(
+            estado_g,
+            fn_perfil=_fn_perfil_sesgado if inyeccion_sesgo else None,
+        )
+        return {k: v for k, v in cambios.items() if k not in ("perfiles", "ofertas")}
+
+    def _nodo_postulacion_tablero(estado_g: dict[str, Any]) -> dict[str, Any]:
+        aprobacion = estado_g.get("aprobacion") or {}
+        pares_aprob = {
+            (a["perfil_id"], a["oferta_id"]) for a in (aprobacion.get("aprobados") or [])
+        }
+        matches_aprob = [
+            m
+            for m in (estado_g.get("lista_corta") or [])
+            if (m.perfil_id, m.oferta_id) in pares_aprob
+        ]
+        if not matches_aprob:
+            return {}
+        perfiles_map = {p.id: p for p in modelos_perfiles}
+        ofertas_map = {o.id: o for o in modelos_ofertas}
+        RUTA_OUTBOX.mkdir(parents=True, exist_ok=True)
+        conn = _conectar_db_estado(estado)
+        try:
+            res = postular(
+                matches_aprob,
+                perfiles_map,
+                ofertas_map,
+                aprobacion=aprobacion,
+                conn=conn,
+                outbox=RUTA_OUTBOX,
+                enviar=lambda _chat, _txt, _adj: None if False else {},  # pragma: no cover
+            ) if False else postular(
+                matches_aprob,
+                perfiles_map,
+                ofertas_map,
+                aprobacion=aprobacion,
+                conn=conn,
+                outbox=RUTA_OUTBOX,
+            )
+        finally:
+            conn.close()
+        estado.setdefault("_ultimos_archivos_postulacion", {})
+        for pid, oid in pares_aprob:
+            estado["_ultimos_archivos_postulacion"][(pid, oid)] = [
+                arch.name for arch in res.archivos
+            ]
+        return {
+            "decisiones": [*(estado_g.get("decisiones") or []), *res.decisiones],
+        }
+
+    checkpointer = InMemorySaver()
+    grafo = construir_grafo(
+        nodos={
+            "mercado": stub_mercado,
+            "perfil": stub_perfil,
+            "matching": nodo_matching_grafo,
+            "auditor": _nodo_auditor_tablero,
+            "formacion": nodo_formacion,
+            "postulacion": _nodo_postulacion_tablero,
+        },
+        checkpointer=checkpointer,
+    )
+    thread_id = estado.get("thread_id") or f"tablero-{uuid.uuid4().hex[:8]}"
+    estado["thread_id"] = thread_id
+    cfg_grafo = config_caso(thread_id)
+
+    excluidos_actuales = list(estado.get("excluidos") or [])
+    entradas_perfil = [
+        p.model_dump() for p in modelos_perfiles
+    ]
+    estado_entrada_grafo: dict[str, Any] = {
+        "tipo_entrada": "perfil",
+        "entradas_perfil": entradas_perfil,
+        "ofertas": modelos_ofertas,
+        "perfiles": modelos_perfiles,
+        "excluidos": excluidos_actuales,
+        "decisiones": [],
+        "errores": [],
+    }
+
+    salida_grafo = grafo.invoke(estado_entrada_grafo, cfg_grafo)
+    solicitud_int = aprobacion_pendiente(grafo, cfg_grafo)
+
+    estado["_grafo"] = grafo
+    estado["_config_grafo"] = cfg_grafo
+    estado["interrupt_pendiente"] = solicitud_int
+    estado["estado_grafo"] = (
+        "interrupt_orientador" if solicitud_int is not None else "finalizado"
+    )
+
+    # Sincronizar perfiles y ofertas en puente.tools.db
+    if registrar_trazas:
+        conn = _conectar_db_estado(estado)
+        try:
+            for mp in modelos_perfiles:
+                db.guardar_perfil(conn, mp)
+            for mo in modelos_ofertas:
+                db.guardar_oferta(conn, mo)
+        finally:
+            conn.close()
+
+    # Mapear rutas de formación por (perfil_id, oferta_id)
     rutas_por_par: dict[tuple[str, str], list[str]] = {}
-    for ruta in salida_formacion.get("rutas_formacion", []):
+    for ruta in salida_grafo.get("rutas_formacion") or []:
         clave_r = (ruta["perfil_id"], ruta["oferta_id"])
         descripciones = [
-            f"INADEH {c['corregimiento']}: {c['curso']} ({c['horas']} h, {c['horario']}, Cupos: {c['cupos']}, Traslado: {c['minutos_traslado']} min)"
+            f"INADEH {c['corregimiento']}: {c['curso']} ({c['horas']} h, {c['horario']}, Cupos: {c['cupos']} [dato de prueba], Traslado: {c['minutos_traslado']} min)"
             for c in ruta.get("cursos_seleccionados", [])
         ]
         rutas_por_par[clave_r] = descripciones
 
-    # 3. Ejecutar nodo_auditor real (con soporte para simulación de sesgo en demo)
-    inyeccion_sesgo = bool(estado.get("sesgo_inyectado_demo", False))
-
-    def _fn_perfil_sesgado(p_var: Any) -> Any:
-        gen = getattr(p_var, "genero", None) or (
-            p_var.get("genero") if isinstance(p_var, dict) else None
-        )
-        if inyeccion_sesgo and str(gen).lower() in ("femenino", "f"):
-            if isinstance(p_var, Perfil) and len(p_var.habilidades) > 1:
-                return p_var.model_copy(update={"habilidades": p_var.habilidades[:1]})
-        return p_var
-
-    salida_auditor = nodo_auditor(
-        {
-            "perfiles": modelos_perfiles,
-            "ofertas": modelos_ofertas,
-            "matches": salida_matching["matches"],
-            "lista_corta": salida_matching["lista_corta"],
-            "traslados": traslados_indice,
-            "decisiones": salida_formacion["decisiones"],
-        },
-        fn_perfil=_fn_perfil_sesgado if inyeccion_sesgo else None,
-    )
-
-    # Construir lista de matches enriquecida para el frontend a partir de la salida real de CP-SAT
+    # Extraer lista corta y descartados desde la salida del grafo
     matches_ui: list[dict[str, Any]] = []
-    for m_obj in salida_matching["lista_corta"]:
+    descartados_map: dict[tuple[str, str], dict[str, Any]] = {}
+
+    for m_obj in salida_grafo.get("matches") or []:
+        m_dict = m_obj.model_dump() if hasattr(m_obj, "model_dump") else dict(m_obj)
+        pid = m_dict["perfil_id"]
+        p_info = mapa_perfiles.get(pid, {})
+        desglose = dict(m_dict.get("desglose", {}))
+        for oid_desc, mot_desc in (desglose.get("ofertas_descartadas") or {}).items():
+            o_desc = mapa_ofertas.get(oid_desc, {})
+            descartados_map[(pid, oid_desc)] = {
+                "perfil_id": pid,
+                "nombre_perfil": p_info.get("nombre", pid),
+                "corregimiento_perfil": p_info.get("corregimiento", ""),
+                "oferta_id": oid_desc,
+                "puesto": o_desc.get("puesto", oid_desc),
+                "empresa": o_desc.get("empresa", ""),
+                "corregimiento_oferta": o_desc.get("corregimiento", ""),
+                "motivo": mot_desc,
+            }
+
+    for m_obj in salida_grafo.get("lista_corta") or []:
         m_dict = m_obj.model_dump() if hasattr(m_obj, "model_dump") else dict(m_obj)
         pid = m_dict["perfil_id"]
         oid = m_dict["oferta_id"]
@@ -375,8 +528,18 @@ def recalcular_pipeline_tablero(
             if isinstance(h, dict) and "skill_id" in h
         }
         desglose = dict(m_dict.get("desglose", {}))
-        cubiertas = list(desglose.get("habilidades_cubiertas", []))
+        skills_oferta = list(o_info.get("habilidades", []))
+        brechas_set = set(m_dict.get("brechas", []))
+        cubiertas = [s for s in skills_oferta if s not in brechas_set]
+        desglose["habilidades_cubiertas"] = cubiertas
+        desglose["cobertura_porcentaje"] = int(round(float(desglose.get("cobertura", 0.0)) * 100))
         desglose["evidencias"] = {s: evidencias_p.get(s, "") for s in cubiertas}
+
+        mensaje_sugerido = (
+            f"Buen día, {o_info.get('empresa', 'equipo')}: desde Puente les presentamos a "
+            f"{p_info.get('nombre', pid)} para la vacante de {o_info.get('puesto', oid)}. "
+            "Quedamos atentos para coordinar entrevista."
+        )
 
         matches_ui.append(
             {
@@ -394,15 +557,38 @@ def recalcular_pipeline_tablero(
                 "brechas": list(m_dict.get("brechas", [])),
                 "cursos_recomendados": rutas_por_par.get((pid, oid), []),
                 "explicacion": m_dict.get("explicacion", ""),
+                "mensaje_empresa": mensaje_sugerido,
+                "consentimiento_joven": True,
             }
         )
 
     estado["matches"] = matches_ui
-    estado["auditoria"] = salida_auditor["auditoria"]
+    estado["descartados"] = list(descartados_map.values())
+    estado["auditoria"] = salida_grafo.get("auditoria") or {}
+
+    # Registrar las decisiones de los nodos centrales en puente.tools.db y mantener compatibilidad
     if registrar_trazas:
-        estado["decisiones"] = [
-            _serializar_decision(d) for d in salida_auditor["decisiones"]
+        decisiones_nodos = [
+            _serializar_decision(d)
+            for d in (salida_grafo.get("decisiones") or [])
+            if _serializar_decision(d).get("agente") in ("matching", "formacion", "auditor")
         ]
+        # Si ya había decisiones manuales previas (orientador, mercado, perfil, guardrails), conservarlas antes
+        previas_manuales = [
+            d
+            for d in (estado.get("decisiones") or [])
+            if d.get("agente") not in ("matching", "formacion", "auditor")
+        ]
+        orden_agentes = {"matching": 0, "formacion": 1, "auditor": 2}
+        decisiones_nodos.sort(key=lambda d: orden_agentes.get(d.get("agente", ""), 99))
+
+        conn = _conectar_db_estado(estado)
+        try:
+            for d in decisiones_nodos:
+                db.registrar_decision(conn, d)
+        finally:
+            conn.close()
+        estado["decisiones"] = previas_manuales + decisiones_nodos
 
     # Sincronizar postulaciones preservando el estado de las que ya existían
     existentes = {
@@ -410,27 +596,47 @@ def recalcular_pipeline_tablero(
         for post in estado.get("postulaciones", [])
     }
     nuevas_postulaciones: list[dict[str, Any]] = list(estado.get("postulaciones", []))
-    for m in matches_ui:
-        par = (m["perfil_id"], m["oferta_id"])
-        if par not in existentes:
-            post_nuevo = {
-                "id": f"POST-{m['perfil_id']}-{m['oferta_id']}",
-                "perfil_id": m["perfil_id"],
-                "nombre_perfil": m["nombre_perfil"],
-                "oferta_id": m["oferta_id"],
-                "puesto": m["puesto"],
-                "empresa": m["empresa"],
-                "puntaje": m["puntaje"],
-                "estado": EstadoPostulacion.PRESELECCIONADO.value,
-                "comentario_orientador": "",
-                "archivos_generados": [],
-            }
-            nuevas_postulaciones.append(post_nuevo)
-            existentes[par] = post_nuevo
-        else:
-            existentes[par]["puntaje"] = m["puntaje"]
+    conn = _conectar_db_estado(estado)
+    try:
+        for m in matches_ui:
+            par = (m["perfil_id"], m["oferta_id"])
+            if par not in existentes:
+                fila_db = conn.execute(
+                    "SELECT id, estado FROM postulaciones WHERE perfil_id = ? AND oferta_id = ?",
+                    par,
+                ).fetchone()
+                if fila_db is None:
+                    post_db_id = db.crear_postulacion(
+                        conn, m["perfil_id"], m["oferta_id"], db.PRESELECCIONADO
+                    )
+                    est_db = EstadoPostulacion.PRESELECCIONADO.value
+                else:
+                    post_db_id = int(fila_db["id"])
+                    est_db = str(fila_db["estado"])
+                post_nuevo = {
+                    "id": f"POST-{m['perfil_id']}-{m['oferta_id']}",
+                    "db_id": post_db_id,
+                    "perfil_id": m["perfil_id"],
+                    "nombre_perfil": m["nombre_perfil"],
+                    "oferta_id": m["oferta_id"],
+                    "puesto": m["puesto"],
+                    "empresa": m["empresa"],
+                    "puntaje": m["puntaje"],
+                    "estado": est_db,
+                    "comentario_orientador": "",
+                    "mensaje_empresa": m["mensaje_empresa"],
+                    "consentimiento_joven": True,
+                    "archivos_generados": [],
+                }
+                nuevas_postulaciones.append(post_nuevo)
+                existentes[par] = post_nuevo
+            else:
+                existentes[par]["puntaje"] = m["puntaje"]
+    finally:
+        conn.close()
 
     estado["postulaciones"] = nuevas_postulaciones
+    estado["metricas"] = _calcular_metricas_impacto(estado)
     return estado
 
 
@@ -438,20 +644,34 @@ def calcular_matches_tablero(
     perfiles: list[dict[str, Any]],
     ofertas: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Calcula los matches ejecutando el pipeline real de Puente (sin inventar traslados faltantes)."""
+    """Calcula los matches ejecutando el grafo real de Puente."""
     estado_temp: dict[str, Any] = {
         "perfiles": copy.deepcopy(perfiles),
         "ofertas": copy.deepcopy(ofertas),
         "decisiones": [],
         "postulaciones": [],
+        "excluidos": [],
+        "consentimientos": [],
         "sesgo_inyectado_demo": False,
+        "_db_path": str(Path(tempfile.gettempdir()) / f"puente_calc_{uuid.uuid4().hex[:8]}.db"),
     }
     recalcular_pipeline_tablero(estado_temp, registrar_trazas=False)
     return estado_temp["matches"]
 
 
-def obtener_datos_iniciales_demo() -> dict[str, Any]:
-    """Construye el estado inicial ejecutando los módulos reales sobre datos de ejemplo (sintéticos)."""
+def obtener_datos_iniciales_demo(db_path: str | Path | None = None) -> dict[str, Any]:
+    """Construye el estado inicial ejecutando el grafo real sobre datos de ejemplo (sintéticos)."""
+    ruta_db = Path(
+        db_path
+        or os.getenv("PUENTE_DB")
+        or (Path(tempfile.gettempdir()) / f"puente_demo_{uuid.uuid4().hex[:8]}.db")
+    )
+    if ruta_db.exists() and db_path is None and not os.getenv("PUENTE_DB"):
+        try:
+            ruta_db.unlink()
+        except OSError:
+            pass
+
     perfiles = [
         {
             "id": "PERFIL-YARITZA",
@@ -538,7 +758,7 @@ def obtener_datos_iniciales_demo() -> dict[str, Any]:
         {
             "id": "OF-CHORRERA-01",
             "puesto": "Asistente de Caja y Atención en Tienda",
-            "empresa": "Supermercado Oeste S.A. ( Ficticia )",
+            "empresa": "Supermercado Oeste S.A. (Empresa de Prueba)",
             "corregimiento": "La Chorrera",
             "salario_mensual": 650.0,
             "horario": "Lunes a Viernes 08:00-16:30",
@@ -549,7 +769,7 @@ def obtener_datos_iniciales_demo() -> dict[str, Any]:
         {
             "id": "OF-VISTAALEGRE-02",
             "puesto": "Auxiliar de Mostrador e Inventario",
-            "empresa": "Distribuidora El Progreso ( Ficticia )",
+            "empresa": "Distribuidora El Progreso (Empresa de Prueba)",
             "corregimiento": "Vista Alegre",
             "salario_mensual": 640.0,
             "horario": "Lunes a Viernes 08:00-17:00",
@@ -560,7 +780,7 @@ def obtener_datos_iniciales_demo() -> dict[str, Any]:
         {
             "id": "OF-TOCUMEN-03",
             "puesto": "Cajero/a de Sucursal Este",
-            "empresa": "Comercial Aeropuerto S.A. ( Ficticia )",
+            "empresa": "Comercial Aeropuerto S.A. (Empresa de Prueba)",
             "corregimiento": "Tocumen",
             "salario_mensual": 650.0,
             "horario": "Lunes a Viernes 08:00-17:00",
@@ -571,7 +791,7 @@ def obtener_datos_iniciales_demo() -> dict[str, Any]:
         {
             "id": "OF-BLOQ-EDAD-04",
             "puesto": "Recepcionista y Atención Telefónica",
-            "empresa": "Servicios Balboa ( Ficticia )",
+            "empresa": "Servicios Balboa (Empresa de Prueba)",
             "corregimiento": "Bella Vista",
             "salario_mensual": 680.0,
             "horario": "Lunes a Viernes 08:00-17:00",
@@ -582,7 +802,7 @@ def obtener_datos_iniciales_demo() -> dict[str, Any]:
         {
             "id": "OF-BLOQ-SEXO-05",
             "puesto": "Ayudante de Despacho y Bodega",
-            "empresa": "Logística Istmeña ( Ficticia )",
+            "empresa": "Logística Istmeña (Empresa de Prueba)",
             "corregimiento": "Juan Díaz",
             "salario_mensual": 650.0,
             "horario": "Lunes a Viernes 07:30-16:30",
@@ -601,16 +821,58 @@ def obtener_datos_iniciales_demo() -> dict[str, Any]:
         "perfiles": perfiles,
         "ofertas": ofertas_base,
         "matches": [],
+        "descartados": [],
         "decisiones": [],
         "postulaciones": [],
+        "excluidos": [],
+        "consentimientos": [],
         "auditoria": {},
+        "metricas": {},
         "estado_grafo": "interrupt_orientador",
         "sesgo_inyectado_demo": False,
+        "_db_path": str(ruta_db),
     }
     return recalcular_pipeline_tablero(estado, registrar_trazas=True)
 
 
 ESTADO_GLOBAL: dict[str, Any] = obtener_datos_iniciales_demo()
+
+
+def desbloquear_oferta_con_motivo(
+    estado: dict[str, Any],
+    *,
+    oferta_id: str,
+    motivo: str,
+    orientador: str = "Orientadora Ana Gómez",
+) -> dict[str, Any]:
+    """Desbloquea una oferta bloqueada registrando el motivo del orientador como Decision (#49)."""
+    req = DesbloquearOfertaRequest(
+        oferta_id=oferta_id,
+        motivo=motivo,
+        orientador=orientador,
+    )
+    oferta_obj = next(
+        (o for o in estado.get("ofertas", []) if o["id"] == req.oferta_id),
+        None,
+    )
+    if oferta_obj is None:
+        raise ErrorValidacionTablero(f"No existe la oferta '{req.oferta_id}'.")
+    if not oferta_obj.get("bloqueada"):
+        raise ErrorValidacionTablero(f"La oferta '{req.oferta_id}' no está bloqueada.")
+
+    oferta_obj["bloqueada"] = False
+    ahora = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _registrar_decision_db(
+        estado,
+        {
+            "timestamp": ahora,
+            "agente": "orientador_humano",
+            "entrada_resumen": f"Desbloquear oferta {req.oferta_id}",
+            "salida_resumen": f"Oferta {req.oferta_id} habilitada para el Matching",
+            "razon": f"{req.orientador}: {req.motivo}",
+        },
+    )
+    return recalcular_pipeline_tablero(estado, registrar_trazas=True)
 
 
 def procesar_accion_orientador(
@@ -620,17 +882,24 @@ def procesar_accion_orientador(
     perfil_id: str,
     oferta_id: str,
     nota_edicion: str = "",
+    mensaje_empresa: str = "",
+    orientador: str = "Orientadora Ana Gómez",
+    consentimiento_joven: bool = True,
+    consentidos: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Ejecuta aprobar, editar, quitar_candidato o rechazar validando IDs, existencia del match y estado preseleccionado."""
+    """Ejecuta aprobar, editar, quitar/quitar_candidato o rechazar reanudando el grafo y registrando en SQLite (#49)."""
     req = AccionOrientadorRequest(
         accion=accion,  # type: ignore[arg-type]
         perfil_id=perfil_id,
         oferta_id=oferta_id,
         nota_edicion=nota_edicion,
+        mensaje_empresa=mensaje_empresa,
+        orientador=orientador,
+        consentimiento_joven=consentimiento_joven,
+        consentidos=consentidos,
     )
     ahora = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    # Verificar que el par exista en matches y que su postulación esté en estado 'preseleccionado'
     match_activo = next(
         (
             m
@@ -657,7 +926,44 @@ def procesar_accion_orientador(
             f"'{post_activo.get('estado')}' y solo se puede actuar sobre estado 'preseleccionado'."
         )
 
-    if req.accion == "quitar_candidato":
+    grafo = estado.get("_grafo")
+    cfg_grafo = estado.get("_config_grafo")
+
+    # 1. EDITAR: cambia solo el mensaje a la empresa y la nota del orientador; no recalcula (#41, #49)
+    if req.accion == "editar":
+        if req.mensaje_empresa:
+            match_activo["mensaje_empresa"] = req.mensaje_empresa
+            post_activo["mensaje_empresa"] = req.mensaje_empresa
+        if req.nota_edicion:
+            match_activo["explicacion"] = (
+                f"{match_activo['explicacion']} [Nota orientador: {req.nota_edicion}]"
+            )
+            post_activo["comentario_orientador"] = req.nota_edicion
+        _registrar_decision_db(
+            estado,
+            {
+                "timestamp": ahora,
+                "agente": "orientador_humano",
+                "entrada_resumen": f"Editar mensaje/nota para {req.perfil_id} -> {req.oferta_id}",
+                "salida_resumen": (
+                    f"Nota: '{req.nota_edicion}' | Mensaje: '{req.mensaje_empresa or post_activo.get('mensaje_empresa', '')}'"
+                ),
+                "razon": f"{req.orientador}: edición de mensaje y nota sin recalcular el solver (#49).",
+            },
+        )
+        estado["metricas"] = _calcular_metricas_impacto(estado)
+        return estado
+
+    # 2. QUITAR CANDIDATO: excluye la pareja, reanuda el grafo con Command(resume={"accion": "quitar", ...}) y recalcula (#49)
+    if req.accion in ("quitar_candidato", "quitar"):
+        exclusion = {
+            "perfil_id": req.perfil_id,
+            "oferta_id": req.oferta_id,
+            "origen": "orientador",
+            "motivo": req.nota_edicion or "Retirado por el orientador de la lista corta",
+            "timestamp": ahora,
+        }
+        estado.setdefault("excluidos", []).append(exclusion)
         estado["perfiles"] = [
             p for p in estado["perfiles"] if p["id"] != req.perfil_id
         ]
@@ -667,19 +973,60 @@ def procesar_accion_orientador(
                 post["comentario_orientador"] = (
                     req.nota_edicion or "Retirado por el orientador; Matching recalculado."
                 )
-        estado["decisiones"].append(
+
+        if grafo is not None and cfg_grafo is not None:
+            try:
+                est_actual = grafo.get_state(cfg_grafo).values
+                resueltas = [
+                    v for v in (est_actual.get("vacantes_resueltas") or []) if v != req.oferta_id
+                ]
+                grafo.update_state(cfg_grafo, {"vacantes_resueltas": resueltas})
+                grafo.invoke(
+                    Command(
+                        resume={
+                            "accion": "quitar",
+                            "orientador": req.orientador,
+                            "oferta_id": req.oferta_id,
+                            "perfil_id": req.perfil_id,
+                            "nota": req.nota_edicion or "quitado de la lista corta",
+                        }
+                    ),
+                    cfg_grafo,
+                )
+            except Exception:
+                pass
+
+        _registrar_decision_db(
+            estado,
             {
                 "timestamp": ahora,
                 "agente": "orientador_humano",
-                "entrada_resumen": f"Quitar candidato {req.perfil_id} de la lista corta",
-                "salida_resumen": f"Matching recalculado con {len(estado['perfiles'])} perfil(es) restantes",
+                "entrada_resumen": f"Quitar candidato {req.perfil_id} de {req.oferta_id}",
+                "salida_resumen": f"Pareja ({req.perfil_id}, {req.oferta_id}) excluida; Matching recalculado",
                 "razon": req.nota_edicion
                 or "El orientador retiró al candidato y solicitó recálculo de asignaciones.",
-            }
+            },
         )
         return recalcular_pipeline_tablero(estado, registrar_trazas=True)
 
+    # 3. RECHAZAR: pasa la postulación a no_seleccionado en SQLite y reanuda el grafo si corresponde
     if req.accion == "rechazar":
+        conn = _conectar_db_estado(estado)
+        try:
+            fila = conn.execute(
+                "SELECT id, estado FROM postulaciones WHERE perfil_id = ? AND oferta_id = ?",
+                (req.perfil_id, req.oferta_id),
+            ).fetchone()
+            if fila is not None and fila["estado"] == db.PRESELECCIONADO:
+                db.cambiar_estado(
+                    conn,
+                    int(fila["id"]),
+                    db.NO_SELECCIONADO,
+                    req.nota_edicion or "Rechazado por el orientador humano.",
+                )
+        finally:
+            conn.close()
+
         post_activo["estado"] = EstadoPostulacion.NO_SELECCIONADO.value
         post_activo["comentario_orientador"] = (
             req.nota_edicion or "Rechazado por el orientador humano."
@@ -691,130 +1038,167 @@ def procesar_accion_orientador(
                 m["perfil_id"] == req.perfil_id and m["oferta_id"] == req.oferta_id
             )
         ]
-        estado["decisiones"].append(
+
+        if grafo is not None and cfg_grafo is not None:
+            restantes_oferta = [
+                m for m in estado["matches"] if m["oferta_id"] == req.oferta_id
+            ]
+            if not restantes_oferta:
+                try:
+                    grafo.invoke(
+                        Command(
+                            resume={
+                                "accion": "rechazar",
+                                "orientador": req.orientador,
+                                "oferta_id": req.oferta_id,
+                                "nota": req.nota_edicion or "rechazado por el orientador",
+                            }
+                        ),
+                        cfg_grafo,
+                    )
+                    estado["interrupt_pendiente"] = aprobacion_pendiente(grafo, cfg_grafo)
+                except Exception:
+                    pass
+
+        _registrar_decision_db(
+            estado,
             {
                 "timestamp": ahora,
                 "agente": "orientador_humano",
                 "entrada_resumen": f"Rechazar match {req.perfil_id} -> {req.oferta_id}",
                 "salida_resumen": "Estado actualizado a no_seleccionado; no se envían datos a la empresa",
                 "razon": req.nota_edicion or "Rechazado en revisión humana previa al envío.",
-            }
+            },
         )
+        estado["metricas"] = _calcular_metricas_impacto(estado)
         return estado
 
-    if req.accion == "editar":
-        match_activo["explicacion"] = (
-            f"{match_activo['explicacion']} [Nota orientador: {req.nota_edicion}]"
-        )
-        post_activo["comentario_orientador"] = req.nota_edicion
-        estado["decisiones"].append(
-            {
-                "timestamp": ahora,
-                "agente": "orientador_humano",
-                "entrada_resumen": f"Editar match {req.perfil_id} -> {req.oferta_id}",
-                "salida_resumen": f"Observación agregada antes de postulación: '{req.nota_edicion}'",
-                "razon": "Ajuste manual del orientador antes de autorizar el envío.",
-            }
-        )
-        return estado
-
+    # 4. APROBAR: exige el consentimiento del joven, registra Consentimiento + Decision y reanuda el grafo con Command(resume=...) (#49)
     if req.accion == "aprobar":
-        RUTA_OUTBOX.mkdir(parents=True, exist_ok=True)
-        archivo_msg = _ruta_segura_en_outbox(
-            RUTA_OUTBOX, f"telegram_{req.perfil_id}_{req.oferta_id}.txt"
+        lista_consentidos = (
+            req.consentidos
+            if req.consentidos is not None
+            else ([req.perfil_id] if req.consentimiento_joven else [])
         )
-        archivo_ics = _ruta_segura_en_outbox(
-            RUTA_OUTBOX, f"entrevista_{req.perfil_id}_{req.oferta_id}.ics"
-        )
-        archivo_pdf = _ruta_segura_en_outbox(
+        if not req.consentimiento_joven or req.perfil_id not in lista_consentidos:
+            raise ErrorValidacionTablero(
+                f"El candidato {req.perfil_id} no tiene el consentimiento confirmado ('el joven consintió'). "
+                "Postulación no envía ningún dato a la empresa sin consentimiento."
+            )
+
+        #Validación de ruta segura en outbox para el par antes de ejecutar
+        _ = _ruta_segura_en_outbox(
             RUTA_OUTBOX, f"cv_{req.perfil_id}_{req.oferta_id}.pdf"
         )
 
-        archivo_msg.write_text(
-            f"[PUENTE - LISTA CORTA APROBADA POR ORIENTADOR]\n"
-            f"Candidato: {req.perfil_id}\nOferta: {req.oferta_id}\n"
-            f"Observación: {req.nota_edicion or 'Cumple habilidades con evidencia y restricciones de traslado.'}\n",
-            encoding="utf-8",
+        consentimiento: Consentimiento = {
+            "perfil_id": req.perfil_id,
+            "oferta_id": req.oferta_id,
+            "otorgado": True,
+            "medio": "orientador",
+            "timestamp": ahora,
+        }
+        estado.setdefault("consentimientos", []).append(consentimiento)
+        _registrar_decision_db(
+            estado,
+            {
+                "timestamp": ahora,
+                "agente": "consentimiento",
+                "entrada_resumen": f"{req.perfil_id} -> {req.oferta_id}",
+                "salida_resumen": "Consentimiento confirmado (medio: orientador)",
+                "razon": f"{req.orientador} confirmó que el joven consintió el envío de su CV sin PII a la empresa.",
+            },
         )
-        archivo_ics.write_text(
-            "BEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VEVENT\n"
-            f"SUMMARY:Entrevista Puente {req.perfil_id} - {req.oferta_id}\n"
-            "END:VEVENT\nEND:VCALENDAR\n",
-            encoding="utf-8",
-        )
-        try:
-            from fpdf import FPDF
 
-            pdf = FPDF()
-            pdf.add_page()
-            pdf.set_font("Helvetica", size=12)
-            pdf.cell(
-                0,
-                10,
-                text=f"PUENTE - Resumen de Habilidades Verificadas ({req.perfil_id})",
-                new_x="LMARGIN",
-                new_y="NEXT",
+        # Reanudar el grafo real con Command(resume=...)
+        archivos_generados: list[str] = []
+        if grafo is not None and cfg_grafo is not None:
+            est_actual = grafo.get_state(cfg_grafo).values
+            resueltas = [
+                v for v in (est_actual.get("vacantes_resueltas") or []) if v != req.oferta_id
+            ]
+            grafo.update_state(cfg_grafo, {"vacantes_resueltas": resueltas})
+            salida_resume = grafo.invoke(
+                Command(
+                    resume={
+                        "accion": "aprobar",
+                        "orientador": req.orientador,
+                        "oferta_id": req.oferta_id,
+                        "mensaje": req.mensaje_empresa
+                        or post_activo.get("mensaje_empresa")
+                        or None,
+                        "nota": req.nota_edicion or "Aprobado con consentimiento del joven",
+                        "consentidos": [req.perfil_id],
+                    }
+                ),
+                cfg_grafo,
             )
-            pdf.set_font("Helvetica", size=10)
-            pdf.cell(
-                0,
-                8,
-                text=f"Vacante objetivo: {req.oferta_id} (Sin PII: sin cedula, telefono ni direccion exacta)",
-                new_x="LMARGIN",
-                new_y="NEXT",
-            )
-            perfil_obj = next(
-                (p for p in estado["perfiles"] if p["id"] == req.perfil_id), None
-            )
-            if perfil_obj:
-                pdf.cell(
-                    0,
-                    8,
-                    text=f"Corregimiento: {perfil_obj.get('corregimiento', '')}",
-                    new_x="LMARGIN",
-                    new_y="NEXT",
+            estado["interrupt_pendiente"] = aprobacion_pendiente(grafo, cfg_grafo)
+            archivos_generados = list(
+                (estado.get("_ultimos_archivos_postulacion") or {}).get(
+                    (req.perfil_id, req.oferta_id), []
                 )
-                for h in perfil_obj.get("habilidades", []):
-                    sid = h.get("skill_id", "") if isinstance(h, dict) else str(h)
-                    ev = h.get("evidencia", "") if isinstance(h, dict) else ""
-                    pdf.multi_cell(0, 7, text=f'- {sid}: "{ev}"')
-            pdf.output(str(archivo_pdf))
-        except Exception:
-            archivo_pdf.write_bytes(b"%PDF-1.4\n% Puente CV Verificado\n%%EOF\n")
+            )
+            # Sincronizar decisiones generadas por aprobacion y postulacion en el estado en memoria
+            for d_obj in (salida_resume.get("decisiones") or []):
+                d_ser = _serializar_decision(d_obj)
+                if d_ser.get("agente") in ("aprobacion", "postulacion") and d_ser not in estado["decisiones"]:
+                    estado["decisiones"].append(d_ser)
 
-        post_activo["estado"] = EstadoPostulacion.ENVIADO.value
-        post_activo["comentario_orientador"] = (
-            req.nota_edicion or "Aprobado y enviado a la empresa."
-        )
-        post_activo["archivos_generados"] = [
-            str(archivo_pdf.name),
-            str(archivo_msg.name),
-            str(archivo_ics.name),
-        ]
+        # Si el grafo no tenía la vacante en el hilo actual, invocar postular() directamente contra SQLite y outbox/
+        if not archivos_generados:
+            modelos_perfiles, _, modelos_ofertas, _ = _construir_modelos_desde_estado(estado)
+            perfiles_map = {p.id: p for p in modelos_perfiles}
+            ofertas_map = {o.id: o for o in modelos_ofertas}
+            m_schema = Match(
+                perfil_id=req.perfil_id,
+                oferta_id=req.oferta_id,
+                puntaje=match_activo["puntaje"],
+                desglose=match_activo["desglose"],
+                brechas=match_activo["brechas"],
+                explicacion=match_activo["explicacion"],
+            )
+            RUTA_OUTBOX.mkdir(parents=True, exist_ok=True)
+            conn = _conectar_db_estado(estado)
+            try:
+                res_post = postular(
+                    [m_schema],
+                    perfiles_map,
+                    ofertas_map,
+                    aprobacion={
+                        "orientador": req.orientador,
+                        "timestamp": ahora,
+                        "aprobados": [{"perfil_id": req.perfil_id, "oferta_id": req.oferta_id}],
+                    },
+                    conn=conn,
+                    outbox=RUTA_OUTBOX,
+                )
+            finally:
+                conn.close()
+            archivos_generados = [arch.name for arch in res_post.archivos]
+            for d_post in res_post.decisiones:
+                estado["decisiones"].append(_serializar_decision(d_post))
 
-        estado["decisiones"].append(
+        _registrar_decision_db(
+            estado,
             {
                 "timestamp": ahora,
                 "agente": "orientador_humano",
-                "entrada_resumen": f"Aprobar match {req.perfil_id} -> {req.oferta_id} (interrupt reanudado)",
-                "salida_resumen": "Estado: preseleccionado -> aprobado",
+                "entrada_resumen": f"Aprobar match {req.perfil_id} -> {req.oferta_id} (interrupt reanudado con consentimiento)",
+                "salida_resumen": f"Estado: preseleccionado -> aprobado -> enviado | Archivos: {', '.join(archivos_generados)}",
                 "razon": req.nota_edicion
-                or "El orientador verificó evidencias, traslado y ausencia de sesgo.",
-            }
+                or f"{req.orientador} verificó evidencias, traslado, ausencia de sesgo y consentimiento del joven.",
+            },
         )
-        estado["decisiones"].append(
-            {
-                "timestamp": ahora,
-                "agente": "postulacion",
-                "entrada_resumen": f"Ejecutar herramientas para {req.perfil_id} -> {req.oferta_id}",
-                "salida_resumen": (
-                    f"Estado: enviado | Archivos en outbox/: "
-                    f"{archivo_pdf.name}, {archivo_msg.name}, {archivo_ics.name}"
-                ),
-                "razon": "Generación de CV PDF sin PII, envío a empresa y cita .ics tras aprobación humana.",
-            }
+
+        post_activo["estado"] = EstadoPostulacion.ENVIADO.value
+        post_activo["consentimiento_joven"] = True
+        post_activo["comentario_orientador"] = (
+            req.nota_edicion or "Aprobado con consentimiento del joven y enviado a la empresa."
         )
+        post_activo["archivos_generados"] = archivos_generados
         estado["estado_grafo"] = "postulacion_ejecutada"
+        estado["metricas"] = _calcular_metricas_impacto(estado)
         return estado
 
     return estado
@@ -831,7 +1215,7 @@ def analizar_nueva_oferta_texto(
     habilidades: list[str],
     fuente: str = "Cargada desde Tablero Web (sintética)",
 ) -> dict[str, Any]:
-    """Agrega una nueva oferta validada con Pydantic y Ley 11 de 2005 usando ID único con uuid."""
+    """Agrega una nueva oferta validada con Pydantic y `puente.rules.discriminacion` usando ID único con uuid."""
     req = NuevaOfertaRequest(
         puesto=puesto,
         empresa=empresa,
@@ -845,14 +1229,15 @@ def analizar_nueva_oferta_texto(
 
     patrones_inyeccion = ("ignora", "olvida tus instrucciones", "eres ahora", "system prompt")
     if any(p in texto_lower for p in patrones_inyeccion):
-        estado["decisiones"].append(
+        _registrar_decision_db(
+            estado,
             {
                 "timestamp": ahora,
                 "agente": "guardrails",
                 "entrada_resumen": f"Oferta '{req.puesto}' con intento de prompt injection",
                 "salida_resumen": "Inyección marcada; el texto se procesa únicamente como dato literal",
                 "razon": "Regla determinística anti-inyección activada antes de invocar al modelo.",
-            }
+            },
         )
 
     bloqueada, alertas = _evaluar_reglas_discriminacion(req.requisitos_texto)
@@ -860,7 +1245,6 @@ def analizar_nueva_oferta_texto(
     sufijo_uuid = uuid.uuid4().hex[:8].upper()
     nuevo_id = f"OF-{sufijo_uuid}"
 
-    # Validar contra el esquema real Oferta de puente.schemas
     _ = Oferta(
         id=nuevo_id,
         puesto=req.puesto,
@@ -893,7 +1277,8 @@ def analizar_nueva_oferta_texto(
         "fuente": fuente,
     }
     estado["ofertas"].append(nueva_oferta)
-    estado["decisiones"].append(
+    _registrar_decision_db(
+        estado,
         {
             "timestamp": ahora,
             "agente": "mercado",
@@ -904,7 +1289,7 @@ def analizar_nueva_oferta_texto(
                 if alertas
                 else "Oferta validada sin requisitos discriminatorios y mapeada a taxonomía."
             ),
-        }
+        },
     )
     return recalcular_pipeline_tablero(estado, registrar_trazas=True)
 
@@ -945,7 +1330,6 @@ def registrar_nuevo_perfil(
         for sid in req.habilidades
     ]
 
-    # Validar contra el esquema real Perfil de puente.schemas
     _ = Perfil(
         id=nuevo_id,
         nombre=req.nombre,
@@ -980,14 +1364,15 @@ def registrar_nuevo_perfil(
         "habilidades": habs,
     }
     estado["perfiles"].append(nuevo_p)
-    estado["decisiones"].append(
+    _registrar_decision_db(
+        estado,
         {
             "timestamp": ahora,
             "agente": "perfil",
             "entrada_resumen": f"Nuevo perfil {nuevo_id} ({req.corregimiento})",
             "salida_resumen": f"{len(habs)} habilidad(es) con evidencia literal; Matching recalculado",
             "razon": "Extracción de habilidades con cita literal de experiencia informal.",
-        }
+        },
     )
     return recalcular_pipeline_tablero(estado, registrar_trazas=True)
 
@@ -1037,14 +1422,14 @@ def cargar_desde_catalogo_data(
     tipo: str,
     item_id: str,
 ) -> dict[str, Any]:
-    """Carga una oferta o perfil de ejemplo y ejecuta las reglas reales del sistema."""
+    """Carga una oferta o perfil de ejemplo y ejecuta el grafo real del sistema."""
     req = CargarDataRequest(tipo=tipo, item_id=item_id)  # type: ignore[arg-type]
     if req.tipo == "oferta":
         if "CT11" in req.item_id:
             return analizar_nueva_oferta_texto(
                 estado,
                 puesto="Vendedor de Mostrador",
-                empresa="Comercial Central ( Ficticia )",
+                empresa="Comercial Central (Empresa de Prueba)",
                 corregimiento="Bella Vista",
                 salario_mensual=660.0,
                 requisitos_texto="Se busca joven de 18 a 25 años con excelente buena presencia y enviar foto en el CV.",
@@ -1055,7 +1440,7 @@ def cargar_desde_catalogo_data(
             return analizar_nueva_oferta_texto(
                 estado,
                 puesto="Auxiliar de Bodega Este",
-                empresa="Logística Tocumen S.A. ( Ficticia )",
+                empresa="Logística Tocumen S.A. (Empresa de Prueba)",
                 corregimiento="Tocumen",
                 salario_mensual=640.0,
                 requisitos_texto="Organización de inventario y recepción de mercancía en sucursal Tocumen.",
@@ -1065,7 +1450,7 @@ def cargar_desde_catalogo_data(
         return analizar_nueva_oferta_texto(
             estado,
             puesto="Cajero/a de Sucursal Oeste",
-            empresa="Supermercados del Istmo ( Ficticia )",
+            empresa="Supermercados del Istmo (Empresa de Prueba)",
             corregimiento="La Chorrera",
             salario_mensual=650.0,
             requisitos_texto="Cobro en caja, atención a clientes y cuadre diario en La Chorrera.",
@@ -1098,6 +1483,27 @@ def cargar_desde_catalogo_data(
     )
 
 
+def serializar_estado_publico(estado: dict[str, Any]) -> dict[str, Any]:
+    """Construye el JSON serializable del estado (excluyendo objetos internos de LangGraph)."""
+    conteo_embudo = {est: 0 for est in ESTADOS_POSTULACION}
+    conteo_embudo["perfil_listo"] = len(estado.get("perfiles", []))
+    for post in estado.get("postulaciones", []):
+        est = post.get("estado", "preseleccionado")
+        if est in conteo_embudo:
+            conteo_embudo[est] += 1
+
+    payload = {
+        k: v
+        for k, v in estado.items()
+        if not k.startswith("_")
+    }
+    payload["conteo_embudo"] = conteo_embudo
+    payload["catalogo_data"] = listar_catalogo_data()
+    payload["decisiones_db"] = _leer_decisiones_db(estado)
+    payload["metricas"] = _calcular_metricas_impacto(estado)
+    return payload
+
+
 async def _leer_json_validado(request: Request) -> tuple[dict[str, Any] | None, JSONResponse | None]:
     """Verifica Content-Type: application/json (415) y parsea el cuerpo JSON (422 si es inválido)."""
     ctype = request.headers.get("content-type", "").lower()
@@ -1127,16 +1533,7 @@ async def endpoint_index(_request: Request) -> FileResponse:
 
 
 async def endpoint_estado(_request: Request) -> JSONResponse:
-    conteo_embudo = {est: 0 for est in ESTADOS_POSTULACION}
-    conteo_embudo["perfil_listo"] = len(ESTADO_GLOBAL["perfiles"])
-    for post in ESTADO_GLOBAL["postulaciones"]:
-        est = post.get("estado", "preseleccionado")
-        if est in conteo_embudo:
-            conteo_embudo[est] += 1
-    payload = dict(ESTADO_GLOBAL)
-    payload["conteo_embudo"] = conteo_embudo
-    payload["catalogo_data"] = listar_catalogo_data()
-    return JSONResponse(payload)
+    return JSONResponse(serializar_estado_publico(ESTADO_GLOBAL))
 
 
 async def endpoint_accion_orientador(request: Request) -> JSONResponse:
@@ -1151,6 +1548,29 @@ async def endpoint_accion_orientador(request: Request) -> JSONResponse:
             perfil_id=req.perfil_id,
             oferta_id=req.oferta_id,
             nota_edicion=req.nota_edicion,
+            mensaje_empresa=req.mensaje_empresa,
+            orientador=req.orientador,
+            consentimiento_joven=req.consentimiento_joven,
+            consentidos=req.consentidos,
+        )
+    except ValidationError as exc:
+        return JSONResponse({"detail": exc.errors(include_context=False)}, status_code=422)
+    except ErrorValidacionTablero as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
+    return await endpoint_estado(request)
+
+
+async def endpoint_desbloquear_oferta(request: Request) -> JSONResponse:
+    datos, err_resp = await _leer_json_validado(request)
+    if err_resp is not None or datos is None:
+        return err_resp  # type: ignore[return-value]
+    try:
+        req = DesbloquearOfertaRequest.model_validate(datos)
+        desbloquear_oferta_con_motivo(
+            ESTADO_GLOBAL,
+            oferta_id=req.oferta_id,
+            motivo=req.motivo,
+            orientador=req.orientador,
         )
     except ValidationError as exc:
         return JSONResponse({"detail": exc.errors(include_context=False)}, status_code=422)
@@ -1250,6 +1670,7 @@ app = Starlette(
         Route("/", endpoint_index, methods=["GET"]),
         Route("/api/estado", endpoint_estado, methods=["GET"]),
         Route("/api/orientador/accion", endpoint_accion_orientador, methods=["POST"]),
+        Route("/api/ofertas/desbloquear", endpoint_desbloquear_oferta, methods=["POST"]),
         Route("/api/ofertas", endpoint_nueva_oferta, methods=["POST"]),
         Route("/api/perfiles", endpoint_nuevo_perfil, methods=["POST"]),
         Route("/api/cargar-data", endpoint_cargar_data, methods=["POST"]),

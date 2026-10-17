@@ -50,7 +50,7 @@ Copiadas del [issue #41](https://github.com/HackathonFISC/equipo-01/issues/41), 
 
 ### Cierre
 
-Congelar funciones a las 08:00 del 17 de octubre (H20), congelar código a las 10:30 (H22:30) y tag `final-24h` a las 11:00 (H23), nunca después de las 11:30. La hora 0 está sin confirmar y se planificó con la más temprana (12:00).
+Congelar funciones a las 08:00 del 17 de octubre (H20), congelar código a las 10:30 (H22:30) y tag `final-24h` a las 11:00 (H23), nunca después de las 11:30. La hora 0 fue a las 12:00 del 16 de octubre (confirmado por @jesus12ga).
 
 ## Plantilla
 

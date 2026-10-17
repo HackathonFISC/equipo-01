@@ -15,6 +15,7 @@ from puente.agents.mercado import OfertaExtraida
 from puente.llm import ErrorLLM, clave_grabacion, configuracion, generar_estructurado, generar_texto
 
 VARIABLES = (
+    "ANTHROPIC_WORKSPACE_ID",
     "LLM_PROVEEDOR",
     "PUENTE_MODELO_LLM",
     "LLM_MODO",
@@ -394,6 +395,23 @@ def test_cliente_real_se_crea_perezoso_con_reintentos_y_timeout(monkeypatch):
     timeout = creados[0]["timeout"]
     assert timeout.read == 40.0 and timeout.connect == 5.0  # corto: la demo no se cuelga minutos
 
+
+def test_workspace_id_va_como_encabezado_solo_si_se_define(monkeypatch):
+    creados = []
+
+    def falso(**kwargs):
+        creados.append(kwargs)
+        return ClienteAnthropic(respuesta(parsed=Salida(respuesta="ok")))
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "clave-de-prueba-no-real")
+    monkeypatch.setattr(anthropic, "Anthropic", falso)
+    generar_estructurado("a", Salida)
+    assert creados[0]["default_headers"] is None  # clave de un workspace: no hace falta el encabezado
+
+    llm._clientes.clear()
+    monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", " wrkspc_prueba ")
+    generar_estructurado("b", Salida)
+    assert creados[1]["default_headers"] == {"anthropic-workspace-id": "wrkspc_prueba"}
 
 def test_fallbacks_del_servidor_apagado_por_defecto_y_activable(monkeypatch):
     assert llm.FALLBACKS_SERVIDOR_ACTIVO is False

@@ -197,6 +197,101 @@ def test_detectar_corregimiento_prefiere_el_especifico():
     assert detectar_corregimiento("vivo lejos") is None
 
 
+def test_direccion_sin_etiqueta_deja_solo_corregimiento():
+    """#63: la dirección contada en una respuesta suelta, sin "Dirección:"."""
+    texto = (
+        "Tengo 22 años, soy Marisol Ficticia, cédula 8-000-0000, teléfono 6000-0000, "
+        "vivo en Calle 5ta, casa 12, Barrio Ficticio, Arraiján."
+    )
+    assert quitar_pii(texto) == (
+        "Tengo 22 años, soy Marisol Ficticia, cédula [CEDULA], teléfono [TELEFONO], vivo en Corregimiento: Arraiján."
+    )
+
+
+@pytest.mark.parametrize(
+    "texto, esperado",
+    [
+        ("Resido en la Urb. Los Pinos, edificio 4, apto. 3B, Burunga.", "Resido en Corregimiento: Burunga."),
+        (
+            "Mi casa queda en Residencial Ficticio, frente al chino, Herrera. Atiendo la fonda.",
+            "Mi casa queda en Corregimiento: Herrera. Atiendo la fonda.",
+        ),
+        ("vivo por Avenida Ficticia, casa #12", "vivo por [DIRECCION]"),
+        ("vivo en Los Pinos, Arraiján", "vivo en Corregimiento: Arraiján"),
+        # Como se escribe en un chat: sin mayúsculas, sin comas y sin acentos.
+        (
+            "vivo en calle 5ta casa 12 barrio ficticio arraijan y atiendo la fonda",
+            "vivo en Corregimiento: Arraiján y atiendo la fonda",
+        ),
+        # Sin "vivo en": los elementos con palabra clave bastan.
+        ("Calle 5ta, casa 12, Barrio Ficticio, Arraiján", "Corregimiento: Arraiján"),
+        (
+            "Vivo en Calle 5ta, Arraiján. Atiendo la fonda de mi mamá y manejo la caja.",
+            "Vivo en Corregimiento: Arraiján. Atiendo la fonda de mi mamá y manejo la caja.",
+        ),
+    ],
+)
+def test_direccion_sin_etiqueta_variantes(texto, esperado):
+    assert quitar_pii(texto) == esperado
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Atiendo la fonda de mi mamá y manejo la caja.",
+        "Trabajé dos años en un restaurante de La Chorrera.",
+        "Tengo 20 años y vivo en La Chorrera.",  # solo el corregimiento: nada que quitar
+        "vivo en el corregimiento de Burunga",
+        "Barrio Colón",  # el corregimiento del formulario también pasa por limpiar_entrada (#56)
+        "Limpio casas 3 días por semana y cuido niños en casa 2 días.",  # cantidades, no números de casa
+        "Ayudo a los vecinos del barrio con sus mandados.",
+        "Vivo con mi mamá y mis hermanos.",
+        "vivo en Panamá desde niña",
+        "Me gustaría aprender a manejar la caja, pero nunca lo he hecho.",
+        "vivo en Burunga, cerca de la fonda de mi mamá donde atiendo clientes",
+    ],
+)
+def test_direccion_sin_etiqueta_no_borra_de_mas(texto):
+    assert quitar_pii(texto) == texto
+
+
+def test_quitar_pii_dos_veces_da_lo_mismo():
+    # Guardrails limpia el estado y Perfil vuelve a limpiar: la segunda pasada no puede tomar
+    # "[DIRECCION]" por una etiqueta y borrar el resto de la línea.
+    assert quitar_pii(quitar_pii("vivo en Calle 5ta. Atiendo la fonda")) == "vivo en [DIRECCION]. Atiendo la fonda"
+    for texto in (
+        "Vivía en Barriada Ficticia, ahora resido en Pedregal.",
+        "vivo en Calle 5ta, casa 12, Barrio Ficticio, Arraiján.",
+        "Dirección: Calle 5, casa 23, Barrio Colón, La Chorrera\nCajero",
+    ):
+        una = quitar_pii(texto)
+        assert quitar_pii(una) == una
+
+
+def test_direccion_de_la_entrevista_no_llega_al_llm(taxonomia):
+    """Caso PER-04 de los evals de #13: entrevista sin CV, la dirección va en una respuesta suelta."""
+    entrada = {
+        "id": "marisol", "nombre": "Marisol Ficticia", "edad": 22, "corregimiento": "Arraiján",
+        "respuestas": [
+            "Tengo 22 años, soy Marisol Ficticia, cédula 8-000-0000, teléfono 6000-0000, "
+            "vivo en Calle 5ta, casa 12, Barrio Ficticio, Arraiján.",
+            "Trabajo solo los sábados.",
+            "Limpio casas y oficinas los sábados y trabajo en equipo con mi prima.",
+            "No he hecho voluntariado.",
+            "Me gustaría aprender a manejar la caja, pero nunca lo he hecho.",
+        ],
+    }
+    llm = LLMFalso({"habilidades": [{"skill_id": "trabajo_equipo", "evidencia": "trabajo en equipo con mi prima"}]})
+    perfil, _ = construir_perfil(entrada, taxonomia=taxonomia, normalizar=normalizar_falso, llm=llm)
+
+    enviado = llm.prompts[0].casefold()
+    for dato in ("8-000-0000", "6000-0000", "calle 5ta", "casa 12", "barrio ficticio"):
+        assert dato not in enviado
+    assert "corregimiento: arraiján" in enviado
+    assert "limpio casas y oficinas los sábados y trabajo en equipo con mi prima" in enviado
+    assert [h.skill_id for h in perfil.habilidades] == ["trabajo_equipo"]
+
+
 # ---------------------------------------------------------------- evidencia y taxonomía
 
 

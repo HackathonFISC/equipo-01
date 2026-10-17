@@ -6,17 +6,47 @@ recepcion_mercancia,recibir mercancías,recepción de mercancía|recibir product
 reposicion_productos,colocar las mercancías en las estanterías,reposición|surtir estantes|acomodar productos,http://data.europa.eu/esco/skill/7e9daad3-8604-4839-af9b-dc6f8db3ef68
 registro_datos,procesar datos,registro de datos|entrada de datos|captación de datos,http://data.europa.eu/esco/skill/f2d57f41-43b4-4f5b-8100-3df5c21eda50
 excel_basico,utilizar hojas de cálculo,Excel básico|hojas de cálculo|planillas|microsoft excel,http://data.europa.eu/esco/skill/1225b032-7ead-464c-9072-64097d9a4b62
-excel,Microsoft Excel,hojas de cálculo|excel|tablas dinámicas,http://data.europa.eu/esco/skill/1225b032-7ead-464c-9072-64097d9a4b62
 limpieza,realizar tareas de limpieza,aseo|limpiar superficies|desinfección,http://data.europa.eu/esco/skill/1448431a-4fe5-4ca3-83db-665e0df3f130
 despacho_mercancia,preparar los pedidos para el envío,despacho|separar pedidos|preparar entregas,http://data.europa.eu/esco/skill/ee5e2297-39cc-4ed6-89e5-d58016118a7f
 ventas_mostrador,vender productos,ventas de mostrador|ventas en tienda|ofrecer productos,http://data.europa.eu/esco/skill/29a50780-f81b-429c-b410-7f23a492e19d
-ventas,Ventas,vender|técnicas de venta|asesoría comercial,http://data.europa.eu/esco/skill/29a50780-f81b-429c-b410-7f23a492e19d
 archivo_documentos,archivar documentos,archivo|organizar formularios|gestión documental,http://data.europa.eu/esco/skill/3d427a49-4f85-42cd-8a92-62d4a34f41a1
 trabajo_equipo,trabajar en equipo,colaboración|trabajo colaborativo|trabajar en equipo,http://data.europa.eu/esco/skill/c291acb4-6992-46ff-bf72-681eb378daa5
-cocina,Preparación de alimentos,cocinar|cocina|manipulación de alimentos,http://data.europa.eu/esco/skill/a2a6b6b0-7384-49d0-a7a0-13a9f66e22c5
-organizacion_eventos,Organización de eventos,organizar eventos|logística de eventos,http://data.europa.eu/esco/skill/8c1662b3-8635-4867-86a8-592616a29368
-ingles_basico,Inglés básico,inglés|ingles|inglés conversacional,http://data.europa.eu/esco/skill/00643980-467d-4799-a08f-a1019091314d
-ofimatica_basica,utilizar programas informáticos de oficina,ofimática básica|word|procesador de textos,http://data.europa.eu/esco/skill/f6322567-6950-4763-b59f-664a9a23794e
-facturacion,emitir facturas,facturación|emitir recibos|cobros y facturas,http://data.europa.eu/esco/skill/c5c00201-7646-4812-8b99-8267f17076a5
-control_calidad,inspeccionar la calidad de los productos,control de calidad|revisión de mercancía,http://data.europa.eu/esco/skill/5f62397e-569a-4919-8390-810e10a1a5f4
-comunicacion_efectiva,comunicarse con eficacia,comunicación efectiva|expresión oral,http://data.europa.eu/esco/skill/86a2f621-2447-4876-a6a8-02059379a7e4
+captacion_clientes,atraer a nuevos clientes,captación de clientes|prospectar clientes|buscar clientes potenciales,http://data.europa.eu/esco/skill/6d97bf55-6fb6-4795-8282-3ef915ae0bb8
+negociacion_ventas,negociar contratos de venta,negociación comercial|negociar ventas|cerrar acuerdos,http://data.europa.eu/esco/skill/71152876-b629-4a99-b9ea-0f25a0d07e4e
+resolver_reclamos,gestionar reclamaciones de clientes,resolver reclamos|atender quejas|gestionar reclamos,http://data.europa.eu/esco/skill/28d715e3-3e5b-4fb6-8dd2-4be4919c8587
+servir_comida,servir comida en el servicio de mesa,servir mesas|servicio de mesa|entregar platos,http://data.europa.eu/esco/skill/42a6eff0-e9d9-423d-877b-e48fe91ff26f
+tomar_pedidos,recibir pedidos de comida y bebida de clientes,tomar pedidos|anotar pedidos|recibir comandas,http://data.europa.eu/esco/skill/704bed2c-737a-4585-b840-1d28bbcab9b4
+lavar_vajilla,lavar la vajilla,lavar platos|limpiar vajilla,http://data.europa.eu/esco/skill/c662be22-f17a-4ba0-894f-d720b20c44cf
+desinfectar_superficies,desinfectar superficies,desinfección de superficies|sanitizar superficies,http://data.europa.eu/esco/skill/145fb42f-ebee-48e2-bdf8-2e935edc7158
+reposicion_insumos,reponer los suministros de los aseos,reponer insumos de aseo|abastecer baños|reponer suministros,http://data.europa.eu/esco/skill/bb62b926-73ff-437d-aac1-5f8af6cc8e52
+seguridad_altura,cumplir los procedimientos de seguridad al efectuar trabajos en altura,seguridad en alturas|trabajo seguro en alturas,http://data.europa.eu/esco/skill/e6654c68-984b-42da-b337-592898354c8b
+carga_mercancia,cargar la mercancía,cargar cajas|carga de mercancía|cargar productos,http://data.europa.eu/esco/skill/048affec-04db-4bd5-b7a6-c666d16c0fef
+descarga_mercancia,descargar la mercancía,descargar productos|descarga de mercancía,http://data.europa.eu/esco/skill/042f91e3-cccc-4d51-b635-bb14ffe90cfc
+empaquetado,empaquetar mercancías,empacar productos|embalar mercancía|empaquetado,http://data.europa.eu/esco/skill/667cbbaf-f377-46d8-8f2d-1f6d8a55d74a
+organizacion_almacen,organizar las instalaciones de almacenamiento,organizar almacén|ordenar bodega|organizar productos por categoría,http://data.europa.eu/esco/skill/435efc22-0dcb-487c-b9c4-d4860b6d4c52
+registro_llamadas,llevar registros de las llamadas telefónicas,registrar llamadas|bitácora de llamadas|seguimiento de llamadas,http://data.europa.eu/esco/skill/8096627b-c5a5-4235-b1ee-eca8be976eb2
+verificacion_documentos,examinar documentos oficiales,verificar documentos|revisar documentación|validar documentos,http://data.europa.eu/esco/skill/a1efea8f-62a8-4f9e-bd07-7d0c193f725e
+pago_facturas,gestionar pagos de facturas,pago de facturas|gestionar facturación,http://data.europa.eu/esco/skill/798d60b0-b089-4035-94b2-a26386aa7d5a
+seguimiento_cobros,dar seguimiento a las cuentas a cobrar,cobro de cartera|seguimiento de cobros|cuentas por cobrar,http://data.europa.eu/esco/skill/68b51538-b056-4cb3-bb15-ab8c3e576cc9
+registro_correspondencia,llevar un registro de la correspondencia,registrar correspondencia|control de correspondencia,http://data.europa.eu/esco/skill/ab821cc3-a0cb-4fcc-b4c0-bf7c96352cbf
+organizar_reuniones,organizar reuniones,coordinar reuniones|preparar salas de reunión,http://data.europa.eu/esco/skill/906c9e66-bdee-4f8e-93d7-88d9fcf39a0a
+reparar_moviles,reparar dispositivos móviles,reparación de celulares|reparar teléfonos|servicio técnico móvil,http://data.europa.eu/esco/skill/55cd5608-1497-4ed1-96d0-cb9494749a09
+relaciones_clientes,establecer buenas relaciones con los clientes,relaciones con clientes|trato al cliente|vínculo con clientes,http://data.europa.eu/esco/skill/cd990eab-c6a9-4c11-b17d-b12a98f6573b
+planificar_visitas,planificar las visitas a los clientes,plan de visitas|visitas comerciales|rutas de clientes,http://data.europa.eu/esco/skill/c910ef90-db9b-48ef-bf18-a94b265a4b05
+seguridad_salud,aplicar normas de salud y seguridad,normas de seguridad|salud ocupacional|seguridad laboral,http://data.europa.eu/esco/skill/dcc96a49-0bac-4a9c-8f8e-a32b4e47e6eb
+etiquetar_alimentos,etiquetar alimentos,etiquetado de alimentos|rotular productos alimenticios,http://data.europa.eu/esco/skill/3c519634-ed10-47af-9685-00418f3a85a3
+procesar_pedidos,procesar pedidos de clientes,gestionar pedidos|preparar órdenes|procesar órdenes,http://data.europa.eu/esco/skill/ec66b111-d8d0-4516-88ba-ee0b6fe6f695
+rotacion_existencias,efectuar la rotación de existencias,rotación de mercancía|rotar productos|rotación de stock,http://data.europa.eu/esco/skill/ca55d9dd-f177-45b6-a2ee-1a4695044b76
+ventas_activas,realizar ventas activas,ventas telefónicas|telemercadeo|venta proactiva,http://data.europa.eu/esco/skill/c81c9ea3-4689-4146-9076-24dd175c69bc
+preparar_bebidas_calientes,preparar bebidas calientes,preparar café|hacer café|bebidas calientes,http://data.europa.eu/esco/skill/e4fb4f26-1c0c-45e4-9250-5be32cee2a48
+uso_crm,utilizar software de gestión de relaciones con clientes,usar CRM|manejo de CRM|software CRM,http://data.europa.eu/esco/skill/9889b795-d755-41b2-8afd-2e3c87a65a38
+preparar_vegetales,preparar vegetales para usar en un plato,preparar verduras|cortar vegetales|preparar ingredientes,http://data.europa.eu/esco/skill/73b97efd-49fe-49d7-89dd-444f870cd210
+organizacion_eventos,coordinar eventos,organizar eventos|logística de eventos|organización de eventos,http://data.europa.eu/esco/skill/2111dff8-f830-46ad-80ce-7885893b3134
+ingles_basico,inglés,Inglés básico|inglés|ingles|inglés conversacional,http://data.europa.eu/esco/skill/6d3edede-8951-4621-a835-e04323300fa0
+ofimatica_basica,programas de ofimática,ofimática básica|word|procesador de textos|utilizar programas informáticos de oficina,http://data.europa.eu/esco/skill/cf310cff-0d28-4dbc-9dbb-cc500a3196c2
+facturacion,emitir facturas de venta,facturación|emitir facturas|emitir recibos|cobros y facturas,http://data.europa.eu/esco/skill/e3e42d54-78bd-4337-aa87-bb31a7670c9a
+control_calidad,inspeccionar la calidad de los productos,control de calidad|revisión de mercancía,http://data.europa.eu/esco/skill/1a3660c2-011c-4e96-9b1d-529afc305428
+excel,Microsoft Excel,hojas de cálculo|excel|tablas dinámicas,
+ventas,Ventas,vender|técnicas de venta|asesoría comercial,
+cocina,Preparación de alimentos,cocinar|cocina|manipulación de alimentos,
+comunicacion_efectiva,comunicarse con eficacia,comunicación efectiva|expresión oral,
