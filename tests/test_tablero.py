@@ -693,3 +693,45 @@ def test_api_no_aprueba_si_el_auditor_detecto_sesgo(tmp_path: Path, monkeypatch:
             assert (await client.post("/api/orientador/accion", json=aprobar)).status_code == 200
 
     asyncio.run(_ejecutar())
+
+
+def _inicio_del_ics(ruta: Path) -> str:
+    """DTSTART del .ics (texto), sin depender de la librería de calendarios."""
+    return next(linea for linea in ruta.read_text(encoding="utf-8").splitlines() if linea.startswith("DTSTART"))
+
+
+def test_dos_aprobados_de_la_misma_oferta_reciben_horas_distintas(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#186: el tablero usa la agenda del nodo; ya no quedan todas el mismo día a las 10:00."""
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path)
+    estado = obtener_datos_iniciales_demo(db_path=tmp_path / "test_puente.db")
+    for perfil in ("PERFIL-YARITZA", "PERFIL-KEVIN"):
+        procesar_accion_orientador(
+            estado, accion="aprobar", perfil_id=perfil, oferta_id="OF-CHORRERA-01", consentimiento_joven=True,
+        )
+    yaritza = tmp_path / "entrevista_PERFIL-YARITZA_OF-CHORRERA-01.ics"
+    kevin = tmp_path / "entrevista_PERFIL-KEVIN_OF-CHORRERA-01.ics"
+    assert yaritza.exists() and kevin.exists()
+    assert _inicio_del_ics(yaritza) != _inicio_del_ics(kevin)
+
+
+def test_el_mensaje_que_edita_el_orientador_llega_a_la_empresa_cegado(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#187: sale el texto editado, sin edad ni estado civil (cegar())."""
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path)
+    estado = obtener_datos_iniciales_demo(db_path=tmp_path / "test_puente.db")
+    editado = "Mensaje editado por la orientadora: Yaritza, soltera de 20 años, es puntual y atiende bien al público."
+    procesar_accion_orientador(
+        estado, accion="aprobar", perfil_id="PERFIL-YARITZA", oferta_id="OF-CHORRERA-01",
+        consentimiento_joven=True, mensaje_empresa=editado,
+    )
+    (mensaje,) = list(tmp_path.glob("mensaje_*.txt"))
+    texto = mensaje.read_text(encoding="utf-8")
+    assert "Mensaje editado por la orientadora" in texto and "es puntual y atiende bien al público" in texto
+    assert "20 años" not in texto and "soltera" not in texto
