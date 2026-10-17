@@ -111,7 +111,7 @@ Los siete agentes mínimos que sugiere el documento del reto y dónde están en 
 | Agente sugerido | En Puente | Issues | Estado |
 |---|---|---|---|
 | 1. Inteligencia de mercado: normalizar ofertas a una taxonomía, detectar requisitos, extraer tendencias | Mercado: extracción con Claude, habilidades normalizadas a la taxonomía enlazada a ESCO, reglas de la Ley 11 de 2005 en código, duplicados por similitud; el Redactor propone una versión legal de una oferta bloqueada | #5, #43, #157, #198 | Completo; tendencias con `uv run python -m puente.metricas --tendencias` (#198) |
-| 2. Perfil: leer el CV y entrevistar para descubrir habilidades no declaradas | Perfil: CV o entrevista de 5 preguntas, cada habilidad con su frase literal de evidencia; vista `/joven`; la tirilla de matrícula da el horario de clases | #6, #44, #52, #164, #166 | Completo, con preguntas fijas |
+| 2. Perfil: leer el CV y entrevistar para descubrir habilidades no declaradas | Perfil: CV o entrevista de 5 preguntas, cada habilidad con su frase literal de evidencia; vista `/joven` y chatbot de WhatsApp (sandbox de Twilio); la tirilla de matrícula da el horario de clases | #6, #44, #52, #160, #164, #166 | Completo, con preguntas fijas |
 | 3. Matching: asignación con capacidades y restricciones de transporte, horario y salario | Solver OR-Tools CP-SAT con restricciones duras, hasta 3 candidatos por plaza (no por vacante) y hasta 2 vacantes por joven | #4, #48 | Completo |
 | 4. Ruta de formación: plan de cursos con cupos, horarios, costo y transporte | Formación: set cover voraz (no óptimo) sobre cursos del INADEH con cupo, horario, costo y traslado | #14, #53 | Completo; cupos y horarios son datos de prueba |
 | 5. Postulación: adaptar el CV, agendar entrevistas y enviar listas cortas | Postulación: CV y carta de presentación por oferta, sin datos sensibles (la carta, por plantilla y con la frase literal de cada habilidad), `.ics` de la entrevista, mensaje a la empresa por Telegram o `outbox/`; vista de la empresa | #7, #12, #123, #167, #212 | Completo: CV y carta |
@@ -337,6 +337,28 @@ Con `LLM_MODO=reproducir` (sin red) solo se leen las entradas que tienen grabaci
 
 **Limitación de la demo: no hay login.** El joven se identifica con un código `PERFIL-….<token>` que recibe al abrir la entrevista. El token viaja en el encabezado `X-Token-Joven` y, en la página, en el fragmento `#codigo=` de la URL, que el navegador no manda al servidor (el enlace `.ics` de la fase 1 aún lo lleva en la URL). Quien tenga el código ve y decide por ese perfil. Los códigos de los perfiles semilla salen en la consola del servidor. Una entrevista por chat sin terminar vive en memoria: si el servidor se reinicia, se empieza de nuevo.
 
+## Chatbot de WhatsApp (sandbox de Twilio, #160)
+
+El joven también puede hacer la entrevista por WhatsApp. El bot es solo un canal: pide el mismo formulario fijo (nombre, edad, corregimiento, horario de clases, horario para trabajar, salario y pasaje) y las mismas 5 preguntas de `/joven`, y el perfil sale por el mismo camino (`preparar_entrada_joven`, guardrails, agente Perfil, `registrar_perfil_joven`). Al terminar contesta «perfil listo» y pregunta SÍ o NO por cada vacante de su lista corta. Un SÍ deja marcada la casilla «El joven consintió» en el tablero. Un NO deja la postulación en `no_seleccionado`, no se envía nada y Aprobar responde 422. Solo texto: las notas de voz y los archivos son la fase 2.
+
+Es el **sandbox de Twilio**: un número compartido, gratis, solo para pruebas, que únicamente habla con teléfonos que se unieron con «join <palabra>». La API oficial de Meta exige verificar el negocio. Para recibir mensajes hace falta una URL pública. Vercel no sirve, porque responde 403 a todo POST, así que el webhook corre en la laptop de la demo detrás de un túnel:
+
+1. En la consola de Twilio: *Messaging → Try it out → Send a WhatsApp message*. Desde el teléfono de prueba se envía `join <palabra>` al +1 415 523 8886.
+2. En `.env`: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` y `TWILIO_WHATSAPP_FROM=whatsapp:+14155238886`. Para entrevistas nuevas también `LLM_MODO=vivo` y `ANTHROPIC_API_KEY`: en `reproducir`, Perfil solo lee respuestas grabadas, igual que en `/joven`.
+3. Servidor: `uv run python -m app.server`. Túnel, en otra terminal:
+
+   ```bash
+   cloudflared tunnel --url http://localhost:8000
+   ```
+
+4. Se copia la URL `https://….trycloudflare.com` que imprime cloudflared a `PUBLIC_BASE_URL` en `.env` y se reinicia el servidor.
+5. En la consola de Twilio, *Sandbox settings → When a message comes in*: `https://….trycloudflare.com/api/whatsapp`, método `POST`.
+6. Desde el teléfono: «hola». El bot responde con el saludo y la primera pregunta.
+
+**Seguridad y datos.** `POST /api/whatsapp` exige la firma `X-Twilio-Signature`: un HMAC-SHA1 de la URL pública más los parámetros ordenados. Sin `TWILIO_AUTH_TOKEN` responde 503 y con una firma inválida, 403. Si sale 403 con el teléfono, la consola del servidor dice qué URL se usó para verificar la firma, que casi siempre es la causa: `PUBLIC_BASE_URL` viejo tras abrir un túnel nuevo. El número no se guarda: la conversación vive en la tabla `whatsapp_conversaciones` de `puente.db` bajo el SHA-256 del número. Ninguna `Decision` lo lleva, y el respaldo en `outbox/` se llama `whatsapp_<prefijo del hash>_*.txt`. El SHA-256 de un teléfono es un seudónimo, no anonimato: con tiempo se puede revertir probando números. Cada mensaje pierde cédula, teléfono y dirección antes de guardarse y pasa por guardrails: la inyección solo se marca. Las respuestas se borran de la conversación al armar el perfil y quedan solo en `entradas_perfil`, como las de `/joven`.
+
+**Modo demo pública.** Con `PUENTE_DEMO_PUBLICA=1` el tablero es de solo lectura (#161). La única excepción es `POST /api/whatsapp`, y solo con firma de Twilio válida: así la laptop puede exponerse por el túnel sin que nadie escriba en el tablero. En ese modo el LLM queda en `reproducir`, de modo que una entrevista nueva por WhatsApp no arma el perfil: el bot pide disculpas y lo dice. Para la demo en vivo, el servidor corre sin `PUENTE_DEMO_PUBLICA`, y la URL del túnel se pone solo en la consola de Twilio y se cierra al terminar, porque esa URL expone el tablero completo.
+
 ## Credenciales de demo
 
 Solo existe [`.env.example`](.env.example), sin claves reales: se copia a `.env`, que nunca se sube. Para la demo sin red no hace falta llenar nada. Variables:
@@ -361,6 +383,8 @@ Solo existe [`.env.example`](.env.example), sin claves reales: se copia a `.env`
 | `PUENTE_OUTBOX` | Carpeta del CV ciego, el `.ics` y los mensajes; por defecto `outbox/`. Vale para la terminal y para los avisos del reacomodo del tablero; el resto del tablero escribe en `outbox/` de la raíz hasta que entre el #207 |
 | `PUENTE_ENTREVISTA_INICIO` | Fecha ISO 8601 de la entrevista; vacía, mañana a las 10:00, marcada como provisional |
 | `PUENTE_SAL_ANONIMO` | Clave del código anónimo del scorecard (#158); vacía, una al azar por proceso |
+| `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM` | Chatbot de WhatsApp por el sandbox de Twilio (#160). Sin token, el webhook no atiende; sin cuenta o sin red, los mensajes del bot van a `outbox/` |
+| `PUBLIC_BASE_URL` | URL pública del túnel, sin barra final; con ella se verifica la firma de Twilio. Vacía, se reconstruye con `X-Forwarded-Proto` y `Host` |
 
 ## Lo que se puede verificar
 
@@ -387,6 +411,7 @@ Cada afirmación de diseño tiene una prueba que cualquiera puede repetir:
 - **En el tablero, Mercado con LLM solo entra por «Cargar un ejemplo desde `data/`».** Ese botón pasa los anuncios de `data/ofertas/` por Mercado con sus grabaciones, sin red: las 7 que chocan con la Ley 11 quedan bloqueadas, cinco por edad (CT02, CT24, CT40, CT46 y CT54), K02 por edad y sexo, y K03 por sexo (#205, #211). Los perfiles de `data/perfiles/` entran tal cual, con su evidencia y su horario. «Analizar una oferta nueva», el registro de perfiles y las 5 ofertas iniciales siguen con los stubs de `_compilar_grafo_tablero()` en [`app/server.py`](app/server.py), y las entradas rotuladas «ejemplo sintético (no es un archivo)» son de prueba. Matching, Auditor, Formación y Postulación sí son los reales.
 - **`/joven` sí llama a Perfil y a Horario con el LLM.** En modo reproducir solo lee lo que tiene grabación: la respuesta de Yaritza y la tirilla sintética. Con texto nuevo hace falta `LLM_MODO=vivo` y `ANTHROPIC_API_KEY`; sin eso responde con un error claro y no inventa el perfil.
 - **Telegram en el tablero.** El tablero no tiene un interruptor de Telegram como el `--telegram` de la terminal: si el entorno trae `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID_EMPRESA`, la lista corta sale de verdad.
+- **WhatsApp, fase 1.** El bot hace la entrevista y pide el consentimiento, pero el resultado y el `.ics` tras la aprobación siguen saliendo por Telegram u `outbox/`, no por WhatsApp. Las notas de voz y los archivos tampoco entran todavía. El número del joven vive solo en memoria mientras se arma su perfil: el bot no puede escribirle por su cuenta después, solo responderle.
 - **Variación del LLM.** Los evals en modo reproducir usan una grabación por caso; no miden la variación entre corridas del LLM.
 
 ## Guardrails y datos personales

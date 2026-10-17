@@ -67,6 +67,7 @@ MICROMISION_RESOLVER = ("puente.agents.micromision", "resolver_reto", 158)  # (r
 MICROMISION_AUDITAR = ("puente.agents.micromision", "auditar_contrafactual", 158)  # (reto, texto, perfil, *, llm, variantes)
 MICROMISION_SCORECARD = ("puente.agents.micromision", "armar_scorecard", 158)  # (perfil, resultados) -> Scorecard
 MICROMISION_PII = ("puente.agents.micromision", "datos_personales_en", 158)  # (scorecard, perfil) -> list[str]
+WHATSAPP_PROCESAR = ("app.whatsapp", "procesar_mensaje", 160)  # (estado, numero_hash, texto) -> Respuesta
 POSTULACION_POSTULAR = ("puente.agents.postulacion", "postular", 12)  # (aprobados, perfiles, ofertas, *, aprobacion, conn, outbox, ...)
 FORMACION_RECOMENDAR = ("puente.agents.formacion", "recomendar_cursos_brechas", 53)  # (perfil, brechas, *, traslados, max_minutos_traslado)
 GRAFO_CARGAR_CASO = ("puente.graph", "cargar_caso", 10)  # (ruta) -> (thread_id, estado)
@@ -528,6 +529,7 @@ _DIFERENCIAS: dict[str, Callable[[dict, dict], list[str]]] = {
     "reacomodo": functools.partial(_diferencias_campos, en_orden=("siguiente", "candidatos_nuevos"), subconjunto=("postulaciones",)),
     "formacion": functools.partial(_diferencias_campos, en_orden=("cursos",)),
     "punta_a_punta": functools.partial(_diferencias_campos, en_orden=("listas_cortas",)),
+    "whatsapp": _diferencias_campos,
 }
 
 
@@ -1016,6 +1018,94 @@ def _ejecutar_postulacion(caso: dict) -> dict:
     }
 
 
+NUMERO_WHATSAPP_EVAL = "+50760000999"  # SINTÉTICO
+
+
+def _ejecutar_whatsapp(caso: dict) -> dict:
+    """#160: el chatbot sobre un tablero propio (datos sintéticos de la demo, SQLite y outbox temporales), sin
+    Twilio (sin cuenta, todo envío va a outbox) ni LLM real (Perfil recibe `llm_falso`). Con `perfil_id` la
+    conversación arranca ligada a ese perfil semilla, ya con «perfil listo». Con `aprobar_despues` el orientador
+    intenta aprobar la vacante que el bot preguntó, con la casilla «El joven consintió» marcada."""
+    procesar = _resolver(WHATSAPP_PROCESAR)
+    from app import whatsapp as bot
+    from puente.guardrails import detectar_inyeccion
+    from puente.tools import db
+    from puente.tools import whatsapp as wa
+
+    entrada = caso["entrada"]
+    habilidades = (entrada.get("llm_falso") or {}).get("habilidades") or []
+    # Sin cuenta de Twilio aunque el .env la traiga: el número es sintético y nada sale por la red.
+    cuenta = os.environ.pop("TWILIO_ACCOUNT_SID", None)
+    with contextlib.ExitStack() as pila, _carpeta_aislada("eval_whatsapp_") as carpeta:
+        if cuenta is not None:
+            pila.callback(os.environ.__setitem__, "TWILIO_ACCOUNT_SID", cuenta)
+        srv = bot._servidor()
+        ruta_db = carpeta / "puente.db"
+        estado = srv.obtener_datos_iniciales_demo(db_path=ruta_db)
+        numero_hash = wa.hash_numero(NUMERO_WHATSAPP_EVAL)
+
+        def conversacion() -> Any:
+            conn = db.conectar(ruta_db)
+            try:
+                return wa.leer_conversacion(conn, numero_hash)
+            finally:
+                conn.close()
+
+        if entrada.get("perfil_id"):
+            conn = db.conectar(ruta_db)
+            try:
+                wa.guardar_conversacion(conn, wa.Conversacion(numero_hash, "listo", {}, entrada["perfil_id"]))
+            finally:
+                conn.close()
+        marcas: list[str] = []
+        oferta_id = None  # la vacante que respondió el último SÍ o NO (después el bot pregunta por la siguiente)
+        for texto in entrada["mensajes"]:
+            antes = conversacion()
+            if antes is not None and antes.paso == "consentimiento":
+                oferta_id = antes.datos.get("oferta_id")
+            respuesta = procesar(estado, numero_hash, texto)
+            marcas += respuesta.marcas
+            if respuesta.armar_perfil:
+                bot.armar_perfil(estado, numero_hash, llm=lambda _prompt: {"habilidades": habilidades})
+
+        conv = conversacion()
+        perfil_id = conv.perfil_id if conv else None
+        aprobacion_bloqueada = None
+        if entrada.get("aprobar_despues") and perfil_id and oferta_id:
+            try:
+                srv.procesar_accion_orientador(
+                    estado, accion="aprobar", perfil_id=perfil_id, oferta_id=oferta_id,
+                    orientador=ORIENTADORA_EVAL, consentimiento_joven=True,
+                )
+                aprobacion_bloqueada = False
+            except srv.ErrorValidacionTablero:
+                aprobacion_bloqueada = True
+        post = srv._buscar_postulacion(estado, perfil_id, oferta_id) if perfil_id and oferta_id else None
+        consentimiento = srv._ultimo_consentimiento(estado, perfil_id, oferta_id) if post else None
+        outbox = carpeta / "outbox"
+        archivos = sorted(outbox.glob("*")) if outbox.exists() else []
+        entrada_wsp = next((e for e in estado.get("entradas_perfil", []) if e.get("id") == perfil_id), {})
+        con_inyeccion = [t for t in entrada["mensajes"] if detectar_inyeccion(t)]
+        digitos = NUMERO_WHATSAPP_EVAL.lstrip("+")
+        crudo = b"".join(a.read_bytes() for a in [ruta_db, *archivos]) + json.dumps(estado.get("decisiones"), default=str).encode()
+    return {
+        "veredicto": "marcar" if any(m.startswith("inyeccion:") for m in marcas) else "aceptar",
+        "marcas": sorted(set(marcas)),
+        "perfil_registrado": any(
+            str(p.get("modalidad_ingreso", "")).startswith("WhatsApp") for p in estado.get("perfiles", [])
+        ),
+        "sigue_como_dato": all(any(t in r for r in entrada_wsp.get("respuestas") or []) for t in con_inyeccion),
+        "estado_postulacion": post.get("estado") if post else None,
+        "consentimiento": consentimiento.get("otorgado") if consentimiento else None,
+        "medio_consentimiento": consentimiento.get("medio") if consentimiento else None,
+        "aprobacion_bloqueada": aprobacion_bloqueada,
+        "archivos_a_la_empresa": sorted(
+            {_tipo_archivo(a) for a in archivos} & {"cv", "carta", "ics", "mensaje"}
+        ),
+        "numero_guardado": digitos.encode() in crudo,
+    }
+
+
 def _grafo_del_caso(entrada: dict, carpeta: Path) -> tuple[Any, dict, Any]:
     """El grafo real con el caso de tests/fixtures, base, checkpoints y outbox en `carpeta` y Telegram apagado.
     Perfil devuelve las habilidades del fixture, sin LLM, como en tests/test_reacomodo.py."""
@@ -1197,6 +1287,7 @@ def ejecutores_por_defecto(
         "reacomodo": _ejecutar_reacomodo,
         "formacion": _ejecutar_formacion,
         "punta_a_punta": _ejecutar_punta_a_punta,
+        "whatsapp": _ejecutar_whatsapp,
     }
 
 
