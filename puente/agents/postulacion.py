@@ -35,6 +35,7 @@ from puente.tools import db
 from puente.schemas import Decision, EstadoPostulacion, Match, Oferta, Perfil
 from puente.tools.agenda import elegir_franja_con_respaldo
 from puente.tools.calendario import ZONA_PANAMA, generar_ics
+from puente.tools.carta import generar_carta, habilidades_para_carta
 from puente.tools.pdf import (
     cegar,
     evidencia_de,
@@ -305,6 +306,7 @@ def _texto_lista_corta(
         # Sin corregimiento: si coincide con el del joven, revelaría dónde vive (#123).
         f"Lista corta para {oferta.puesto} en {oferta.empresa}",
         "Candidatos aprobados por el orientador. Datos de demostración (sintéticos).",
+        "Cada candidato va con su CV ciego y su carta de presentación en PDF.",
         f"Las fechas de entrevista de los .ics adjuntos son propuestas. {AVISO_FECHA}.",
         "",
     ]
@@ -373,7 +375,8 @@ def postular(
     """Ejecuta las acciones reales para la lista aprobada por el orientador.
 
     Por cada match: guarda perfil y oferta, crea la postulación (preseleccionado), la pasa
-    a aprobado y a consentido, genera el CV ciego en PDF y el .ics de la entrevista. Después
+    a aprobado y a consentido, genera el CV ciego y la carta de presentación en PDF (#212) y el
+    .ics de la entrevista. Después
     manda un mensaje por oferta con sus candidatos (Telegram, o ``outbox/`` si no se puede)
     y pasa a enviado las postulaciones de ese mensaje.
 
@@ -381,7 +384,7 @@ def postular(
     existe se retoma desde su estado actual. Si quedó en perfil_listo, preseleccionado,
     aprobado o consentido, se completa lo que falte hasta enviado; si ya está en enviado o
     más adelante, se salta con una Decision "ya postulada" y se devuelve su id sin repetir
-    CV, .ics ni mensaje.
+    CV, carta, .ics ni mensaje.
 
     ``aprobacion`` es el dict que dejó el orientador (ver el encabezado del módulo): sin él,
     o con un match que no esté en sus pares aprobados, no se hace nada. El orientador y la
@@ -460,6 +463,11 @@ def postular(
         n_hab = len(habilidades_para_cv(perfil, oferta))
         decidir(etiqueta, cv.name,
                 f"CV ciego generado solo con las {n_hab} habilidades que tienen evidencia")
+        carta = generar_carta(perfil, oferta, outbox)
+        pedidas, extra = habilidades_para_carta(perfil, oferta)
+        decidir(etiqueta, carta.name,
+                f"Carta de presentación ciega por plantilla, sin LLM: {len(pedidas)} habilidad(es) que pide "
+                f"la oferta y {len(extra)} más, cada una con su frase literal (#212)")
 
         ics = generar_ics(
             titulo=f"Propuesta de entrevista: {oferta.puesto} - {oferta.empresa}",
@@ -481,9 +489,9 @@ def postular(
             dict(match.desglose).get("minutos_traslado") or 0,
         )
 
-        resultado.archivos += [cv, ics]
+        resultado.archivos += [cv, carta, ics]
         resultado.calendarios[(perfil.id, oferta.id)] = ics
-        por_oferta.setdefault(oferta.id, []).append((post_id, match, perfil, inicio, [cv, ics]))
+        por_oferta.setdefault(oferta.id, []).append((post_id, match, perfil, inicio, [cv, carta, ics]))
 
     for oferta_id, filas in por_oferta.items():
         oferta = ofertas[oferta_id]
