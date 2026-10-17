@@ -1315,6 +1315,21 @@ def main(argv: list[str] | None = None, leer: Callable[[str], str] = input, escr
     if final.get("aprobacion"):
         escribir(f"Última aprobación: {json.dumps(final['aprobacion'], ensure_ascii=False)}")
     escribir("Decisiones: " + " → ".join(d.agente for d in final.get("decisiones", [])))
+    # Un agente que falla (por ejemplo, falta una grabación en LLM_MODO=reproducir) no corta el flujo:
+    # deja su error en el estado y la demo debe mostrarlo, o el caso parece completo sin serlo.
+    errores = final.get("errores") or []
+    if errores:
+        escribir(f"⚠  Errores ({len(errores)}):")
+        for error in errores:
+            escribir(f"   - {error}")
+    from puente.llm import uso_por_agente
+
+    uso = uso_por_agente()
+    if uso:
+        llamadas = sum(f["llamadas"] for f in uso.values())
+        reproducidas = sum(f["reproducidas"] for f in uso.values())
+        costo = sum(f["costo_usd"] for f in uso.values())
+        escribir(f"LLM: {llamadas} llamada(s), {reproducidas} reproducida(s), costo estimado US${costo:.4f}")
     return final
 
 
