@@ -188,7 +188,7 @@ def test_acciones_orientador_consentimiento_sqlite_editar_quitar_rechazar_y_desb
     assert post["estado"] == "enviado"
     assert len(estado["consentimientos"]) == 1
     assert estado["consentimientos"][0]["medio"] == "orientador"
-    assert len(post["archivos_generados"]) == 3
+    assert len(post["archivos_generados"]) == 4  # CV, carta (#212), .ics y mensaje
     for nombre_arch in post["archivos_generados"]:
         ruta_arch = (tmp_path / nombre_arch).resolve()
         assert ruta_arch.is_relative_to(tmp_path.resolve())
