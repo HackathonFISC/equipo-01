@@ -73,6 +73,43 @@ si cambia cualquiera de ellos, `tests/test_horario.py` falla con «falta la grab
 y copiar el `<hash>.json` nuevo a `evals/grabaciones/`. La grabación del 17 de octubre de 2026 costó US$0.026 (3,937 tokens de
 entrada y 535 de salida).
 
+## Video (#194)
+
+Tres llamadas que el video muestra y que no estaban grabadas: el chat de Yaritza en `/joven` (agente Perfil), el
+redactor de OF-BLOQ-EDAD-04 y la micro-misión CAJA-01. El guion sintético está en `data/demo/yaritza_chat.json`: el
+formulario, 5 respuestas (una por pregunta, en el orden de `PREGUNTAS_ENTREVISTA`) y el texto de la micro-misión.
+`tests/fixtures/caso_yaritza.json` no cambia: la demo por terminal y su grabación dependen de él.
+
+Para grabarlas hace falta `ANTHROPIC_API_KEY` en `.env`; cuesta centavos y el script pone un tope de US$1:
+
+```bash
+scripts/grabar_video.sh
+```
+
+Graba con `LLM_MODO=grabar`, las repite con `LLM_MODO=reproducir` por el camino real (la vista por HTTP y las CLI),
+muestra los archivos nuevos y el costo y anota los hashes en `data/demo/grabaciones_video.json`. No hace commit ni
+push: al final imprime los comandos para copiar. Si una grabación ya existe y da lo esperado, no la repite
+(`scripts/grabar_video.sh --forzar` la rehace). Sin clave falla de inmediato, sin llamar al modelo.
+
+En el video, sin cambiar `LLM_PROVEEDOR`, `PUENTE_MODELO_LLM` ni `LLM_DIR_GRABACIONES` en `.env`:
+
+```bash
+LLM_MODO=reproducir uv run uvicorn app.server:app --port 8000
+LLM_MODO=reproducir uv run python -m puente.agents.redactor --oferta OF-BLOQ-EDAD-04
+LLM_MODO=reproducir uv run python -m puente.agents.micromision --reto CAJA-01 --texto "Primero sumo el almuerzo con la soda, eso se lo resto a los 10 del billete y le doy 5.45 de vuelto."
+```
+
+En `/joven` va el formulario del guion y cada respuesta pegada tal cual, en el chat o en el formulario de la fase 1: las
+dos vistas arman el mismo prompt. Una letra distinta cambia el hash y la vista responde que no hay lectura grabada. Los
+botones de ejemplo de Yaritza (`EJEMPLO_YARITZA` en `joven.js`, `EJEMPLO_CHAT_YARITZA` en `joven_fase2.js`) todavía
+traen las respuestas de `caso_yaritza.json`; se cambian al guion nuevo en un PR aparte, después de subir la grabación.
+
+`tests/test_grabar_video.py` comprueba con un LLM espía que el script pide el mismo sistema, prompt, esquema y hash
+que la vista (chat y formulario) y las CLI. Cuando las grabaciones existen, las reproduce por el camino real: perfil
+listo con `manejo_caja` y `atencion_cliente`, «Propuesta (llm)» del redactor y CAJA-01 «correcto» leído por el LLM.
+Mientras no existan, esa prueba se omite. Con `data/demo/grabaciones_video.json` en el repo, un cambio de prompt,
+esquema o taxonomía que deje al video sin grabación hace fallar la prueba en lugar de omitirla.
+
 ## Ofertas de la carga inicial (#46)
 
 Las 20 ofertas de `data/ofertas/` tienen grabaciones de Claude Opus 5.5 validadas con
