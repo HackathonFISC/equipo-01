@@ -1,0 +1,16 @@
+{
+  "hash": "9f12f836e5d8cd08bf2ffa095d7513739ca31e63e486d2257dfcfe55c1d749a4",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "redactor",
+  "esquema": "TextoRedactado",
+  "salida": {
+    "texto_nuevo": "Requisitos: personas mayores de 18 años, sin límite de edad, y cumplir el código de vestimenta de la empresa."
+  },
+  "uso": {
+    "entrada": 760,
+    "salida": 58
+  },
+  "creado": "2026-10-17T08:04:52+00:00"
+}
