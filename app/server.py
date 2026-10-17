@@ -35,6 +35,7 @@ from puente.graph import (
     aprobacion_pendiente,
     config_caso,
     construir_grafo,
+    negaron_consentimiento,
     nodo_matching_grafo,
     stub_mercado,
     stub_perfil,
@@ -254,6 +255,24 @@ def _evaluar_reglas_discriminacion(requisitos_texto: str) -> tuple[bool, list[di
     return esta_bloqueada(hallazgos), alertas_mod
 
 
+def _ultimo_consentimiento(estado: dict[str, Any], perfil_id: str, oferta_id: str) -> dict[str, Any] | None:
+    """El registro más reciente de la pareja en `consentimientos` (el joven puede cambiar de opinión)."""
+    return next(
+        (
+            c
+            for c in reversed(estado.get("consentimientos") or [])
+            if c.get("perfil_id") == perfil_id and c.get("oferta_id") == oferta_id
+        ),
+        None,
+    )
+
+
+def _consentimiento_vigente(estado: dict[str, Any], perfil_id: str, oferta_id: str) -> bool:
+    """False solo si el último registro de la pareja es un «no» (#52); sin registro, lo confirma el orientador (#49)."""
+    registro = _ultimo_consentimiento(estado, perfil_id, oferta_id)
+    return registro is None or bool(registro.get("otorgado"))
+
+
 def _construir_modelos_desde_estado(
     estado: dict[str, Any],
 ) -> tuple[list[Perfil], dict[str, dict[str, Any]], list[Oferta], dict[str, dict[str, Any]]]:
@@ -369,7 +388,10 @@ def _calcular_metricas_impacto(estado: dict[str, Any]) -> dict[str, Any]:
                 "matches_viables_cpsat": len(matches),
                 "pares_descartados_con_motivo": len(descartados),
                 "rutas_formacion_inadeh": len(con_ruta),
-                "consentimientos_confirmados": len(consentimientos),
+                # Parejas cuyo último registro es un «sí»: un «no» del joven (#52) no cuenta.
+                "consentimientos_confirmados": sum(
+                    1 for otorgado in {(c["perfil_id"], c["oferta_id"]): c.get("otorgado") for c in consentimientos}.values() if otorgado
+                ),
                 "postulaciones_enviadas": len(enviadas),
             },
         }
@@ -410,8 +432,11 @@ def recalcular_pipeline_tablero(
 
     def _nodo_postulacion_tablero(estado_g: dict[str, Any]) -> dict[str, Any]:
         aprobacion = estado_g.get("aprobacion") or {}
+        # El «no» del joven (#52) manda: esa pareja no se envía aunque venga en `aprobados` (#109).
         pares_aprob = {
-            (a["perfil_id"], a["oferta_id"]) for a in (aprobacion.get("aprobados") or [])
+            (a["perfil_id"], a["oferta_id"])
+            for a in (aprobacion.get("aprobados") or [])
+            if a["perfil_id"] not in negaron_consentimiento(estado_g, a["oferta_id"])
         }
         matches_aprob = [
             m
@@ -478,6 +503,8 @@ def recalcular_pipeline_tablero(
         "ofertas": modelos_ofertas,
         "perfiles": modelos_perfiles,
         "excluidos": excluidos_actuales,
+        # Lo que el joven decidió en /joven (#52) llega al grafo: `negaron_consentimiento` (#109) lo lee.
+        "consentimientos": list(estado.get("consentimientos") or []),
         "decisiones": [],
         "errores": [],
     }
@@ -579,7 +606,7 @@ def recalcular_pipeline_tablero(
                 "cursos_recomendados": rutas_por_par.get((pid, oid), []),
                 "explicacion": m_dict.get("explicacion", ""),
                 "mensaje_empresa": mensaje_sugerido,
-                "consentimiento_joven": True,
+                "consentimiento_joven": _consentimiento_vigente(estado, pid, oid),
             }
         )
 
@@ -646,7 +673,7 @@ def recalcular_pipeline_tablero(
                     "estado": est_db,
                     "comentario_orientador": "",
                     "mensaje_empresa": m["mensaje_empresa"],
-                    "consentimiento_joven": True,
+                    "consentimiento_joven": m["consentimiento_joven"],
                     "archivos_generados": [],
                 }
                 nuevas_postulaciones.append(post_nuevo)
@@ -1096,6 +1123,12 @@ def procesar_accion_orientador(
 
     # 4. APROBAR: exige el consentimiento del joven, registra Consentimiento + Decision y reanuda el grafo con Command(resume=...) (#49)
     if req.accion == "aprobar":
+        # El «no» del joven en /joven (#52) manda sobre la casilla del orientador: 422 sin efectos.
+        if not _consentimiento_vigente(estado, req.perfil_id, req.oferta_id):
+            raise ErrorValidacionTablero(
+                f"{req.perfil_id} indicó en la vista del joven que no acepta que su CV llegue a "
+                f"{req.oferta_id}. Postulación no envía nada; el joven puede cambiar su decisión en /joven."
+            )
         lista_consentidos = (
             req.consentidos
             if req.consentidos is not None
@@ -1138,7 +1171,13 @@ def procesar_accion_orientador(
             resueltas = [
                 v for v in (est_actual.get("vacantes_resueltas") or []) if v != req.oferta_id
             ]
-            grafo.update_state(cfg_grafo, {"vacantes_resueltas": resueltas})
+            grafo.update_state(
+                cfg_grafo,
+                {
+                    "vacantes_resueltas": resueltas,
+                    "consentimientos": list(estado.get("consentimientos") or []),
+                },
+            )
             salida_resume = grafo.invoke(
                 Command(
                     resume={
@@ -1892,18 +1931,6 @@ def _en_lista_corta(estado: dict[str, Any], perfil_id: str, oferta_id: str) -> b
     return any(
         m.get("perfil_id") == perfil_id and m.get("oferta_id") == oferta_id
         for m in estado.get("matches", [])
-    )
-
-
-def _ultimo_consentimiento(estado: dict[str, Any], perfil_id: str, oferta_id: str) -> dict[str, Any] | None:
-    """El registro más reciente de la pareja en `consentimientos` (el joven puede cambiar de opinión)."""
-    return next(
-        (
-            c
-            for c in reversed(estado.get("consentimientos") or [])
-            if c.get("perfil_id") == perfil_id and c.get("oferta_id") == oferta_id
-        ),
-        None,
     )
 
 

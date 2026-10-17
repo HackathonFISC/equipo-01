@@ -271,6 +271,85 @@ def test_sin_consentimiento_no_queda_consentido(entorno) -> None:
     assert otra["consentimiento"] == "pendiente"
 
 
+def _estados_postulacion_sqlite(ruta_db: Path) -> list[str]:
+    conn = db.conectar(ruta_db)
+    try:
+        return [str(f["estado"]) for f in conn.execute("SELECT estado FROM postulaciones")]
+    finally:
+        conn.close()
+
+
+def _archivos_outbox(tmp_path: Path) -> list[str]:
+    outbox = tmp_path / "outbox"
+    return sorted(a.name for a in outbox.iterdir()) if outbox.exists() else []
+
+
+def test_no_del_joven_frena_el_envio_desde_el_tablero(entorno) -> None:
+    """Revisión del PR #106: el joven dice «no» → el orientador aprueba → 422 y nada sale."""
+    cliente, estado, _, tmp_path = entorno
+    par = {"perfil_id": "PERFIL-YARITZA", "oferta_id": "OF-CHORRERA-01"}
+    assert cliente.post("/api/joven/consentimiento", json={**par, "otorgado": False}).status_code == 200
+
+    # Un recálculo del grafo (otro joven, el Auditor, quitar a alguien) no reescribe el «no»
+    # y el grafo recibe `consentimientos`, que lee `negaron_consentimiento` (#109).
+    srv.recalcular_pipeline_tablero(estado, registrar_trazas=True)
+    match = next(m for m in estado["matches"] if (m["perfil_id"], m["oferta_id"]) == tuple(par.values()))
+    assert match["consentimiento_joven"] is False
+    assert srv._buscar_postulacion(estado, **par)["consentimiento_joven"] is False
+    valores = estado["_grafo"].get_state(estado["_config_grafo"]).values
+    assert [c["otorgado"] for c in valores["consentimientos"]] == [False]
+
+    # El orientador aprueba con la casilla «el joven consintió» marcada, como viene en el tablero.
+    r = cliente.post(
+        "/api/orientador/accion",
+        json={**par, "accion": "aprobar", "consentimiento_joven": True, "consentidos": ["PERFIL-YARITZA"]},
+    )
+    assert r.status_code == 422, r.text
+    assert "no acepta" in r.json()["detail"]
+
+    # Nada salió: ni CV ni .ics en outbox/, ni filas `enviado`, ni un consentimiento del orientador que tape el «no».
+    assert _archivos_outbox(tmp_path) == []
+    assert EstadoPostulacion.ENVIADO.value not in _estados_postulacion_sqlite(tmp_path / "joven.db")
+    assert srv._buscar_postulacion(estado, **par)["estado"] == EstadoPostulacion.PRESELECCIONADO.value
+    assert [(c["otorgado"], c["medio"]) for c in estado["consentimientos"]] == [(False, "joven_web")]
+    assert srv._calcular_metricas_impacto(estado)["operativas_demo"]["consentimientos_confirmados"] == 0
+    resultado = cliente.get("/api/joven/PERFIL-YARITZA/resultado").json()
+    assert _vacante(resultado, "OF-CHORRERA-01")["enviada"] is False
+
+    # Si el joven cambia a «sí», el orientador ya puede aprobar y se envía.
+    assert cliente.post("/api/joven/consentimiento", json={**par, "otorgado": True}).status_code == 200
+    r = cliente.post("/api/orientador/accion", json={**par, "accion": "aprobar"})
+    assert r.status_code == 200, r.text
+    assert srv._buscar_postulacion(estado, **par)["estado"] == EstadoPostulacion.ENVIADO.value
+    assert any(nombre.endswith(".ics") for nombre in _archivos_outbox(tmp_path))
+    assert srv._calcular_metricas_impacto(estado)["operativas_demo"]["consentimientos_confirmados"] == 1
+
+
+def test_el_grafo_no_envia_a_quien_dijo_no(entorno) -> None:
+    """Aunque el grafo reciba `consentidos` con la pareja, el nodo de Postulación del tablero la salta."""
+    cliente, estado, _, tmp_path = entorno
+    par = {"perfil_id": "PERFIL-YARITZA", "oferta_id": "OF-CHORRERA-01"}
+    assert cliente.post("/api/joven/consentimiento", json={**par, "otorgado": False}).status_code == 200
+    srv.recalcular_pipeline_tablero(estado, registrar_trazas=True)
+
+    grafo, cfg = estado["_grafo"], estado["_config_grafo"]
+    resueltas = [v for v in (grafo.get_state(cfg).values.get("vacantes_resueltas") or []) if v != par["oferta_id"]]
+    grafo.update_state(cfg, {"vacantes_resueltas": resueltas})
+    grafo.invoke(
+        srv.Command(
+            resume={
+                "accion": "aprobar",
+                "orientador": "Orientadora Ana Gómez",
+                "oferta_id": par["oferta_id"],
+                "consentidos": [par["perfil_id"]],
+            }
+        ),
+        cfg,
+    )
+    assert _archivos_outbox(tmp_path) == []
+    assert EstadoPostulacion.ENVIADO.value not in _estados_postulacion_sqlite(tmp_path / "joven.db")
+
+
 def test_ids_y_entradas_invalidas_dan_4xx(entorno) -> None:
     cliente, estado, llm, _ = entorno
     assert cliente.get("/api/joven/PERFIL;DROP/resultado").status_code == 422
