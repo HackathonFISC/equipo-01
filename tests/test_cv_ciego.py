@@ -249,7 +249,7 @@ def test_cegar_quita_estado_civil_embarazo_edad_en_palabras_y_nacimiento_del_ori
         ("Es viuda", "Es [dato omitido]"),
         ("Es padre soltero", "Es [dato omitido]"),
         ("Es mamá soltera", "Es [dato omitido]"),
-        ("Está unida con su pareja", "Está [dato omitido] con su pareja"),
+        ("Está unida con su pareja", "Está [dato omitido] con [dato omitido]"),  # «su pareja» también (#148)
         ("Estado civil: unido", "Estado civil: [dato omitido]"),
         ("Vive en unión libre", "Vive en [dato omitido]"),
         ("Tiene cinco meses de embarazo", "Tiene cinco meses de [dato omitido]"),
@@ -271,6 +271,44 @@ def test_cegar_quita_datos_que_no_son_del_trabajo(texto, queda):
     assert cegar(texto, _perfil()) == queda
 
 
+def test_cegar_fecha_numerica_de_nacimiento_y_conservar_fechas_de_experiencia():
+    from datetime import date
+    from puente.tools.pdf import cegar
+
+    texto = "Nací el 03/05/2006; trabajé del 03/05/2024 al 2026-06-01 atendiendo clientes."
+    ciego = cegar(texto, _perfil(), hoy=date(2026, 10, 16))
+    assert "03/05/2006" not in ciego
+    assert "[dato omitido]" in ciego
+    assert "03/05/2024 al 2026-06-01 atendiendo clientes" in ciego
+    assert cegar("2006-05-03", _perfil(), hoy=date(2026, 10, 16)) == "[dato omitido]"
+
+    hoy_real = date.today()
+    anio_nacimiento = hoy_real.year - 20 - ((hoy_real.month, hoy_real.day) < (5, 3))
+    fecha_nacimiento = f"03/05/{anio_nacimiento}"
+    perfil = _perfil()
+    perfil.habilidades[0] = HabilidadPerfil(
+        skill_id="atencion_cliente", evidencia=f"Nací el {fecha_nacimiento}; atendí clientes desde 03/05/2024"
+    )
+    cv = "\n".join(contenido_cv(perfil, _oferta()))
+    assert fecha_nacimiento not in cv
+    assert "atendí clientes desde 03/05/2024" in cv
+
+
+@pytest.mark.parametrize(
+    ("texto", "esperado"),
+    [
+        ("Está separada y atiende clientes", "Está [dato omitido] y atiende clientes"),
+        ("Vive en unión consensual; vende en tienda", "Vive en [dato omitido]; vende en tienda"),
+        ("Vivo en pareja y manejo caja", "Vivo [dato omitido] y manejo caja"),
+        ("Trabajo en pareja preparando pedidos", "Trabajo en pareja preparando pedidos"),
+    ],
+)
+def test_cegar_mas_estados_civiles_sin_borrar_experiencia(texto, esperado):
+    from puente.tools.pdf import cegar
+
+    assert cegar(texto, _perfil()) == esperado
+
+
 @pytest.mark.parametrize(
     "texto",
     [
@@ -283,7 +321,7 @@ def test_cegar_quita_datos_que_no_son_del_trabajo(texto, queda):
         "vendí productos de Estados Unidos",
         "fue una situación embarazosa",
         "limpio la casa de mi abuela",
-        "mi hija nació en el hospital",
+        "la clienta nació en el hospital",  # «nació en» sin año no es fecha de nacimiento («mi hija» sí se ciega, #148)
         "atiendo a muchachos del colegio",
     ],
 )
@@ -351,3 +389,111 @@ def test_la_empresa_no_recibe_estado_civil_embarazo_ni_edad_en_palabras(tmp_path
             assert dato not in texto.lower()
         assert "manejo la caja chica de la fonda" in texto  # la evidencia del trabajo sí llega
     assert "una chica" not in mensaje and "Yaritza Ficticia" in mensaje
+
+
+# ---------------------------------------------------------------- #148: revisión del PR #149
+
+
+@pytest.mark.parametrize(
+    "texto, oculto",
+    [
+        ("Nacida el 20/11/2006", "20/11/2006"),  # da 19 años y el perfil dice 20: con etiqueta se ciega igual
+        ("Nací el 03/05/2006", "03/05/2006"),
+        ("nacido el 2006-11-20", "2006-11-20"),
+        ("fecha de nacimiento: 20.11.2006", "20.11.2006"),
+    ],
+)
+def test_cegar_fecha_de_nacimiento_con_etiqueta_aunque_no_cuadre_la_edad(texto, oculto):
+    from datetime import date
+    from puente.tools.pdf import cegar
+
+    ciego = cegar(texto, _perfil(), hoy=date(2026, 10, 16))
+    assert oculto not in ciego and "[dato omitido]" in ciego
+
+
+def test_cegar_fecha_sin_etiqueta_con_un_anio_de_margen_y_sin_edad_solo_con_etiqueta():
+    from datetime import date
+    from puente.tools.pdf import cegar
+
+    hoy = date(2026, 10, 16)
+    assert cegar("20/11/2006", _perfil(), hoy=hoy) == "[dato omitido]"  # 19 frente a 20: dentro del margen
+    assert cegar("trabajé desde 01/02/2024", _perfil(), hoy=hoy) == "trabajé desde 01/02/2024"
+    sin_edad = _perfil().model_copy(update={"edad": None})
+    assert cegar("Nacida el 03/05/2006", sin_edad, hoy=hoy) == "[dato omitido]"
+    assert cegar("trabajé del 03/05/2024 al 2026-06-01", sin_edad, hoy=hoy) == "trabajé del 03/05/2024 al 2026-06-01"
+
+
+@pytest.mark.parametrize(
+    "texto, dato",
+    [
+        ("tengo 2 hijos y estudio de noche", "2 hijos"),
+        ("Tiene dos hijas", "dos hijas"),
+        ("su esposo me apoya con los niños", "esposo"),
+        ("estoy unida con mi pareja desde hace años", "pareja"),
+        ("es mamá de dos niñas", "dos niñas"),
+    ],
+)
+def test_cegar_pareja_e_hijos(texto, dato):
+    from puente.tools.pdf import cegar
+
+    ciego = cegar(texto, _perfil())
+    assert dato not in ciego and "[dato omitido]" in ciego
+
+
+@pytest.mark.parametrize(
+    "texto",
+    ["atiendo la fonda de mi mamá", "trabajé en pareja con otra cajera", "cuidé a dos niños como niñera por horas"],
+)
+def test_cegar_no_toca_familia_que_no_es_dato_personal(texto):
+    from puente.tools.pdf import cegar
+
+    assert cegar(texto, _perfil()) == texto
+
+
+@pytest.mark.parametrize(
+    "texto, dato",
+    [
+        ("Necesito horario para cuidar a mis hijos", "mis hijos"),
+        ("Tengo hijos pequeños", "hijos"),
+        ("Soy madre de familia", "madre de familia"),
+        ("Tengo un bebé", "bebé"),
+        ("Vivo con mi esposo y mi hija", "mi hija"),
+        ("Nací en La Chorrera en 2006", "2006"),
+    ],
+)
+def test_cegar_fugas_de_la_segunda_revision(texto, dato):
+    """Fugas que encontró «Revisión general» en el PR #156."""
+    from puente.tools.pdf import cegar
+
+    ciego = cegar(texto, _perfil())
+    assert dato not in ciego and "[dato omitido]" in ciego
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "trabajé en la empresa nacional en Colón desde 2024",
+        "vendí ropa de niños en el mercado",
+        "ayudo a mi papá en el taller",
+        "trabajé con mi prima en la fonda",
+        "tengo habilidad para la caja",
+    ],
+)
+def test_cegar_familia_sin_falsos_positivos(texto):
+    from puente.tools.pdf import cegar
+
+    assert cegar(texto, _perfil()) == texto
+
+
+def test_fugas_de_familia_tampoco_llegan_al_pdf(tmp_path):
+    """Las 6 fugas de la segunda revisión, de punta a punta en el PDF que recibe la empresa (#148)."""
+    perfil = _perfil()
+    perfil.habilidades[0] = HabilidadPerfil(
+        skill_id="atencion_cliente",
+        evidencia="cuido a mis hijos; tengo hijos pequeños; soy madre de familia; tengo un bebé; "
+        "vivo con mi esposo y mi hija; nací en La Chorrera en 2006; atiendo la fonda de mi mamá",
+    )
+    texto = _texto_pdf(generar_cv(perfil, _oferta(), tmp_path / "cv")).lower()
+    for dato in ("mis hijos", "hijos peque", "madre de familia", "bebé", "mi hija", "2006", "la chorrera"):
+        assert dato not in texto
+    assert "atiendo la fonda de mi mam" in texto

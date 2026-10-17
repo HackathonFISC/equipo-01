@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 from pathlib import Path
 
 from fpdf import FPDF
@@ -125,13 +126,28 @@ _TERMINOS_GENERO = re.compile(
 # Estado civil. "madre soltera" sale entera; "madre" o "mamá" sola no ("la fonda de mi mamá").
 _ESTADO_CIVIL = re.compile(
     r"\b(?:madre|padre|mam[aá]|pap[aá])\s+solter[oa]s?\b"
-    r"|\b(?:solter|casad|divorciad|viud)[oa]s?\b"
-    r"|\buni[oó]n\s+(?:libre|de\s+hecho)\b",
+    r"|\b(?:solter|casad|divorciad|viud|separad|concubin)[oa]s?\b"
+    r"|\bconvivientes?\b"
+    r"|\buni[oó]n\s+(?:libre|de\s+hecho|consensual|estable)\b",
     re.IGNORECASE,
 )
 # "unido/a" solo cuando dice el estado civil ("está unida", "estado civil: unido"): en "equipo
 # unido" o "Estados Unidos" no es un dato de la persona. Se conserva el verbo.
 _UNIDO = re.compile(r"\b(soy|es|est[aá]|estoy|vive|vivo|civil\s*:?)\s+unid[oa]\b", re.IGNORECASE)
+_EN_PAREJA = re.compile(r"\b(vivo|vive|estoy|est[aá]|estado civil\s*:?)\s+en pareja\b", re.IGNORECASE)
+# Pareja e hijos (#148): "su esposo me apoya", "unida con su pareja", "tengo 2 hijos", "mamá de dos
+# niñas". "mi mamá" o "la fonda de mi mamá" no se tocan: solo cuenta con hijos o pareja detrás.
+_CANTIDAD = r"(?:\d+|un[oa]?|dos|tres|cuatro|cinco)"
+_HIJOS = r"(?:hij[oa]s?|beb[eé]s?|nen[eao]s?)"
+_FAMILIA = re.compile(
+    r"\bunid[oa]\s+(?:con|a)\s+(?:mi|su)\s+(?:pareja|esposo|esposa|marido|novio|novia)\b"
+    r"|\b(?:mi|su)\s+(?:esposo|esposa|marido|pareja|novio|novia)\b"
+    rf"|\b(?:mis?|sus?)\s+{_HIJOS}\b"  # "cuidar a mis hijos", "y mi hija"
+    rf"|\b(?:tengo|tiene)\s+(?:{_CANTIDAD}\s+|\w+\s+)?(?:{_HIJOS}|niñ[oa]s)\b"  # "tengo hijos pequeños", "tengo un bebé"
+    rf"|\b(?:mam[aá]|madre|pap[aá]|padre)\s+de\s+{_CANTIDAD}\s+(?:hij|niñ|nen)[oa]s?\b"
+    r"|\b(?:madre|padre)\s+de\s+familia\b",
+    re.IGNORECASE,
+)
 _EMBARAZO = re.compile(r"\b(?:embarazad[oa]s?|embarazos?|encinta|gestante)\b", re.IGNORECASE)
 # Edad en palabras, de 18 a 29 (la demo es con jóvenes de 18 a 29), solo seguida de "años" o
 # después de "edad": "dos años de experiencia" no es una edad y no se toca.
@@ -143,13 +159,23 @@ _EDAD_EN_PALABRAS = re.compile(
     rf"\bedad\s*(?:de|:)?\s*{_EDAD_PALABRAS}\b(?:\s*a[nñ]os)?|\b{_EDAD_PALABRAS}\s+a[nñ]os\b",
     re.IGNORECASE,
 )
-# Año o fecha de nacimiento: "nacida en 2006", "nació el 3 de mayo de 2006", "año de nacimiento: 2006".
+# Año o fecha de nacimiento: "nacida en 2006", "nació el 3 de mayo de 2006", "nacida el 20/11/2006",
+# "año de nacimiento: 2006". Con etiqueta se ciega siempre, sin mirar la edad del perfil (#148).
+_FECHA_NUM = r"(?:\d{1,2}[/.-]\d{1,2}[/.-](?:19|20)?\d{2}|(?:19|20)\d{2}[/.-]\d{1,2}[/.-]\d{1,2})(?!\d)"
 _NACIMIENTO = re.compile(
     r"\bnac(?:id[oa]s?|i[oó]|í)\s+(?:en|el)\s+(?:el\s+)?(?:a[nñ]o\s+)?"
-    r"(?:(?:\d{1,2}\s+de\s+)?[a-záéíóú]+\s+del?\s+)?(?:19|20)\d{2}\b"
+    rf"(?:{_FECHA_NUM}|(?:(?:\d{{1,2}}\s+de\s+)?[a-záéíóú]+\s+del?\s+)?(?:19|20)\d{{2}}\b)"
+    # "Nací en La Chorrera en 2006": el lugar entre medio también sale (dice de dónde es).
+    r"|\bnac(?:id[oa]s?|i[oó]|í)\s+en\s+[^.,;\n]{0,40}?\b(?:19|20)\d{2}\b"
     r"|\b(?:a[nñ]o|fecha)\s+de\s+nacimiento\b(?:\s*(?::|es|fue)?\s*"
     r"(?:(?:\d{1,2}\s+de\s+)?[a-záéíóú]+\s+del?\s+(?:19|20)\d{2}\b|\d[\d/.-]*\d))?",
     re.IGNORECASE,
+)
+# Una fecha numérica sin etiqueta solo se trata como nacimiento si corresponde a la edad declarada
+# del perfil, con ±1 año porque la edad del formulario no siempre cuadra al día. Así se conservan
+# las fechas de experiencia laboral, que son recientes.
+_FECHA_NUMERICA = re.compile(
+    r"(?<!\d)(?:\d{1,2}[/-]\d{1,2}[/-](?:19|20)\d{2}|(?:19|20)\d{2}[/-]\d{1,2}[/-]\d{1,2})(?!\d)"
 )
 # Sexo dicho de forma coloquial. Solo en el mensaje del orientador: en la evidencia literal del
 # joven "chica" suele ser otra cosa ("manejo la caja chica de la fonda").
@@ -172,19 +198,20 @@ def _patron_literal(texto: str) -> str:
     return "".join(piezas)
 
 
-def cegar(texto: str, perfil: Perfil, *, del_orientador: bool = False) -> str:
+def cegar(texto: str, perfil: Perfil, *, del_orientador: bool = False, hoy: date | None = None) -> str:
     """Quita de un texto que va a la empresa lo que identifica al joven por lo que no es su trabajo.
 
     Reemplaza por "[dato omitido]" el corregimiento del perfil, su edad ("20 años", "edad 20"),
     la edad en palabras de 18 a 29 ("veinte años"), el año de nacimiento ("nacida en 2006"), el
-    estado civil ("soltera", "madre soltera", "está unida"), el embarazo y los términos de
-    género. Se aplica a cada línea que sale hacia la empresa (CV y mensaje): la evidencia es
+    estado civil ("soltera", "madre soltera", "está unida", "separada"), fechas numéricas que
+    corresponden a su edad, el embarazo y los términos de género. Se aplica a cada línea que sale
+    hacia la empresa (CV y mensaje): la evidencia es
     literal y puede traer "tengo 20 años y vivo en La Chorrera".
 
     La edad en cifras sigue siendo solo la exacta del perfil, para no borrar "2 años de
     experiencia" ni "trabajé 3 años". ``del_orientador=True`` es para el texto libre del
     orientador: quita además "chica", "muchacha" y parecidos, que en la evidencia del joven
-    suelen ser otra cosa ("la caja chica").
+    suelen ser otra cosa ("la caja chica"). `hoy` permite fijar la fecha de referencia en pruebas.
     """
     patrones = []
     if str(perfil.corregimiento or "").strip():
@@ -195,11 +222,30 @@ def cegar(texto: str, perfil: Perfil, *, del_orientador: bool = False) -> str:
     for patron in patrones:
         texto = re.sub(patron, "[dato omitido]", texto, flags=re.IGNORECASE)
     texto = _UNIDO.sub(lambda m: f"{m.group(1)} [dato omitido]", texto)
-    terminos = [_ESTADO_CIVIL, _EMBARAZO, _EDAD_EN_PALABRAS, _NACIMIENTO, _TERMINOS_GENERO]
+    texto = _EN_PAREJA.sub(lambda m: f"{m.group(1)} [dato omitido]", texto)
+    terminos = [_NACIMIENTO, _FAMILIA, _ESTADO_CIVIL, _EMBARAZO, _EDAD_EN_PALABRAS, _TERMINOS_GENERO]
     if del_orientador:
         terminos.append(_TERMINOS_SEXO_COLOQUIALES)
     for patron in terminos:
         texto = patron.sub("[dato omitido]", texto)
+    if perfil.edad is not None:
+        fecha_actual = hoy or date.today()
+
+        def ocultar_fecha(coincidencia: re.Match[str]) -> str:
+            partes = re.split(r"[/-]", coincidencia.group())
+            anio, mes, dia = (int(p) for p in partes) if len(partes[0]) == 4 else (
+                int(partes[2]), int(partes[1]), int(partes[0])
+            )
+            try:
+                nacimiento = date(anio, mes, dia)
+            except ValueError:
+                return coincidencia.group()
+            edad_en_fecha = fecha_actual.year - nacimiento.year - (
+                (fecha_actual.month, fecha_actual.day) < (nacimiento.month, nacimiento.day)
+            )
+            return "[dato omitido]" if abs(edad_en_fecha - perfil.edad) <= 1 else coincidencia.group()
+
+        texto = _FECHA_NUMERICA.sub(ocultar_fecha, texto)
     return texto
 
 
