@@ -396,7 +396,7 @@ El registro completo está en [`decisiones.md`](decisiones.md). El horario y las
    - **Cómo se aplica:** el modelo es Claude Opus 5.5 (`claude-opus-5-5`) con el crédito del equipo, detrás de `puente/llm.py` (#45, #41), con Gemini como respaldo opcional (`LLM_PROVEEDOR=gemini`). Ningún agente crea su propio cliente.
 9. **Tablero en Starlette y Uvicorn, no en Streamlit.**
    - **Por qué:** Streamlit vuelve a ejecutar todo el programa en cada clic, y eso complica controlar la pausa del orientador (`interrupt()`) y probar el tablero de punta a punta por HTTP.
-   - **Cómo se aplica:** el tablero es un servidor web (Starlette y Uvicorn) con páginas en HTML, CSS y JavaScript sin framework (#11, #33). `app/streamlit_app.py` quedó vacío, con solo su docstring, pero la dependencia `streamlit` sigue en `pyproject.toml`.
+   - **Cómo se aplica:** el tablero es un servidor web (Starlette y Uvicorn) con páginas en HTML, CSS y JavaScript sin framework (#11, #33). `app/streamlit_app.py` quedó vacío, con solo su docstring, y la dependencia `streamlit` salió de `pyproject.toml` para que el despliegue de Vercel quepa en 500 MB (#252).
 
 ---
 
