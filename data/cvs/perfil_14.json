@@ -1,0 +1,42 @@
+{
+  "id": "P14",
+  "nombre": "Yessenia (ficticia)",
+  "edad": 27,
+  "corregimiento": "Pedregal",
+  "horario_libre": [
+    {
+      "dias": [
+        "lunes",
+        "martes",
+        "miercoles",
+        "jueves",
+        "viernes"
+      ],
+      "hora_inicio": "08:00",
+      "hora_fin": "14:00"
+    }
+  ],
+  "salario_minimo": 500,
+  "presupuesto_pasaje_diario": 1.5,
+  "experiencia_texto": "Trabajé 3 años en una fonda en Pedregal: picaba la verdura para el almuerzo, lavaba los platos y las ollas y limpiaba las mesas con cloro después de cada turno. También hago limpieza de casas por día, dejo los baños y la cocina limpios.",
+  "habilidades": [
+    {
+      "skill_id": "preparar_vegetales",
+      "evidencia": "picaba la verdura para el almuerzo"
+    },
+    {
+      "skill_id": "lavar_vajilla",
+      "evidencia": "lavaba los platos y las ollas"
+    },
+    {
+      "skill_id": "desinfectar_superficies",
+      "evidencia": "limpiaba las mesas con cloro"
+    },
+    {
+      "skill_id": "limpieza",
+      "evidencia": "hago limpieza de casas por día"
+    }
+  ],
+  "datos_sinteticos": true,
+  "horario_clases": []
+}

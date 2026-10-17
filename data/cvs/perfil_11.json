@@ -1,0 +1,43 @@
+{
+  "id": "P11",
+  "nombre": "Kevin (ficticio)",
+  "edad": 19,
+  "corregimiento": "Vista Alegre",
+  "horario_libre": [
+    {
+      "dias": [
+        "lunes",
+        "martes",
+        "miercoles",
+        "jueves",
+        "viernes",
+        "sabado"
+      ],
+      "hora_inicio": "07:00",
+      "hora_fin": "19:00"
+    }
+  ],
+  "salario_minimo": 600,
+  "presupuesto_pasaje_diario": 3.0,
+  "experiencia_texto": "Cobro en caja y doy el vuelto a los clientes. Acomodo los productos en los anaqueles. Reviso las fechas de vencimiento y pongo adelante lo que vence primero. Microsoft Word y Excel básico",
+  "habilidades": [
+    {
+      "skill_id": "manejo_caja",
+      "evidencia": "Cobro en caja y doy el vuelto a los clientes"
+    },
+    {
+      "skill_id": "reposicion_productos",
+      "evidencia": "Acomodo los productos en los anaqueles"
+    },
+    {
+      "skill_id": "rotacion_existencias",
+      "evidencia": "Reviso las fechas de vencimiento y pongo adelante lo que vence primero"
+    },
+    {
+      "skill_id": "excel_basico",
+      "evidencia": "Excel básico"
+    }
+  ],
+  "datos_sinteticos": true,
+  "horario_clases": []
+}
