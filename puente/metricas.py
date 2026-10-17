@@ -50,20 +50,20 @@ def calcular_metricas(
             continue
         perfil = perfiles_por_id.get(pid)
         oferta = ofertas_por_id.get(oid)
-        seleccionado = bool(desglose.get("viable")) and oferta is not None
+        seleccionado = bool(desglose.get("viable")) and oferta is not None and not _campo(oferta, "bloqueada", False)
 
         for rechazado_id, motivo in (desglose.get("ofertas_descartadas") or {}).items():
             rechazado_id = str(rechazado_id)
             motivo = str(motivo)
+            rechazado = ofertas_por_id.get(rechazado_id)
+            if rechazado is None or _campo(rechazado, "bloqueada", False):
+                continue
             if not any(palabra in motivo.lower() for palabra in ("traslado", "pasaje")):
                 continue
             descartes[(pid, rechazado_id)] = {
                 "perfil_id": pid, "oferta_id": rechazado_id, "motivo": motivo
             }
             if not seleccionado or perfil is None:
-                continue
-            rechazado = ofertas_por_id.get(rechazado_id)
-            if rechazado is None:
                 continue
             ruta = obtener_traslado(
                 indice, str(_campo(perfil, "corregimiento", "")),
