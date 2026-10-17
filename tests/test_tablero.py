@@ -1065,11 +1065,15 @@ def test_cargar_desde_data_no_deja_pasar_pii_de_los_archivos(tmp_path: Path, mon
         "horario_libre": [{"dias": ["lunes", "martes"], "hora_inicio": "08:00", "hora_fin": "17:00"}],
         "salario_minimo": 500, "presupuesto_pasaje_diario": 3.0,
         "experiencia_texto": "Mi cédula es 8-123-4567; vivo en Calle 5ta casa 12, Arraiján.",
-        "habilidades": [{"skill_id": "atencion_cliente", "evidencia": "atiendo clientes, llamen al 6123-4567"}],
+        # Lo que Perfil guarda son las evidencias (experiencia_texto se descarta al validar): ahí va la PII.
+        "habilidades": [{"skill_id": "atencion_cliente", "evidencia": (
+            "atiendo clientes; cédula 8-123-4567, llamen al 6123-4567; vivo en Calle 5ta casa 12, Arraiján"
+        )}],
     }
     (datos / "perfiles" / "con_pii.json").write_text(_json.dumps(perfil, ensure_ascii=False), encoding="utf-8")
     (datos / "ofertas" / "ZZ01.txt").write_text(
-        "Puesto: Cajera. Interesados llamar al 6123-4567. Entrevistas en Edificio Ficticio, piso 2.", encoding="utf-8"
+        "Puesto: Cajera. Interesados llamar al 6123-4567 (cédula del contacto 8-123-4567). "
+        "Entrevistas en Edificio Ficticio, piso 2.", encoding="utf-8"
     )
     monkeypatch.setattr(srv, "RUTA_DATA", datos)
     monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path / "outbox")
@@ -1097,9 +1101,8 @@ def test_cargar_desde_data_no_deja_pasar_pii_de_los_archivos(tmp_path: Path, mon
             estado = (await client.get("/api/estado")).json()
 
         publico = _json.dumps(estado, ensure_ascii=False)
-        for dato in crudos:
-            assert dato not in publico, dato
-            assert all(dato not in t for t in vistos), dato  # tampoco le llega a Mercado (ni al LLM)
+        assert [d for d in crudos if d in publico] == []
+        assert [d for d in crudos if any(d in t for t in vistos)] == []  # tampoco le llega a Mercado (ni al LLM)
         cargado = next(p for p in estado["perfiles"] if p["id"] == "PERFIL-DATA-P99")
         assert cargado["corregimiento"] == "Arraiján"
         assert "[TELEFONO]" in cargado["habilidades"][0]["evidencia"]
@@ -1110,7 +1113,6 @@ def test_cargar_desde_data_no_deja_pasar_pii_de_los_archivos(tmp_path: Path, mon
             guardado = " ".join(" ".join(str(c) for c in tuple(f)) for f in conn.execute("SELECT * FROM decisiones"))
         finally:
             conn.close()
-        for dato in crudos:
-            assert dato not in guardado, dato
+        assert [d for d in crudos if d in guardado] == []
 
     asyncio.run(_ejecutar())
