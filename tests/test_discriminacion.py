@@ -296,6 +296,15 @@ def test_numeros_que_no_son_edad_no_bloquean(texto):
         "Experiencia como cajera desde 25 años",
         "Sin experiencia, desde 25 años",
         "Experiencia en ventas. Edad: 26 años en adelante",
+        "experiencia indispensable mayores de 25 años",
+        "Experiencia indispensable desde 25 años",
+        "experiencia indispensable mínimo 25 años",
+        "Experiencia deseable desde 25 años de edad",
+        "Experiencia deseable desde los 25 años",
+        "Experiencia activa desde 25 años",
+        "Experiencia: desde 25 años de edad",
+        "Experiencia: desde los 25 años",
+        "experiencia mayores de 25 años",
     ],
 )
 def test_experiencia_cerca_de_un_limite_de_edad_no_lo_tapa(texto):
