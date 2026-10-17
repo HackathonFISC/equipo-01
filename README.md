@@ -112,7 +112,7 @@ Los siete agentes mínimos que sugiere el documento del reto y dónde están en 
 |---|---|---|---|
 | 1. Inteligencia de mercado: normalizar ofertas a una taxonomía, detectar requisitos, extraer tendencias | Mercado: extracción con Claude, habilidades normalizadas a la taxonomía enlazada a ESCO, reglas de la Ley 11 de 2005 en código, duplicados por similitud; el Redactor propone una versión legal de una oferta bloqueada | #5, #43, #157, #198 | Completo; tendencias en curso (#198) |
 | 2. Perfil: leer el CV y entrevistar para descubrir habilidades no declaradas | Perfil: CV o entrevista de 5 preguntas, cada habilidad con su frase literal de evidencia; vista `/joven`; la tirilla de matrícula da el horario de clases | #6, #44, #52, #164, #166 | Completo, con preguntas fijas |
-| 3. Matching: asignación con capacidades y restricciones de transporte, horario y salario | Solver OR-Tools CP-SAT con restricciones duras y hasta 3 candidatos por vacante | #4, #48 | Completo |
+| 3. Matching: asignación con capacidades y restricciones de transporte, horario y salario | Solver OR-Tools CP-SAT con restricciones duras, hasta 3 candidatos por plaza (no por vacante) y hasta 2 vacantes por joven | #4, #48 | Completo |
 | 4. Ruta de formación: plan de cursos con cupos, horarios, costo y transporte | Formación: set cover voraz (no óptimo) sobre cursos del INADEH con cupo, horario, costo y traslado | #14, #53 | Completo; cupos y horarios son datos de prueba |
 | 5. Postulación: adaptar el CV, agendar entrevistas y enviar listas cortas | Postulación: CV ciego por oferta, `.ics` de la entrevista, mensaje a la empresa por Telegram o `outbox/`; vista de la empresa | #7, #12, #123, #167 | Completo, sin carta de presentación aparte |
 | 6. Entrevista simulada con retroalimentación | No se construyó | — | Fuera de alcance |
@@ -303,7 +303,7 @@ Los códigos de acceso de `/joven` y `/empresa/lista-corta` se imprimen en la co
 **4. Agentes por línea de comandos**, también sin red:
 
 ```bash
-uv run python -m puente.agents.redactor --oferta OF-BLOQ-EDAD-04
+uv run python -m puente.agents.redactor --oferta OF-BLOQ-EDAD-04 --llm plantilla
 uv run python -m puente.agents.micromision --skill manejo_caja --texto "Le doy 5.45 de vuelto"
 uv run python -m puente.agents.horario tests/fixtures/tirilla_sintetica.png --hoy 2026-10-17
 ```
@@ -377,7 +377,7 @@ Cada afirmación de diseño tiene una prueba que cualquiera puede repetir:
   En el tablero, `POST /api/orientador/accion` responde **422 sin efectos** en tres casos: si falta el consentimiento, si el joven dijo «no» en `/joven` o si el Auditor marcó sesgo en el lote (#189). Lo cubre `tests/test_tablero.py`.
 - **La Ley 11 de 2005, con la frase.** Cada hallazgo de [`puente/rules/discriminacion.py`](puente/rules/discriminacion.py) guarda la regla y la frase literal de la oferta. Solo bloquean el límite de edad (art. 2) y la exigencia de sexo (art. 1), y las demás causales del art. 1 alertan citando el artículo. «Buena presencia», foto y estado civil solo alertan, sin artículo, porque la ley no menciona la apariencia. Lo cubren los 11 casos de requisitos discriminatorios de los evals.
 - **CV ciego.** `cegar()` en [`puente/tools/pdf.py`](puente/tools/pdf.py) quita de la evidencia que llega a la empresa la edad, la fecha de nacimiento, el corregimiento, el estado civil, la pareja, los hijos, el embarazo y los términos de género. El CV nunca lleva el presupuesto, el salario mínimo pedido ni las ofertas descartadas.
-  - El nombre se mantiene en el PDF según lo que mande la persona; Puente no lo agrega ni lo quita (#123).
+  - El nombre, por decisión de @jesus12ga del 16 de octubre (#123), va o no según lo que mande la persona: Puente no lo agrega ni lo quita, y todo lo demás de esta lista sí se oculta.
   - La vista de la empresa sí lo quita: allí cada persona es «Candidato N».
   - Pruebas en `tests/test_cv_ciego.py`.
 - **Demo reproducible sin red.** El grafo, la carga de ofertas y los evals corren con `LLM_MODO=reproducir`. `tests/test_grabacion_yaritza.py` falla si la grabación de Yaritza deja de corresponder al código.
