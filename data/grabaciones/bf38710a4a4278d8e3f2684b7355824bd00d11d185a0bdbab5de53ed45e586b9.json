@@ -1,0 +1,37 @@
+{
+  "hash": "bf38710a4a4278d8e3f2684b7355824bd00d11d185a0bdbab5de53ed45e586b9",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "mercado",
+  "esquema": "OfertaExtraida",
+  "salida": {
+    "puesto": "Auxiliar de servicio al cliente",
+    "empresa": "Empresa N",
+    "corregimiento": null,
+    "ubicacion_texto": "Arraiján, Panamá Oeste",
+    "salario_mensual": 666.0,
+    "salario_tipo": "exacto",
+    "horario": null,
+    "horario_tipo": "no_publicado",
+    "plazas": null,
+    "franjas_entrevista": [],
+    "habilidades": [
+      "Comunicación",
+      "Servicio al cliente",
+      "Soporte al cliente"
+    ],
+    "requisitos_texto": "Educación mínima: Universidad; 1 año de experiencia; Conocimientos: Comunicación, Servicio al cliente, Soporte al cliente",
+    "transcripcion_literal": null
+  },
+  "uso": {
+    "entrada": 2075,
+    "salida": 502
+  },
+  "creado": "2026-10-17T03:30:59+00:00",
+  "atendido_por": {
+    "proveedor": "anthropic",
+    "modelo": "claude-opus-5-5",
+    "modo": "json_libre_por_timeout_esquema"
+  }
+}

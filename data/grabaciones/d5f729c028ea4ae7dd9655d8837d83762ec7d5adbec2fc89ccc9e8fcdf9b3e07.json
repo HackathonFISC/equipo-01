@@ -1,0 +1,37 @@
+{
+  "hash": "d5f729c028ea4ae7dd9655d8837d83762ec7d5adbec2fc89ccc9e8fcdf9b3e07",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "mercado",
+  "esquema": "OfertaExtraida",
+  "salida": {
+    "puesto": "Operario de Limpieza",
+    "empresa": "Empresa K",
+    "corregimiento": null,
+    "ubicacion_texto": "Arraiján, Panamá Oeste",
+    "salario_mensual": 265.0,
+    "salario_tipo": "exacto",
+    "horario": null,
+    "horario_tipo": "no_publicado",
+    "plazas": null,
+    "franjas_entrevista": [],
+    "habilidades": [
+      "Proactividad",
+      "Aseo general",
+      "Limpieza"
+    ],
+    "requisitos_texto": "Educación mínima: Educación Básica Secundaria; 2 años de experiencia; Edad: entre 30 y 45 años; Conocimientos: Proactividad, Aseo general, Limpieza",
+    "transcripcion_literal": null
+  },
+  "uso": {
+    "entrada": 2069,
+    "salida": 473
+  },
+  "creado": "2026-10-17T03:30:45+00:00",
+  "atendido_por": {
+    "proveedor": "anthropic",
+    "modelo": "claude-opus-5-5",
+    "modo": "json_libre_por_timeout_esquema"
+  }
+}

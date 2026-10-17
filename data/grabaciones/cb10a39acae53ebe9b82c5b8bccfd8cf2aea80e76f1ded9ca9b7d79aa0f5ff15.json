@@ -1,0 +1,37 @@
+{
+  "hash": "cb10a39acae53ebe9b82c5b8bccfd8cf2aea80e76f1ded9ca9b7d79aa0f5ff15",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "mercado",
+  "esquema": "OfertaExtraida",
+  "salida": {
+    "puesto": "Mercaderista",
+    "empresa": "Empresa T",
+    "corregimiento": null,
+    "ubicacion_texto": "Ciudad de Panamá",
+    "salario_mensual": null,
+    "salario_tipo": "no_publicado",
+    "horario": null,
+    "horario_tipo": "no_publicado",
+    "plazas": null,
+    "franjas_entrevista": [],
+    "habilidades": [
+      "Surtido de productos de supermercado",
+      "Rotación de mercancía",
+      "Control de fechas de vencimiento"
+    ],
+    "requisitos_texto": "Bachiller completo; experiencia en rotación de mercancía; carné de salud blanco y verde. Buena presencia",
+    "transcripcion_literal": null
+  },
+  "uso": {
+    "entrada": 2017,
+    "salida": 616
+  },
+  "creado": "2026-10-17T03:31:31+00:00",
+  "atendido_por": {
+    "proveedor": "anthropic",
+    "modelo": "claude-opus-5-5",
+    "modo": "json_libre_por_timeout_esquema"
+  }
+}

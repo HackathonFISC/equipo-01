@@ -1,0 +1,40 @@
+{
+  "hash": "a31350339c915e5e3b997d468194e775f2dcdbef1b8b327a26466c7293f05f13",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "mercado",
+  "esquema": "OfertaExtraida",
+  "salida": {
+    "puesto": "Operaria de Limpieza - Para Oficinas y Planta",
+    "empresa": "Empresa B",
+    "corregimiento": "Juan Díaz",
+    "ubicacion_texto": "Panamá, Panamá; Zona de trabajo: Juan Díaz",
+    "salario_mensual": 632.0,
+    "salario_tipo": "exacto",
+    "horario": null,
+    "horario_tipo": "no_publicado",
+    "plazas": null,
+    "franjas_entrevista": [],
+    "habilidades": [
+      "Aseo general",
+      "Atención al detalle",
+      "Cocina",
+      "Limpieza general",
+      "Trabajo en alturas",
+      "Español"
+    ],
+    "requisitos_texto": "Educación mínima: Bachillerato / Educación Media; años de experiencia; Idiomas: Español; Conocimientos: Aseo general, Atención al detalle, Cocina, Limpieza general, Trabajo en alturas",
+    "transcripcion_literal": null
+  },
+  "uso": {
+    "entrada": 2133,
+    "salida": 688
+  },
+  "creado": "2026-10-17T03:29:55+00:00",
+  "atendido_por": {
+    "proveedor": "anthropic",
+    "modelo": "claude-opus-5-5",
+    "modo": "json_libre_por_timeout_esquema"
+  }
+}
