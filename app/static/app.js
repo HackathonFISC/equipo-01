@@ -947,7 +947,7 @@ function devolverFoco(perfilId) {
 }
 
 const TEXTOS_ACCION = {
-  aprobar: "Postulación enviada: CV, mensaje y cita quedaron en outbox/.",
+  aprobar: "Postulación enviada: CV, carta, mensaje y cita quedaron en outbox/.",
   editar: "Nota guardada. La opción sigue por aprobar.",
   quitar_candidato: "Candidato retirado de esta vacante; Matching recalculado.",
   rechazar: "Opción rechazada. No se envió nada a la empresa.",
