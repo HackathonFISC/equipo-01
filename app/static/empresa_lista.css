@@ -1,0 +1,512 @@
+/* Puente · lista corta ciega de la empresa (#167)
+   Hoja propia con los mismos tokens que joven.css: no depende de styles.css del tablero.
+   Sin fuentes ni recursos externos. */
+
+:root {
+  --bg: #f5f4f0;
+  --surface: #ffffff;
+  --surface-2: #f2f0ea;
+  --border: #e3dfd5;
+  --border-strong: #cdc7ba;
+
+  --text: #18212a;
+  --text-2: #46525d;
+
+  --brand: #0d6b69;
+  --brand-hover: #0a5856;
+  --brand-soft: #dcefec;
+  --on-brand: #ffffff;
+  --accent: #e2a11b;
+
+  --ok: #1b7245;
+  --ok-soft: #dcf1e3;
+  --warn: #965800;
+  --warn-soft: #fcefd5;
+  --bad: #b1261d;
+  --bad-soft: #fbe3df;
+  --info: #1e5c95;
+  --info-soft: #e0ecf7;
+
+  --barra: #102a2c;
+  --barra-texto: #e9f2f1;
+  --barra-tenue: #a9c0be;
+
+  --radio-s: 6px;
+  --radio: 10px;
+  --radio-l: 14px;
+  --sombra: 0 1px 2px rgba(24, 33, 42, 0.06), 0 1px 1px rgba(24, 33, 42, 0.03);
+  --anillo: 0 0 0 3px rgba(13, 107, 105, 0.35);
+
+  --fuente: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --mono: "Cascadia Code", "SF Mono", Consolas, ui-monospace, monospace;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1416;
+    --surface: #151d20;
+    --surface-2: #1b2529;
+    --border: #28343a;
+    --border-strong: #3a4950;
+    --text: #e6ecee;
+    --text-2: #a8b5ba;
+    --brand: #4fb8b3;
+    --brand-hover: #6cc9c4;
+    --brand-soft: #173533;
+    --on-brand: #06201f;
+    --ok: #6fd19a;
+    --ok-soft: #173326;
+    --warn: #f0b85a;
+    --warn-soft: #3a2c12;
+    --bad: #f28b82;
+    --bad-soft: #3b1d1b;
+    --info: #8cbcf0;
+    --info-soft: #182a3d;
+    --barra: #0a1a1c;
+    --anillo: 0 0 0 3px rgba(79, 184, 179, 0.4);
+    color-scheme: dark;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--fuente);
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+h1,
+h2,
+h3 {
+  line-height: 1.25;
+  margin: 0 0 0.5rem;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: 1.6rem;
+}
+
+h2 {
+  font-size: 1.2rem;
+}
+
+h3 {
+  font-size: 1.05rem;
+}
+
+p {
+  margin: 0 0 0.75rem;
+}
+
+a {
+  color: var(--brand);
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--anillo);
+}
+
+/* ---------- Barra ---------- */
+
+.barra {
+  background: var(--barra);
+  color: var(--barra-texto);
+}
+
+.barra-in {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 0.7rem 16px;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.marca {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--barra-texto);
+  font-weight: 700;
+  font-size: 1.1rem;
+  text-decoration: none;
+  border-radius: var(--radio-s);
+}
+
+.marca-icono {
+  width: 1.5rem;
+  height: 1.5rem;
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.marca-sub {
+  color: var(--barra-tenue);
+  font-weight: 600;
+  font-size: 0.95rem;
+  padding-left: 0.5rem;
+  border-left: 1px solid var(--barra-tenue);
+}
+
+/* ---------- Página ---------- */
+
+.pagina {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 1.25rem 16px 3rem;
+}
+
+.intro p {
+  color: var(--text-2);
+}
+
+.aviso {
+  display: inline-block;
+  background: var(--warn-soft);
+  color: var(--warn);
+  border-radius: var(--radio-s);
+  padding: 0.2rem 0.6rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.tarjeta {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radio-l);
+  box-shadow: var(--sombra);
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.lista {
+  display: grid;
+  gap: 1rem;
+}
+
+.ayuda,
+.nota {
+  color: var(--text-2);
+  font-size: 0.9rem;
+}
+
+.vacio {
+  color: var(--text-2);
+  font-style: italic;
+}
+
+/* ---------- Código de la empresa ---------- */
+
+.entrar h2 {
+  font-size: 1rem;
+}
+
+.entrar-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: flex-end;
+  margin-bottom: 0.5rem;
+}
+
+.campo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.92rem;
+  font-weight: 600;
+  min-width: 0;
+  flex: 1 1 16rem;
+}
+
+input,
+textarea {
+  font: inherit;
+  font-weight: 400;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radio);
+  padding: 0.6rem 0.7rem;
+  width: 100%;
+  min-height: 2.75rem;
+}
+
+textarea {
+  resize: vertical;
+  min-height: 4rem;
+}
+
+input:focus-visible,
+textarea:focus-visible {
+  border-color: var(--brand);
+}
+
+/* ---------- Botones ---------- */
+
+.acciones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.btn {
+  font: inherit;
+  font-weight: 600;
+  border-radius: var(--radio);
+  border: 1px solid transparent;
+  padding: 0.6rem 1rem;
+  min-height: 2.75rem;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.btn-pri {
+  background: var(--brand);
+  color: var(--on-brand);
+}
+
+.btn-pri:hover:not(:disabled) {
+  background: var(--brand-hover);
+}
+
+.btn-sec {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.btn-sec:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.btn-peligro {
+  background: var(--surface);
+  color: var(--bad);
+  border-color: var(--bad);
+}
+
+.btn-peligro:hover:not(:disabled) {
+  background: var(--bad-soft);
+}
+
+/* ---------- Panel ---------- */
+
+.cabecera {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.cabecera h2 {
+  margin: 0;
+}
+
+.cabecera-etiqueta {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.vacante-cabecera {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.vacante-cabecera h3 {
+  margin: 0;
+}
+
+.datos {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.5rem 0 0.75rem;
+  padding: 0;
+}
+
+.datos li {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radio-s);
+  padding: 0.15rem 0.55rem;
+  font-size: 0.88rem;
+}
+
+.etiqueta {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 0.15rem 0.65rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  white-space: nowrap;
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.etiqueta[data-tono="ok"] {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.etiqueta[data-tono="bad"] {
+  background: var(--bad-soft);
+  color: var(--bad);
+}
+
+.etiqueta[data-tono="warn"] {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.candidatos {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0.75rem 0;
+}
+
+.candidato {
+  border: 1px solid var(--border);
+  border-radius: var(--radio);
+  background: var(--surface-2);
+  padding: 0.85rem;
+}
+
+.candidato-cabecera {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.candidato-cabecera h4 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.habilidades {
+  list-style: none;
+  margin: 0 0 0.6rem;
+  padding: 0;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.habilidad-nombre {
+  font-weight: 600;
+}
+
+.pide {
+  margin-left: 0.4rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--ok);
+}
+
+.evidencia {
+  display: block;
+  color: var(--text-2);
+  font-style: italic;
+  overflow-wrap: anywhere;
+}
+
+.dato {
+  font-weight: 600;
+}
+
+.respuesta {
+  border-top: 1px solid var(--border);
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.respuesta .ayuda {
+  margin: 0;
+}
+
+.cierre {
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+}
+
+/* ---------- Aviso flotante ---------- */
+
+.toast {
+  position: fixed;
+  left: 16px;
+  right: 16px;
+  bottom: 16px;
+  max-width: 480px;
+  margin: 0 auto;
+  background: var(--text);
+  color: var(--bg);
+  border-radius: var(--radio);
+  padding: 0.75rem 1rem;
+  box-shadow: 0 6px 24px rgba(24, 33, 42, 0.2);
+  font-weight: 600;
+  z-index: 10;
+}
+
+.toast[data-tipo="error"] {
+  background: var(--bad);
+  color: #ffffff;
+}
+
+@media (min-width: 640px) {
+  h1 {
+    font-size: 1.9rem;
+  }
+
+  .tarjeta {
+    padding: 1.25rem 1.4rem;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .btn {
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+  }
+}
