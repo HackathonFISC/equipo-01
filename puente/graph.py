@@ -3,8 +3,8 @@
 Fase 2: los nodos son los agentes reales de main (Mercado #5/#43, Perfil #6/#44, Matching
 con el solver CP-SAT #4, Auditor v2 #50 y Formación #14). Postulación sigue como stub
 hasta #12. Los stubs de la Fase 1 quedan en `NODOS_FASE_1` para probar la mecánica del grafo.
-El LLM de Mercado y Perfil es inyectable (`nodos_fase_2`); los tests y la demo sin conexión
-usan respuestas grabadas, nunca la red.
+El LLM de Mercado y Perfil es inyectable (`nodos_fase_2`); por defecto es Claude a través de
+`puente.llm` (#45). Los tests y la demo sin conexión usan respuestas grabadas, nunca la red.
 
     START → guardrails ─rechazo→ END
                 └→ router ─oferta→ mercado ─bloqueada→ alerta_oferta → END
@@ -51,7 +51,7 @@ from puente.agents.auditor import nodo_auditor, ruta_post_auditor
 from puente.agents.formacion import nodo_formacion
 from puente.agents.matching import nodo_matching
 from puente.agents.mercado import crear_nodo_mercado, extractor_claude
-from puente.agents.perfil import llm_gemini, nodo_perfil
+from puente.agents.perfil import llm_puente, nodo_perfil
 from puente.guardrails import (
     RESPUESTA_FUERA_DE_ALCANCE,
     limpiar_entrada,
@@ -490,7 +490,7 @@ def _extractor_grabado(estado: dict) -> Callable[[Any], Any]:
 def _llm_grabado(entrada: dict) -> Callable[[str], str]:
     """Modo sin conexión de Perfil: `respuesta_llm` de la entrada o, si no trae, sus `habilidades`.
 
-    Igual que con Gemini, Perfil verifica cada habilidad contra la taxonomía y la evidencia literal.
+    Igual que con Claude vía `puente.llm`, Perfil verifica cada habilidad contra la taxonomía y la evidencia literal.
     """
     texto = json.dumps(entrada.get("respuesta_llm") or {"habilidades": entrada.get("habilidades") or []}, ensure_ascii=False)
     return lambda _prompt: texto
@@ -519,7 +519,7 @@ def crear_nodo_perfil_grafo(
     def perfil(estado: dict) -> dict:
         tax = taxonomia if taxonomia is not None else cargar_taxonomia_grafo()
         if not grabado:
-            return nodo_perfil(estado, llm=llm or llm_gemini, taxonomia=tax)
+            return nodo_perfil(estado, llm=llm or llm_puente, taxonomia=tax)
         cambios: dict = {}
         for entrada in estado.get("entradas_perfil") or []:
             parcial = {**estado, **cambios, "entradas_perfil": [entrada]}
@@ -607,8 +607,9 @@ def nodos_fase_2(
     grabado: bool = False,
     taxonomia: dict[str, dict] | None = None,
 ) -> dict[str, Nodo]:
-    """Los agentes reales. Sin `llm_perfil` ni `extraer_oferta` usan Gemini; `grabado=True` usa la
-    `respuesta_llm` guardada en cada entrada (demo sin conexión). Postulación sigue como stub (#12)."""
+    """Los agentes reales. Sin `llm_perfil` ni `extraer_oferta` usan Claude a través de `puente.llm`
+    (`llm_puente` y `extractor_claude`); `grabado=True` usa la `respuesta_llm` guardada en cada entrada
+    (demo sin conexión). Postulación sigue como stub (#12)."""
     return {
         "mercado": crear_nodo_mercado_grafo(extraer_oferta, grabado=grabado, taxonomia=taxonomia),
         "perfil": crear_nodo_perfil_grafo(llm_perfil, grabado=grabado, taxonomia=taxonomia),
@@ -780,7 +781,7 @@ NODOS_FASE_1: dict[str, Nodo] = {
 
 
 def construir_grafo(nodos: dict[str, Nodo] | None = None, checkpointer: Any = None):
-    """Compila el grafo con los agentes reales (`nodos_fase_2()`, Gemini por defecto).
+    """Compila el grafo con los agentes reales (`nodos_fase_2()`, Claude vía `puente.llm` por defecto).
 
     `nodos` reemplaza cualquiera de ellos: `nodos_fase_2(grabado=True)` para la demo sin
     conexión, LLM falsos en los tests o `NODOS_FASE_1` para probar solo la mecánica.
@@ -953,8 +954,11 @@ def main(argv: list[str] | None = None, leer: Callable[[str], str] = input, escr
     parser.add_argument(
         "--llm",
         default="grabado",
-        choices=["grabado", "gemini"],
-        help="grabado: respuestas guardadas en el caso, sin red (por defecto); gemini: GOOGLE_API_KEY en .env",
+        choices=["grabado", "claude"],
+        help=(
+            "grabado: respuestas guardadas en el caso, sin red (por defecto); claude: llamadas reales con "
+            "ANTHROPIC_API_KEY en .env vía puente.llm (LLM_MODO=grabar las guarda, LLM_MODO=reproducir las lee sin red)"
+        ),
     )
     args = parser.parse_args(argv)
     # Con la salida redirigida en Windows (cp1252) no existen ⏸, ⚠ ni →: se reemplazan en vez de cortar la demo.

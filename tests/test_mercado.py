@@ -1,4 +1,4 @@
-"""Agente Mercado (#5, #43): extracción con LLM falso, taxonomía, reglas en código, deduplicación e inyección."""
+"""Agente Mercado (#5, #43, #75): extracción con LLM falso, taxonomía, reglas en código, deduplicación e inyección."""
 
 import json
 import sys
@@ -11,6 +11,7 @@ from puente.agents.mercado import (
     DELIMITADOR,
     INSTRUCCIONES,
     UMBRAL_SIMILITUD,
+    UMBRAL_SIN_CORREGIMIENTO,
     EntradaOferta,
     a_entrada,
     construir_peticion,
@@ -20,6 +21,7 @@ from puente.agents.mercado import (
     huella,
     leer_capa_de_texto,
     procesar_ofertas,
+    razon_duplicada,
     similitud,
     verificar_horario,
     verificar_salario,
@@ -256,6 +258,7 @@ def test_pares_duplicados_entre_portales_quedan_como_una(par):
     assert fusion.agente == "mercado"
     assert resultado.ofertas[0].id in fusion.salida_resumen
     assert "similitud" in fusion.razon and str(UMBRAL_SIMILITUD) in fusion.razon
+    assert "mismo corregimiento" in fusion.razon  # #75: el motivo dice por qué se unen
 
 
 def test_misma_plantilla_de_otra_empresa_queda_como_dos():
@@ -276,11 +279,93 @@ def test_texto_casi_igual_con_otro_puesto_no_se_fusiona():
 
 
 def test_todos_los_fixtures_juntos():
-    pares = DUPLICADAS["pares_duplicados"] + [DUPLICADAS["par_distinto"]]
+    pares = DUPLICADAS["pares_duplicados"] + [DUPLICADAS["par_distinto"], DUPLICADAS["par_misma_cadena"]]
     casos = [c for par in pares for c in (par["a"], par["b"])]
     resultado = procesar_ofertas([c["texto"] for c in casos], extraer=ExtractorPorTexto(*casos), taxonomia=TAXONOMIA)
-    assert len(resultado.ofertas) == 4  # 1 + 1 + 2
-    assert len([d for d in resultado.decisiones if d.salida_resumen.startswith("duplicada de")]) == 2
+    assert len(resultado.ofertas) == 7  # 1 + 1 + 1 de los duplicados, 2 del par distinto y 2 sucursales
+    assert len({o.id for o in resultado.ofertas}) == 7
+    assert len([d for d in resultado.decisiones if d.salida_resumen.startswith("duplicada de")]) == 3
+
+
+# ---------------------------------------------------------------- #75: mismo corregimiento
+
+
+def _par(par, texto_b=None, **cambios_b):
+    """Procesa a y b de un par; `cambios_b` reemplaza campos de la extracción de b."""
+    b = {"texto": texto_b or par["b"]["texto"], "extraida": dict(par["b"]["extraida"], **cambios_b)}
+    # b va primero en el extractor: un reposteo de a empieza con el texto de a.
+    return procesar_ofertas([par["a"]["texto"], b["texto"]], extraer=ExtractorPorTexto(b, par["a"]), taxonomia=TAXONOMIA)
+
+
+def _fusiones(resultado):
+    return [d for d in resultado.decisiones if d.salida_resumen.startswith("duplicada de")]
+
+
+def _aparte(resultado):
+    return [d for d in resultado.decisiones if d.salida_resumen.endswith("vacante aparte")]
+
+
+def test_75_misma_cadena_en_dos_sucursales_quedan_como_dos():
+    par = DUPLICADAS["par_misma_cadena"]
+    parecido = similitud(par["a"]["texto"], par["b"]["texto"])
+    assert UMBRAL_SIMILITUD <= parecido < 0.89  # el texto solo no los separa, como en el par real de #75 (0.876)
+    resultado = _par(par)
+    assert [o.corregimiento for o in resultado.ofertas] == ["Vista Alegre", "Pedregal"]
+    assert len({o.id for o in resultado.ofertas}) == 2
+    assert _fusiones(resultado) == []
+    [aparte] = _aparte(resultado)
+    assert aparte.agente == "mercado" and resultado.ofertas[1].id in aparte.salida_resumen
+    assert "corregimiento distinto" in aparte.razon
+    assert "«Pedregal» y «Vista Alegre»" in aparte.razon and resultado.ofertas[0].id in aparte.razon
+    assert f"similitud {parecido:.2f}" in aparte.razon
+
+
+def test_75_razon_duplicada_ignora_mayusculas_y_acentos_del_corregimiento():
+    par = DUPLICADAS["par_misma_cadena"]
+    [a, b] = _par(par).ofertas
+    assert razon_duplicada(b, par["b"]["texto"], a, par["a"]["texto"]) is None
+    misma = b.model_copy(update={"corregimiento": "  VISTA álegre "})
+    assert "mismo corregimiento «Vista Alegre»" in razon_duplicada(misma, par["b"]["texto"], a, par["a"]["texto"])
+
+
+def test_75_sin_corregimiento_y_similitud_bajo_095_queda_aparte_por_confirmar():
+    par = DUPLICADAS["pares_duplicados"][2]  # «Confidencial» en un portal, similitud 0.88
+    assert UMBRAL_SIMILITUD <= similitud(par["a"]["texto"], par["b"]["texto"]) < UMBRAL_SIN_CORREGIMIENTO
+    resultado = _par(par, corregimiento=None)
+    assert len(resultado.ofertas) == 2 and _fusiones(resultado) == []
+    assert "corregimiento" in resultado.ofertas[1].por_confirmar()
+    [aparte] = _aparte(resultado)
+    assert aparte.razon.startswith(f"posible duplicada de {resultado.ofertas[0].id}")
+    assert "a una le falta el corregimiento" in aparte.razon and str(UMBRAL_SIN_CORREGIMIENTO) in aparte.razon
+
+
+def test_75_sin_corregimiento_y_texto_casi_identico_se_fusiona():
+    par = DUPLICADAS["pares_duplicados"][2]
+    reposteo = par["a"]["texto"] + " ¡Últimos cupos!"
+    assert similitud(par["a"]["texto"], reposteo) >= UMBRAL_SIN_CORREGIMIENTO
+    resultado = _par(par, texto_b=reposteo, corregimiento=None)
+    assert len(resultado.ofertas) == 1 and resultado.ofertas[0].corregimiento == "Juan Díaz"
+    [fusion] = _fusiones(resultado)
+    assert "a una le falta el corregimiento" in fusion.razon and str(UMBRAL_SIN_CORREGIMIENTO) in fusion.razon
+
+
+@pytest.mark.parametrize(
+    "corregimiento_b, ofertas, motivo",
+    [
+        ("Vista Alegre", 1, "fusionada"),
+        ("Pedregal", 2, "corregimiento distinto"),
+        (None, 2, "posible duplicada"),
+    ],
+)
+def test_75_sin_texto_se_exige_el_mismo_corregimiento_y_no_se_repite_el_id(tmp_path, corregimiento_b, ofertas, motivo):
+    """Imagen sin transcripción: no hay texto que comparar. Antes bastaba la misma empresa y puesto."""
+    base = {"puesto": "Cajero(a)", "empresa": "Farmacias Ficticias Vida Sana", "transcripcion_literal": None}
+    por_archivo = {"a.jpg": dict(base, corregimiento="Vista Alegre"), "b.jpg": dict(base, corregimiento=corregimiento_b)}
+    rutas = [_imagen(tmp_path, nombre) for nombre in por_archivo]
+    resultado = procesar_ofertas(rutas, extraer=lambda e: por_archivo[e.ruta.name], taxonomia=TAXONOMIA)
+    assert len(resultado.ofertas) == ofertas
+    assert len({o.id for o in resultado.ofertas}) == ofertas  # db.guardar_oferta pisaría una oferta con el mismo id
+    assert any(motivo in d.razon for d in resultado.decisiones[2:])
 
 
 # ---------------------------------------------------------------- #43: salario sin inventar
