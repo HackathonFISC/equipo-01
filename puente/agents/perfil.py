@@ -120,18 +120,22 @@ _DISPARADOR_DIRECCION = (
     r"\b(?i:viv(?:o|imos|[ií]a|[ií]amos)|resid(?:o|imos|[ií]a)|(?:estoy|estamos)\s+viviendo"
     r"|(?:mi|nuestra)\s+casa\s+(?:queda|est[aá])|queda\s+mi\s+casa)\s+(?i:en|por)\b"
 )
-# Llevan nombre propio o número.
+# Llevan nombre propio o número. "PH" es propiedad horizontal: "PH Ficticio".
 _CLAVE_CON_NOMBRE = (
-    r"\b(?i:(?:calle|avenida|barriada|barrio|urbanizaci[oó]n|residencial|edificio)\b|(?:ave?|bda|urb|edif)\.)"
+    r"\b(?i:(?:calle|avenida|barriada|barrio|urbanizaci[oó]n|residencial|edificio|ph)\b"
+    r"|(?:ave?|bda|urb|edif)\.|p\.[ \t]?h\.)"
 )
 # Solo cuentan con número: "casa grande" o "el edificio de la empresa" no son una dirección.
-_CLAVE_CON_NUMERO = r"\b(?i:(?:casa|apartamento|apto|manzana|lote)\b\.?|mz\.)"
-_NUMERO_DIRECCION = (
-    r"(?i:(?:(?:n[°º.o]*|#|n[úu]m(?:ero|\.)?)[ \t]*)?\d+\w{0,3}\b(?:-[a-z0-9]{1,3}\b)?"
-    # "casa 2 días", "el edificio 3 veces por semana": es una cantidad, no un número de casa.
+_CLAVE_CON_NUMERO = r"\b(?i:(?:casa|apartamento|apto|manzana|lote|torre|piso)\b\.?|mz\.)"
+# "casa 2 días", "el edificio 3 veces por semana": es una cantidad, no un número de casa. "piso" en
+# singular sí puede seguir a un número de dirección: "torre 2 piso 3".
+_NO_ES_CANTIDAD = (
     r"(?![ \t]*(?:%|(?:a[ñn]os?|mes(?:es)?|d[ií]as?|semanas?|horas?|veces|minutos?|personas?"
-    r"|ni[ñn]os?|platos?|clientes?|cuartos?|habitaciones?|pisos?)\b)))"
+    r"|ni[ñn]os?|platos?|clientes?|cuartos?|habitaciones?|pisos)\b))"
 )
+_NUMERO_DIRECCION = rf"(?i:(?:(?:n[°º.o]*|#|n[úu]m(?:ero|\.)?)[ \t]*)?\d+\w{{0,3}}\b(?:-[a-z0-9]{{1,3}}\b)?{_NO_ES_CANTIDAD})"
+# Número tras el nombre de una calle, solo con su marca: "Calle Ficticia #23", "Avenida Ficticia n° 4".
+_NUMERO_MARCADO = rf"(?i:(?:#|n[°º.]|n[úu]m(?:ero|\.)?)[ \t]*\d+\w{{0,3}}\b(?:-[a-z0-9]{{1,3}}\b)?{_NO_ES_CANTIDAD})"
 # Palabras que no pueden empezar un nombre de lugar: "Los sábados", "barrio con mi mamá".
 _PALABRAS_VACIAS = (
     r"(?i:(?:y|e|o|u|ni|con|sin|que|donde|desde|hace|hasta|para|pero|porque|pues|cerca|frente|junto"
@@ -205,9 +209,13 @@ class _PatronesDireccion:
         palabra_minuscula = rf"(?!{_PALABRAS_VACIAS}|{clave}|{corregimiento})[^\W\d_]+"
         nombre_minusculas = rf"(?:{_ARTICULO})?{palabra_minuscula}(?:[ \t]+{palabra_minuscula})?"
         letra = r"[A-ZÁÉÍÓÚÜÑ]\b"  # "Calle A", "Calle E": la letra sola es el nombre, no una palabra vacía
-        con_nombre = rf"{_CLAVE_CON_NOMBRE}[ \t]*(?:{_NUMERO_DIRECCION}|{nombre}|{letra})"
-        con_nombre_chat = rf"{_CLAVE_CON_NOMBRE}[ \t]*(?:{_NUMERO_DIRECCION}|{nombre}|{letra}|{nombre_minusculas})"
-        con_numero = rf"{_CLAVE_CON_NUMERO}[ \t]*{_NUMERO_DIRECCION}"
+        numero_marcado = rf"(?:[ \t]*{_NUMERO_MARCADO})?"  # "Calle Ficticia #23": el número va con la calle
+        con_nombre = rf"{_CLAVE_CON_NOMBRE}[ \t]*(?:{_NUMERO_DIRECCION}|(?:{nombre}|{letra}){numero_marcado})"
+        con_nombre_chat = (
+            rf"{_CLAVE_CON_NOMBRE}[ \t]*(?:{_NUMERO_DIRECCION}|(?:{nombre}|{letra}|{nombre_minusculas}){numero_marcado})"
+        )
+        # "torre B", "manzana C": la letra sola también es el número.
+        con_numero = rf"{_CLAVE_CON_NUMERO}[ \t]*(?:{_NUMERO_DIRECCION}|{letra})"
         elemento = rf"{_ARTICULO}?(?!{corregimiento})(?:{con_nombre}|{con_numero})"
         elemento_chat = rf"{_ARTICULO}?(?!{corregimiento})(?:{con_nombre_chat}|{con_numero})"
 
@@ -222,6 +230,7 @@ class _PatronesDireccion:
         self.elemento = re.compile(elemento)
         self.elemento_chat = re.compile(elemento_chat)
         self.referencia = re.compile(_REFERENCIA_DIRECCION)
+        self.cierre = re.compile(r"[ \t]*(?:[.;:!?)\n]|$)")
         self.nombre_suelto = re.compile(rf"{_ARTICULO}?(?!{corregimiento}|{general}){nombre}")
 
 
@@ -234,12 +243,27 @@ def _patrones_direccion(corregimientos: tuple[str, ...]) -> _PatronesDireccion:
     return _PATRONES_DIRECCION[corregimientos]
 
 
+def _cierra_direccion(texto: str, pos: int, disparador: bool, p: _PatronesDireccion) -> bool:
+    """True si en `pos` termina la frase o sigue otra pieza de la dirección que no sea un nombre suelto:
+    corregimiento, lugar general, elemento o referencia."""
+    if p.cierre.match(texto, pos):
+        return True
+    separador = p.separador.match(texto, pos)
+    elemento = p.elemento_chat if disparador else p.elemento
+    return separador is not None and any(
+        patron.match(texto, separador.end()) for patron in (p.corregimiento, p.general, elemento, p.referencia)
+    )
+
+
 def _piezas_direccion(texto: str, pos: int, disparador: bool, p: _PatronesDireccion) -> list[tuple[int, int, bool]]:
     """Piezas (inicio, fin, se_quita) de la mención de dirección que empieza en `pos`.
 
     Sin disparador la mención tiene que abrir con un elemento ("Calle 5ta"). Un nombre propio suelto
     solo cuenta justo tras el disparador o tras una coma, "en" o "de": "Calle 50 Atención al cliente"
-    (un CV pegado sin puntuación) no se come "Atención".
+    (un CV pegado sin puntuación) no se come "Atención". Tras una coma, "en" o "de" además tiene que
+    cerrar la frase o ir seguido de otra pieza (#95): "Vivo en Arraiján, Los Pinos." y "Vivo en Arraiján,
+    Los Pinos, casa 3" quitan "Los Pinos", pero "Vivo en Arraiján, Excel y Word son mis fuertes" no
+    toca "Excel y Word", que es evidencia del joven.
     """
     piezas: list[tuple[int, int, bool]] = []
     while True:
@@ -259,6 +283,8 @@ def _piezas_direccion(texto: str, pos: int, disparador: bool, p: _PatronesDirecc
             if pieza:
                 break
         else:
+            return piezas
+        if patron is p.nombre_suelto and piezas and not _cierra_direccion(texto, pieza.end(), disparador, p):
             return piezas
         piezas.append((pieza.start(), pieza.end(), se_quita))
         pos = pieza.end()
@@ -298,10 +324,15 @@ def quitar_pii(texto: str, corregimientos: Iterable[str] = CORREGIMIENTOS) -> st
         return f"Corregimiento: {corregimiento}" if corregimiento else "[DIRECCION]"
 
     texto = _DIRECCION_ETIQUETA.sub(_linea_direccion, texto)
+    return _quitar_direccion_libre(quitar_cedula_y_telefono(texto), corregimientos)
+
+
+def quitar_cedula_y_telefono(texto: str) -> str:
+    """Solo cédula y teléfono, sin tocar direcciones: para las ofertas (#95), donde la dirección es la
+    de la empresa ("Entrevistas en Edificio Ficticio, piso 2") y no la de una persona."""
     texto = _CEDULA.sub("[CEDULA]", texto)
     texto = _CEDULA_ETIQUETA.sub(lambda m: f"{m.group(1)}{m.group(2)}[CEDULA]", texto)
-    texto = _TELEFONO.sub("[TELEFONO]", texto)
-    return _quitar_direccion_libre(texto, corregimientos)
+    return _TELEFONO.sub("[TELEFONO]", texto)
 
 
 # ---------------------------------------------------------------- evidencia y taxonomía
