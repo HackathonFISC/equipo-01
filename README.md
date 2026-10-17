@@ -404,6 +404,7 @@ Cada afirmación de diseño tiene una prueba que cualquiera puede repetir:
 - **`/joven` sí llama a Perfil y a Horario con el LLM.** En modo reproducir solo lee lo que tiene grabación: la respuesta de Yaritza y la tirilla sintética. Con texto nuevo hace falta `LLM_MODO=vivo` y `ANTHROPIC_API_KEY`; sin eso responde con un error claro y no inventa el perfil.
 - **Telegram en el tablero.** El tablero no tiene un interruptor de Telegram como el `--telegram` de la terminal: si el entorno trae `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID_EMPRESA`, la lista corta sale de verdad.
 - **Variación del LLM.** Los evals en modo reproducir usan una grabación por caso; no miden la variación entre corridas del LLM.
+- **Falsos positivos de la regla de edad.** Las reglas de la Ley 11 pueden bloquear por edad una frase que no habla de la edad del candidato, como «trayectoria mayor a 20 años en el mercado» o «plazo menor a 12 años». En ese caso el orientador desbloquea la oferta con su motivo. Ninguna de las 20 ofertas de `data/` cae en eso: siguen 7 bloqueadas.
 
 ## Guardrails y datos personales
 

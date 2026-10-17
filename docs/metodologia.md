@@ -240,7 +240,7 @@ Cómo se lee cada arista condicional:
 9. **Postulación** (#7, #12, #84). Solo corre después de la aprobación:
    - guarda perfil, oferta y postulación en SQLite y la avanza por sus estados, cada paso con su `Decision` en la tabla `decisiones`;
    - genera el CV ciego en PDF, solo con las habilidades que tienen evidencia;
-   - genera la carta de presentación (#212, `puente/tools/carta.py`) por plantilla y sin LLM: saludo, puesto, hasta 3 habilidades que la oferta pide con su frase literal (si son menos de 2, completa con otras que tengan evidencia) y la disponibilidad. Solo dice que el horario del puesto «cabe» si es fijo y no cruza la medianoche. La evidencia pasa por `cegar()`; el texto de la oferta no, porque tapar ahí el corregimiento del joven se lo revelaría a la empresa (#226). Todo pasa por `limpiar_pii()` y el nombre va tal como lo da la persona (#123);
+   - genera la carta de presentación (#212, `puente/tools/carta.py`) por plantilla y sin LLM: saludo, puesto, hasta 3 habilidades que la oferta pide con su frase literal (si son menos de 2, completa con otras que tengan evidencia) y la disponibilidad. Solo dice que el horario del puesto «cabe» si es fijo y no cruza la medianoche. La evidencia y el nombre de cada habilidad pasan por `cegar()`; el texto de la oferta no, porque tapar ahí el corregimiento del joven se lo revelaría a la empresa (#226). Todo pasa por `limpiar_pii()` y el nombre va tal como lo da la persona (#123);
    - elige una franja de entrevista sin choques y crea el `.ics` de 45 minutos;
    - envía la lista corta a la empresa por Telegram o, sin token, la escribe en `outbox/`.
 
