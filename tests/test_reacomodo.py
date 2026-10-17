@@ -345,6 +345,91 @@ def test_demo_por_consola_con_el_rechazo_de_la_empresa(tmp_path, capsys):
     assert [(e["perfil_id"], e["origen"]) for e in final["excluidos"]] == [("yaritza", "empresa")]
 
 
+def _lector(respuestas, preguntas):
+    """`leer` de main() con respuestas fijas; guarda cada pregunta. Sin respuestas, EOF como un stdin cerrado."""
+    pendientes = iter(respuestas)
+
+    def leer(pregunta):
+        preguntas.append(pregunta)
+        try:
+            return next(pendientes)
+        except StopIteration:
+            raise EOFError from None
+
+    return leer
+
+
+APROBAR_CAJERO = ["aprobar", "Orientadora Ficticia", "", "s", "s"]  # Carlos y Yaritza
+APROBAR_COCINA = ["aprobar", "Orientadora Ficticia", "", "s", "s", "s"]  # Carlos, María y Yaritza
+
+
+def test_reacomodo_interactivo_en_la_pregunta_de_accion(tmp_path):
+    """#130: sin --auto, la respuesta de la empresa se escribe donde va la acción, con la sintaxis de --auto."""
+    respuestas = [
+        *APROBAR_CAJERO,
+        f"empresa_rechaza:yaritza@{CAJERO}", "", "Orientadora Ficticia", "llamó el gerente",  # en vez de decidir la cocina
+        "aprobar", "Orientadora Ficticia", "", "s",  # cajero recalculado: solo Carlos
+        "rechazar", "Orientadora Ficticia", "",  # cocina
+        "",  # al final, Enter: la empresa no dijo más
+    ]
+    preguntas: list[str] = []
+    lineas: list[str] = []
+    final = g.main(["--checkpoints", str(tmp_path / "cp.db")], leer=_lector(respuestas, preguntas), escribir=lineas.append)
+    salida = "\n".join(lineas)
+
+    assert "empresa_rechaza:perfil@oferta" in preguntas[0]  # la pregunta de acción enseña la sintaxis
+    assert f"Evento de la empresa · rechaza · yaritza en {CAJERO}" in salida
+    assert salida.count("Aprobación pendiente · " + CAJERO) == 2
+    assert "     - Yaritza Ficticia (yaritza): rechazado por Minisúper Ficticio El Ahorro: llamó el gerente" in salida
+    assert final["postulaciones"][clave_postulacion("yaritza", CAJERO)] == NO_SELECCIONADO
+    assert [(e["perfil_id"], e["origen"]) for e in final["excluidos"]] == [("yaritza", "empresa")]
+    evento = next(d for d in final["decisiones"] if d.agente == "evento_empresa")
+    assert "registrada por Orientadora Ficticia: llamó el gerente" in evento.razon
+    assert not final.get("errores")
+
+
+def test_reacomodo_interactivo_al_terminar_el_flujo(tmp_path):
+    """La demo de --auto sin --auto: aprobar, aprobar, la empresa rechaza a Yaritza al final y se aprueba la lista nueva."""
+    respuestas = [
+        *APROBAR_CAJERO,
+        *APROBAR_COCINA,
+        f"empresa_rechaza:@{CAJERO}",  # incompleto: falta a quién; se vuelve a preguntar
+        f"empresa_rechaza yaritza@{CAJERO}",  # también con espacio en vez de los dos puntos
+        "Orientadora Ficticia", "",
+        "aprobar", "Orientadora Ficticia", "", "s",
+    ]  # luego se acaba la entrada (EOF) en la pregunta final y la demo termina
+    preguntas: list[str] = []
+    lineas: list[str] = []
+    final = g.main(["--checkpoints", str(tmp_path / "cp.db")], leer=_lector(respuestas, preguntas), escribir=lineas.append)
+    salida = "\n".join(lineas)
+
+    # incompleta, con espacio y, tras la lista nueva, la que corta el EOF
+    assert sum(p.startswith("¿La empresa respondió?") for p in preguntas) == 3
+    assert salida.count("Aprobación pendiente · " + CAJERO) == 2
+    assert "Flujo terminado." in salida
+    assert final["postulaciones"][clave_postulacion("yaritza", CAJERO)] == NO_SELECCIONADO
+    assert final["postulaciones"][clave_postulacion("yaritza", COCINA)] == EstadoPostulacion.ENVIADO
+    assert not final.get("errores")
+
+
+@pytest.mark.parametrize(
+    "texto, evento",
+    [
+        (f"empresa_rechaza:yaritza@{CAJERO}", {"tipo": "rechaza", "oferta_id": CAJERO, "perfil_id": "yaritza"}),
+        (f"empresa_rechaza  yaritza@{CAJERO} ", {"tipo": "rechaza", "oferta_id": CAJERO, "perfil_id": "yaritza"}),
+        (f"empresa_cubierta:{COCINA}", {"tipo": "cubierta", "oferta_id": COCINA, "perfil_id": None}),
+        (f"empresa_cubierta:carlos@{COCINA}", {"tipo": "cubierta", "oferta_id": COCINA, "perfil_id": "carlos"}),
+        (f"empresa_rechaza:{CAJERO}", None),  # rechaza sin a quién
+        (f"empresa_contrata:yaritza@{CAJERO}", None),
+        ("empresa_cubierta:", None),
+        ("aprobar", None),
+        ("", None),
+    ],
+)
+def test_evento_tecleado_usa_la_sintaxis_de_auto(texto, evento):
+    assert g._evento_tecleado(texto) == evento
+
+
 def test_demo_por_consola_con_vacante_cubierta_mientras_espera(tmp_path, capsys):
     final = g.main(["--checkpoints", str(tmp_path / "cp.db"), "--auto", f"aprobar,empresa_cubierta:{COCINA}"])
     salida = capsys.readouterr().out

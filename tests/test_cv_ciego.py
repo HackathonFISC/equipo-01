@@ -497,3 +497,76 @@ def test_fugas_de_familia_tampoco_llegan_al_pdf(tmp_path):
     for dato in ("mis hijos", "hijos peque", "madre de familia", "bebé", "mi hija", "2006", "la chorrera"):
         assert dato not in texto
     assert "atiendo la fonda de mi mam" in texto
+
+
+# ---------------------------------------------------------------- #163: «sus hijos» de los clientes
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "atendí a clientes con sus hijos",
+        "familias con sus hijos",
+        "atendí a mamás con sus bebés",
+        "atendí a una clienta con su esposo",  # mismo criterio para la pareja
+        "atendía a clientes frecuentes con sus hijos",
+        "clientas acompañadas de sus bebés",
+        "recibía a turistas junto a sus hijos",
+    ],
+)
+def test_cegar_no_toca_los_hijos_ni_la_pareja_de_los_clientes(texto):
+    from puente.tools.pdf import cegar
+
+    assert cegar(texto, _perfil()) == texto
+
+
+@pytest.mark.parametrize(
+    "texto, esperado",
+    [
+        ("cuidar a mis hijos", "cuidar a [dato omitido]"),
+        ("su esposo me apoya", "[dato omitido] me apoya"),
+        ("Tengo hijos pequeños", "[dato omitido] pequeños"),
+        ("Vivo con mi esposo y mi hija", "Vivo con [dato omitido] y [dato omitido]"),
+        # Primera persona: nunca son de otro, aunque haya clientes delante.
+        ("atendí a clientes con mis hijos", "atendí a clientes con [dato omitido]"),
+        # Con «y» puede empezar otra frase cuyo sujeto es el joven.
+        ("atiende clientes y sus hijos la esperan", "atiende clientes y [dato omitido] la esperan"),
+        ("vivo con mi pareja y sus hijos", "vivo con [dato omitido] y [dato omitido]"),
+        # Con un posesivo delante, la familia puede ser la del joven.
+        ("vive con su familia junto a sus hijos", "vive con su familia junto a [dato omitido]"),
+        # «persona» puede ser el joven: no cuenta como otra persona.
+        ("Es una persona responsable con sus hijos", "Es una persona responsable con [dato omitido]"),
+        ("sus hijos están en la escuela", "[dato omitido] están en la escuela"),
+    ],
+)
+def test_cegar_sigue_quitando_los_hijos_y_la_pareja_del_joven(texto, esperado):
+    from puente.tools.pdf import cegar
+
+    assert cegar(texto, _perfil()) == esperado
+
+
+def test_en_el_texto_del_orientador_sus_hijos_se_ciega_siempre():
+    """El orientador habla del joven en tercera persona: «sus hijos» pueden ser los del joven."""
+    from puente.tools.pdf import cegar
+
+    ciego = cegar("Atendió a clientes con sus hijos", _perfil(), del_orientador=True)
+    assert ciego == "Atendió a clientes con [dato omitido]"
+
+
+def test_los_hijos_de_los_clientes_llegan_a_la_empresa_y_los_del_joven_no(tmp_path):
+    """De punta a punta: CV, PDF y mensaje de la lista corta (#163)."""
+    from puente.agents.postulacion import _texto_lista_corta
+
+    perfil, oferta = _perfil(), _oferta()
+    perfil.habilidades[0] = HabilidadPerfil(
+        skill_id="atencion_cliente", evidencia="atendí a clientes con sus hijos; cuido a mis hijos")
+    match = Match(
+        perfil_id=perfil.id, oferta_id=oferta.id, puntaje=90,
+        desglose={"cobertura": 1.0, "minutos_traslado": 35, "pasaje_diario": 1.5, "penalizacion": 0},
+    )
+    en_cv = "\n".join(contenido_cv(perfil, oferta))
+    en_pdf = _texto_pdf(generar_cv(perfil, oferta, tmp_path / "cv"))
+    mensaje = _texto_lista_corta(oferta, [(match, perfil, INICIO)])
+    for texto in (en_cv, en_pdf, mensaje):
+        assert "atendí a clientes con sus hijos" in texto
+        assert "mis hijos" not in texto and "cuido a [dato omitido]" in texto

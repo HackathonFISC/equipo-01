@@ -72,8 +72,8 @@ Protocolo completo para humanos y agentes de IA (Claude Code, Codex, Antigravity
 3. PR con `Closes #N` (`scripts/entregar.sh N`); otro integrante o Claude lo revisa antes de fusionar.
 4. Claude revisa issues y PRs; sus correcciones van en su propia rama `claude/issue-N-...` con un PR aparte, sin tocar ramas ajenas.
 5. Todo uso de IA se anota en `docs/bitacora_ia.md` en el momento con `scripts/bitacora.sh N "qué se pidió" "qué se cambió a mano"`; el hook pre-commit no deja commitear código sin su fila.
-6. Hora 23:30: tag `final-24h`. Después de eso no se empuja nada.
+6. Código congelado a las 11:30 del 17 de octubre; tag `final-24h` a las 11:45, nunca después de las 12:00. Después de eso no se empuja nada (horario en #41).
 
 ---
 
-Entrega: tag de git `final-24h` sobre el último commit válido, al cumplirse la hora 24.
+Entrega: tag de git `final-24h` sobre el último commit válido, a las 11:45 del 17 de octubre, antes de la hora límite de las 13:00 (horario en #41).

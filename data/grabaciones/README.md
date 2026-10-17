@@ -61,6 +61,18 @@ respuestas afectadas con `LLM_MODO=grabar` y ejecuta
 `uv run pytest -q tests/test_grabacion_yaritza.py`. La prueba calcula el hash del prompt
 real de Perfil y falla con «falta la grabación …» cuando la demo ya no puede reproducirse.
 
+## Tirilla de matrícula sintética (#164)
+
+`6f0c1977…a309101.json` es la lectura de `tests/fixtures/tirilla_sintetica.png` por Claude Opus 5.5 con visión
+(agente `horario`, esquema `TirillaExtraida`). Hay una copia idéntica en `evals/grabaciones/` para el caso HOR-01.
+El hash depende de los bytes del PNG, de `INSTRUCCIONES`, `PROMPT` y `TirillaExtraida` en `puente/agents/horario.py`:
+si cambia cualquiera de ellos, `tests/test_horario.py` falla con «falta la grabación» y hay que volver a grabar:
+
+    LLM_MODO=grabar uv run python -m puente.agents.horario tests/fixtures/tirilla_sintetica.png --hoy 2026-10-17
+
+y copiar el `<hash>.json` nuevo a `evals/grabaciones/`. La grabación del 17 de octubre de 2026 costó US$0.026 (3,937 tokens de
+entrada y 535 de salida).
+
 ## Ofertas de la carga inicial (#46)
 
 Las 20 ofertas de `data/ofertas/` tienen grabaciones de Claude Opus 5.5 validadas con

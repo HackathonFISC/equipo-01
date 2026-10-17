@@ -27,6 +27,17 @@
 #   matching_factible           entrada {config, traslados[], perfiles[], ofertas[]} -> esperado {asignacion{perfil: oferta|null}, violaciones_duras}
 #   sesgo_contrafactual         entrada {matching, traslados[], perfiles[], ofertas[]} -> esperado {sesgo_detectado}
 #   guardrails                  entrada {tipo, ...} -> esperado {veredicto, llamo_llm?, sigue_como_dato?}
+#   horario_tirilla             entrada {ruta (imagen de tests/fixtures), hoy} -> esperado {horario_clases[], problemas[],
+#                               vigente_hasta?, excepciones[]? ({desde, hasta})}  (#164, Claude con visión)
+#   horario_validacion          entrada {bloques[] (como los leería el LLM)} -> esperado {problemas[] ({indice, campo}),
+#                               horario_clases[]}  (#164, solo código)
+#   redactor_puente             entrada {oferta | oferta_ruta (.json de tests/fixtures), perfiles[], traslados[], minutos?,
+#                               llm_falso? (texto que devuelve un LLM falso; sin él redacta la plantilla del código)}
+#                               -> esperado {bloqueada_antes, bloqueada_despues, hallazgos_despues[] (revisar_texto sobre
+#                               el puesto y el texto propuestos), cambios[] ({regla, frase}), viables_antes[],
+#                               viables_despues[] (ids, calculados a mano con las restricciones duras del solver),
+#                               cumplen_filtro_original[]?, redactado_por?, nota_contiene?, texto_contiene[]?,
+#                               max_minutos_traslado?, decision_pendiente?}  (#157, sin LLM real)
 #
 # La taxonomía vigente se carga del CSV al ejecutar los casos.
 
@@ -63,6 +74,21 @@ categorias:
     usa_llm: false
     metrica: "Veredicto (rechazar | marcar | fuera_de_alcance | aceptar) igual a lo esperado y sin llamar al LLM cuando se rechaza"
     meta: 1.0
+  horario_tirilla:
+    issue: 164
+    usa_llm: true
+    metrica: "La tirilla sintética da exactamente el horario_clases, las excepciones y la vigencia esperados, sin problemas"
+    meta: 1.0
+  horario_validacion:
+    issue: 164
+    usa_llm: false
+    metrica: "Los bloques inválidos se rechazan (índice y campo) y los válidos dan el horario_clases esperado"
+    meta: 1.0
+  redactor_puente:
+    issue: 157
+    usa_llm: false
+    metrica: "El texto propuesto pasa revisar_texto sin hallazgos, con los cambios esperados, y los viables antes y después son los calculados a mano con las restricciones duras del solver"
+    meta: 1.0
 
 casos:
   # ------------------------------------------------------------------ Extracción de ofertas (5)
@@ -91,9 +117,9 @@ casos:
         nueva_ejecucion: "2026-10-16 23:22: ya responde tras #140; nuevo fallo #152"
       - fecha: "2026-10-16"
         observado: "Mercado dejó corregimiento vacío aunque la oferta dice La Chorrera."
-        cambio_hecho: "Pendiente de corregir en #152; esperado original conservado"
+        cambio_hecho: "Causa: Claude deja null el corregimiento cuando la oferta da un distrito (La Chorrera) y lo copia en ubicacion_texto («La Chorrera, calle 5ta»); Mercado no lo resolvía. puente/agents/mercado.py (inferir_corregimiento) toma el corregimiento de ubicacion_texto si nombra un solo nodo o alias de traslados.csv, como palabra completa, y también aparece en el texto; si nombra varios no elige y no busca fuera de la ubicación. «Cajero/a» y «S.A.» no causaban el fallo (el comparador ya usa contención); evals/run.py los normaliza igual en los dos lados. Sin cambiar prompt, esquema, taxonomía ni grabación (#152); esperado original conservado"
         issue: "#152"
-        nueva_ejecucion: "pendiente"
+        nueva_ejecucion: "2026-10-17 00:30, evals.run en modo reproducir con la grabación de Claude: ok, corregimiento La Chorrera"
 
   - id: EXT-02
     categoria: extraccion_ofertas
@@ -119,9 +145,9 @@ casos:
         nueva_ejecucion: "2026-10-16 23:22: ya responde tras #140; nuevo fallo #153"
       - fecha: "2026-10-16"
         observado: "Mercado solo conservó inventario; faltan reposición y recepción de mercancía."
-        cambio_hecho: "Pendiente de corregir en #153; esperado original conservado"
+        cambio_hecho: "Causa: la extracción sí traía las tres («acomodar productos en estantes», «recibir mercancía», «control de inventario»), pero la normalización a la taxonomía era solo exacta y descartó las dos primeras («acomodar productos», «recibir mercancías»). Mercado usa ahora, si no hay coincidencia exacta, buscar_habilidades de puente/rules/taxonomia.py: compara raíces (sin palabras vacías, plural, infinitivo ni -ción) y acepta una frase que contiene un nombre de dos o más palabras. Perfil sigue con la coincidencia exacta. Sin cambiar taxonomia.csv, prompt ni grabación (#153); esperado original conservado"
         issue: "#153"
-        nueva_ejecucion: "pendiente"
+        nueva_ejecucion: "2026-10-17 00:30, evals.run en modo reproducir con la grabación de Claude: ok, habilidades [reposicion_productos, recepcion_mercancia, inventario]"
 
   - id: EXT-03
     categoria: extraccion_ofertas
@@ -147,9 +173,9 @@ casos:
         nueva_ejecucion: "2026-10-16 23:22: ya responde tras #140; nuevo fallo #154"
       - fecha: "2026-10-16"
         observado: "Mercado dejó corregimiento vacío y solo conservó Excel; faltan registro y archivo."
-        cambio_hecho: "Pendiente de corregir en #154; esperado original conservado"
+        cambio_hecho: "Causas: (1) como EXT-01, la oferta da el distrito San Miguelito, Claude deja null el corregimiento y lo copia en ubicacion_texto; Mercado lo toma ahora de ahí si es un nodo de traslados.csv (#152). (2) La extracción sí traía «registro de datos de facturas» y «archivo de documentos», pero la normalización exacta no las unía a «registro de datos» y «archivar documentos»; ahora Mercado usa buscar_habilidades por raíces (#153). Sin cambiar prompt, esquema, taxonomía ni grabación (#154); esperado original conservado"
         issue: "#154"
-        nueva_ejecucion: "pendiente"
+        nueva_ejecucion: "2026-10-17 00:30, evals.run en modo reproducir con la grabación de Claude: ok, corregimiento San Miguelito y habilidades [excel_basico, registro_datos, archivo_documentos]"
 
   - id: EXT-04
     categoria: extraccion_ofertas
@@ -174,9 +200,9 @@ casos:
         nueva_ejecucion: "2026-10-16 23:22: ya responde tras #140; nuevo fallo #155"
       - fecha: "2026-10-16"
         observado: "Mercado omitió ventas de mostrador y solo conservó atención al cliente."
-        cambio_hecho: "Pendiente de corregir en #155; esperado original conservado"
+        cambio_hecho: "Causa: la extracción sí traía «venta de mostrador», pero la normalización exacta no la unía a «ventas de mostrador» (plural) y la descartó. Mercado usa ahora buscar_habilidades por raíces cuando no hay coincidencia exacta (#153). Sin cambiar prompt, esquema, taxonomía ni grabación (#155); esperado original conservado"
         issue: "#155"
-        nueva_ejecucion: "pendiente"
+        nueva_ejecucion: "2026-10-17 00:30, evals.run en modo reproducir con la grabación de Claude: ok, habilidades [ventas_mostrador, atencion_cliente]"
 
   - id: EXT-05
     categoria: extraccion_ofertas
@@ -851,5 +877,318 @@ casos:
       veredicto: aceptar
       sigue_como_dato: true
     escrito_el: "2026-10-16"
+    datos_sinteticos: true
+    fallos: []
+
+  # ------------------------------------------------------------------ Horario vivo (2), issue #164
+  # El esperado de HOR-01 sale del contenido de la tirilla, escrito en tests/fixtures/generar_tirilla_sintetica.py
+  # antes de grabar la lectura del LLM.
+  - id: HOR-01
+    categoria: horario_tirilla
+    descripcion: "Tirilla de matrícula sintética (imagen) de una estudiante nocturna: cinco materias que suman lunes a viernes 18:30-21:30, parciales, finales y fin del semestre."
+    entrada:
+      ruta: tests/fixtures/tirilla_sintetica.png
+      hoy: "2026-10-17"
+    esperado:
+      horario_clases:
+        - dias: [lunes, martes, miercoles, jueves, viernes]
+          hora_inicio: "18:30"
+          hora_fin: "21:30"
+      problemas: []
+      vigente_hasta: "2026-12-12"
+      excepciones:
+        - {desde: "2026-10-19", hasta: "2026-10-23"}
+        - {desde: "2026-12-07", hasta: "2026-12-12"}
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: HOR-02
+    categoria: horario_validacion
+    descripcion: "Un bloque con una hora imposible (21:80) se rechaza en código y no entra al horario; los demás se conservan."
+    entrada:
+      bloques:
+        - {dia: lunes, hora_inicio: "18:30", hora_fin: "21:30", materia: "Matemática Básica I"}
+        - {dia: martes, hora_inicio: "18:30", hora_fin: "21:80", materia: "Inglés Técnico I"}
+        - {dia: "Mié", hora_inicio: "18:30", hora_fin: "21:30", materia: "Contabilidad I"}
+    esperado:
+      problemas:
+        - {indice: 2, campo: hora_fin}
+      horario_clases:
+        - dias: [lunes, miercoles]
+          hora_inicio: "18:30"
+          hora_fin: "21:30"
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  # ------------------------------------------------------------------ Redactor de puente semántico (3, #157)
+  # Sin LLM real: redacta la plantilla del código o un LLM falso con el texto de `llm_falso`. La legalidad la
+  # decide revisar_texto y la cifra la calcula el solver; el texto propuesto se mide por lo que debe contener.
+  # Los viables se calcularon a mano con las mismas convenciones que matching: pasaje diario = 2 x pasaje de
+  # ida, mensual = diario x 22; traslado <= 60 min (o el tope de `minutos`), pasaje mensual <= 15 % del salario,
+  # pasaje diario <= presupuesto, horario dentro del horario libre, salario >= mínimo, una habilidad en común.
+  # Una oferta que las reglas bloquean tiene 0 viables antes: Puente no la publica.
+  # Con «vivir cerca de X», antes solo cuenta quien vive en el corregimiento de X (el filtro de la empresa) y
+  # después quien llega en `minutos` o menos.
+  - id: RED-01
+    categoria: redactor_puente
+    descripcion: >-
+      OF-BLOQ-EDAD-04 (edad con presencia): «Requisitos: edad entre 18 a 25 años, excelente buena presencia y
+      enviar foto en el CV.» La plantilla quita el límite de edad (art. 2), cambia la presencia por el código de
+      vestimenta y quita la foto. Bella Vista, 680 al mes (15 % = 102.00), L-V 08:00-17:00, atencion_cliente.
+      Ana (Calidonia, 15 min, 1.00 al día, 22.00 al mes), Bruno (San Miguelito, 40 min, 1.20, 26.40) y Carla
+      (Bella Vista, 10 min, 0.70 <= 1.00) son viables; Diego no (75 min > 60) y Elsa tampoco (pide 750 > 680).
+      Solo Ana pasaba el filtro de edad de la empresa (22 años; Bruno tiene 27 y Carla 29).
+    entrada:
+      oferta_ruta: tests/fixtures/oferta_bloq_edad_04.json
+      traslados:
+        - {origen: Calidonia, destino: Bella Vista, minutos: 15, pasaje_ida: 0.50}
+        - {origen: San Miguelito, destino: Bella Vista, minutos: 40, pasaje_ida: 0.60}
+        - {origen: Bella Vista, destino: Bella Vista, minutos: 10, pasaje_ida: 0.35}
+        - {origen: La Chorrera, destino: Bella Vista, minutos: 75, pasaje_ida: 1.50}
+      perfiles:
+        - id: ana
+          nombre: Ana Ficticia
+          genero: femenino
+          edad: 22
+          corregimiento: Calidonia
+          salario_minimo: 550
+          presupuesto_pasaje_diario: 2.00
+          horario_libre:
+            - {dias: [lunes, martes, miercoles, jueves, viernes], hora_inicio: "07:00", hora_fin: "18:00"}
+          habilidades:
+            - {skill_id: atencion_cliente, evidencia: atendía a los clientes de la fonda}
+        - id: bruno
+          nombre: Bruno Ficticio
+          genero: masculino
+          edad: 27
+          corregimiento: San Miguelito
+          salario_minimo: 600
+          presupuesto_pasaje_diario: 2.00
+          horario_libre:
+            - {dias: [lunes, martes, miercoles, jueves, viernes], hora_inicio: "07:00", hora_fin: "18:00"}
+          habilidades:
+            - {skill_id: atencion_cliente, evidencia: contestaba el teléfono de la ferretería}
+        - id: carla
+          nombre: Carla Ficticia
+          genero: femenino
+          edad: 29
+          corregimiento: Bella Vista
+          salario_minimo: 600
+          presupuesto_pasaje_diario: 1.00
+          horario_libre:
+            - {dias: [lunes, martes, miercoles, jueves, viernes], hora_inicio: "07:00", hora_fin: "18:00"}
+          habilidades:
+            - {skill_id: atencion_cliente, evidencia: recibía a los pacientes en la clínica}
+        - id: diego
+          nombre: Diego Ficticio
+          genero: masculino
+          edad: 24
+          corregimiento: La Chorrera
+          salario_minimo: 500
+          presupuesto_pasaje_diario: 3.00
+          horario_libre:
+            - {dias: [lunes, martes, miercoles, jueves, viernes], hora_inicio: "07:00", hora_fin: "18:00"}
+          habilidades:
+            - {skill_id: atencion_cliente, evidencia: atendía el kiosco de la familia}
+        - id: elsa
+          nombre: Elsa Ficticia
+          genero: femenino
+          edad: 20
+          corregimiento: Calidonia
+          salario_minimo: 750
+          presupuesto_pasaje_diario: 2.00
+          horario_libre:
+            - {dias: [lunes, martes, miercoles, jueves, viernes], hora_inicio: "07:00", hora_fin: "18:00"}
+          habilidades:
+            - {skill_id: atencion_cliente, evidencia: atendía la recepción del gimnasio}
+    esperado:
+      bloqueada_antes: true
+      bloqueada_despues: false
+      hallazgos_despues: []
+      cambios:
+        - {regla: edad, frase: "edad entre 18 a 25 años"}
+        - {regla: buena_presencia, frase: "buena presencia"}
+        - {regla: foto, frase: "enviar foto"}
+      viables_antes: []
+      viables_despues: [ana, bruno, carla]
+      cumplen_filtro_original: [ana]
+      redactado_por: plantilla
+      texto_contiene:
+        - "personas mayores de 18 años, sin límite de edad"
+        - "cumplir el código de vestimenta de la empresa"
+      decision_pendiente: true
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: RED-02
+    categoria: redactor_puente
+    descripcion: >-
+      Exigencia de sexo (art. 1) y estado civil. El LLM falso devuelve un texto que todavía pide «personal
+      masculino»: revisar_texto lo bloquea, se descarta y queda la plantilla. Juan Díaz, 650 al mes (15 % =
+      97.50), L-V 07:30-16:30, inventario. Fabiola (Juan Díaz, 10 min, 0.70 al día, 15.40 al mes) y Gabriel
+      (Tocumen, 25 min, 1.20, 26.40) son viables; Helena no (libre 13:00-22:00, el turno no cabe). El sexo no se
+      infiere de ningún dato: no hay filtro medible de la empresa.
+    entrada:
+      oferta:
+        id: OF-RED-SEXO
+        puesto: Ayudante de Bodega
+        empresa: Logística Ficticia (Empresa de Prueba)
+        corregimiento: Juan Díaz
+        salario_mensual: 650
+        horario: {dias: [lunes, martes, miercoles, jueves, viernes], hora_inicio: "07:30", hora_fin: "16:30"}
+        habilidades: [inventario]
+        requisitos_texto: "Se solicita personal masculino únicamente, soltero. Control de inventario y despacho de pedidos."
+      llm_falso: "Se busca personal masculino, sin importar el estado civil. Control de inventario y despacho de pedidos."
+      traslados:
+        - {origen: Juan Díaz, destino: Juan Díaz, minutos: 10, pasaje_ida: 0.35}
+        - {origen: Tocumen, destino: Juan Díaz, minutos: 25, pasaje_ida: 0.60}
+      perfiles:
+        - id: fabiola
+          nombre: Fabiola Ficticia
+          genero: femenino
+          edad: 21
+          corregimiento: Juan Díaz
+          salario_minimo: 500
+          presupuesto_pasaje_diario: 2.00
+          horario_libre:
+            - {dias: [lunes, martes, miercoles, jueves, viernes], hora_inicio: "07:00", hora_fin: "17:00"}
+          habilidades:
+            - {skill_id: inventario, evidencia: llevaba el inventario de la tienda de mi tía}
+        - id: gabriel
+          nombre: Gabriel Ficticio
+          genero: masculino
+          edad: 23
+          corregimiento: Tocumen
+          salario_minimo: 500
+          presupuesto_pasaje_diario: 2.00
+          horario_libre:
+            - {dias: [lunes, martes, miercoles, jueves, viernes], hora_inicio: "07:00", hora_fin: "17:00"}
+          habilidades:
+            - {skill_id: inventario, evidencia: contaba la mercancía en el depósito}
+        - id: helena
+          nombre: Helena Ficticia
+          genero: femenino
+          edad: 26
+          corregimiento: Juan Díaz
+          salario_minimo: 500
+          presupuesto_pasaje_diario: 2.00
+          horario_libre:
+            - {dias: [lunes, martes, miercoles, jueves, viernes], hora_inicio: "13:00", hora_fin: "22:00"}
+          habilidades:
+            - {skill_id: inventario, evidencia: ordenaba la bodega del minisúper}
+    esperado:
+      bloqueada_antes: true
+      bloqueada_despues: false
+      hallazgos_despues: []
+      cambios:
+        - {regla: sexo, frase: "personal masculino"}
+        - {regla: estado_civil, frase: "soltero"}
+      viables_antes: []
+      viables_despues: [fabiola, gabriel]
+      cumplen_filtro_original: []
+      redactado_por: plantilla
+      nota_contiene: "sigue bloqueada"
+      texto_contiene:
+        - "abierta a todas las personas, sin distinción de sexo"
+        - "Control de inventario y despacho de pedidos"
+      decision_pendiente: true
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: RED-03
+    categoria: redactor_puente
+    descripcion: >-
+      «Que viva cerca de Vía España» se traduce en código a «poder llegar a Bella Vista en 30 minutos o menos»
+      (Vía España está en Bella Vista). El LLM falso escribe ese tope con las mismas palabras y pasa las
+      verificaciones. Bella Vista, 650 al mes (15 % = 97.50), L-V 08:00-16:00. Antes solo Iris (vive en Bella
+      Vista, 10 min); Marta también vive ahí pero pide 700 > 650. Después también Jorge (Calidonia, 15 min, 1.00
+      al día, 22.00 al mes) y Luis (Juan Díaz, 25 min, 1.20, 26.40); Karla no (San Miguelito, 40 min > 30).
+    entrada:
+      oferta:
+        id: OF-RED-CERCA
+        puesto: Cajero(a)
+        empresa: Farmacia Ficticia (Empresa de Prueba)
+        corregimiento: Bella Vista
+        salario_mensual: 650
+        horario: {dias: [lunes, martes, miercoles, jueves, viernes], hora_inicio: "08:00", hora_fin: "16:00"}
+        habilidades: [manejo_caja, atencion_cliente]
+        requisitos_texto: "Manejo de caja y atención al cliente; que viva cerca de Vía España."
+      minutos: 30
+      llm_falso: "Manejo de caja y atención al cliente; poder llegar a Bella Vista en 30 minutos o menos en transporte público."
+      traslados:
+        - {origen: Bella Vista, destino: Bella Vista, minutos: 10, pasaje_ida: 0.35}
+        - {origen: Calidonia, destino: Bella Vista, minutos: 15, pasaje_ida: 0.50}
+        - {origen: Juan Díaz, destino: Bella Vista, minutos: 25, pasaje_ida: 0.60}
+        - {origen: San Miguelito, destino: Bella Vista, minutos: 40, pasaje_ida: 0.60}
+      perfiles:
+        - id: iris
+          nombre: Iris Ficticia
+          edad: 22
+          corregimiento: Bella Vista
+          salario_minimo: 500
+          presupuesto_pasaje_diario: 2.00
+          horario_libre:
+            - {dias: [lunes, martes, miercoles, jueves, viernes], hora_inicio: "07:00", hora_fin: "18:00"}
+          habilidades:
+            - {skill_id: manejo_caja, evidencia: cobraba en la caja del minisúper}
+        - id: jorge
+          nombre: Jorge Ficticio
+          edad: 24
+          corregimiento: Calidonia
+          salario_minimo: 500
+          presupuesto_pasaje_diario: 2.00
+          horario_libre:
+            - {dias: [lunes, martes, miercoles, jueves, viernes], hora_inicio: "07:00", hora_fin: "18:00"}
+          habilidades:
+            - {skill_id: atencion_cliente, evidencia: atendía a los clientes de la panadería}
+        - id: karla
+          nombre: Karla Ficticia
+          edad: 21
+          corregimiento: San Miguelito
+          salario_minimo: 500
+          presupuesto_pasaje_diario: 2.00
+          horario_libre:
+            - {dias: [lunes, martes, miercoles, jueves, viernes], hora_inicio: "07:00", hora_fin: "18:00"}
+          habilidades:
+            - {skill_id: manejo_caja, evidencia: cuadraba la caja de la fonda}
+        - id: luis
+          nombre: Luis Ficticio
+          edad: 26
+          corregimiento: Juan Díaz
+          salario_minimo: 500
+          presupuesto_pasaje_diario: 2.00
+          horario_libre:
+            - {dias: [lunes, martes, miercoles, jueves, viernes], hora_inicio: "07:00", hora_fin: "18:00"}
+          habilidades:
+            - {skill_id: manejo_caja, evidencia: cobraba los pasajes en la piquera}
+        - id: marta
+          nombre: Marta Ficticia
+          edad: 23
+          corregimiento: Bella Vista
+          salario_minimo: 700
+          presupuesto_pasaje_diario: 2.00
+          horario_libre:
+            - {dias: [lunes, martes, miercoles, jueves, viernes], hora_inicio: "07:00", hora_fin: "18:00"}
+          habilidades:
+            - {skill_id: atencion_cliente, evidencia: atendía el mostrador de la farmacia}
+    esperado:
+      bloqueada_antes: false
+      bloqueada_despues: false
+      hallazgos_despues: []
+      cambios:
+        - {regla: residencia, frase: "que viva cerca de Vía España"}
+      viables_antes: [iris]
+      viables_despues: [iris, jorge, luis]
+      cumplen_filtro_original: [iris]
+      redactado_por: llm
+      texto_contiene:
+        - "poder llegar a Bella Vista en 30 minutos o menos en transporte público"
+      max_minutos_traslado: 30
+      decision_pendiente: true
+    escrito_el: "2026-10-17"
     datos_sinteticos: true
     fallos: []
