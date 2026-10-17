@@ -537,7 +537,7 @@ function bloqueConsentimiento(resultado, vacante) {
   // aquí y las dos podían decir cosas distintas (#257).
   const aceptado = vacante.consentimiento === "consentido";
   const texto = aceptado
-    ? `Aceptaste que Puente envíe tu CV a ${vacante.empresa}. Si cambias de idea, hazlo en «Mis postulaciones», más abajo.`
+    ? `Aceptaste que SkillMatch envíe tu CV a ${vacante.empresa}. Si cambias de idea, hazlo en «Mis postulaciones», más abajo.`
     : vacante.consentimiento === "no_consentido"
       ? `Dijiste que no: tu CV no se envía a ${vacante.empresa}. Si cambias de idea, hazlo en «Mis postulaciones», más abajo.`
       : `Tu CV no se envía a ${vacante.empresa} sin tu «sí». Decídelo en «Mis postulaciones», más abajo.`;
@@ -694,7 +694,7 @@ function mostrarResultado(resultado, { desplazar = true } = {}) {
 async function cargarResultado(codigo, boton) {
   const [id = "", token = ""] = String(codigo || "").trim().split(".");
   if (!/^[A-Za-z0-9_-]{1,80}$/.test(id) || !/^[A-Za-z0-9_-]{16,128}$/.test(token)) {
-    mostrarAviso("Ese código no está completo: cópialo tal como te lo dio Puente, con el punto en medio.", "error");
+    mostrarAviso("Ese código no está completo: cópialo tal como te lo dio SkillMatch, con el punto en medio.", "error");
     return;
   }
   tokenActual = token;
