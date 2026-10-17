@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import dotenv
+import dotenv.main
 import pytest
 from starlette.testclient import TestClient
 
@@ -165,6 +167,28 @@ def test_sin_token_el_webhook_no_atiende(entorno, monkeypatch: pytest.MonkeyPatc
     firma = wa.firma_twilio(f"{BASE}/api/whatsapp", _params("hola"), TOKEN)
     monkeypatch.delenv("TWILIO_AUTH_TOKEN")
     assert _enviar(cliente, "hola", firma=firma).status_code == 503
+
+
+def test_el_servidor_lee_el_token_de_twilio_del_env_al_arrancar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Revisión del PR #253: con `uv run python -m app.server` el token está solo en `.env`, no en el entorno."""
+    monkeypatch.setattr(srv, "ESTADO_GLOBAL", srv.obtener_datos_iniciales_demo(db_path=tmp_path / "wa.db"))
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path / "outbox")
+    archivo = tmp_path / ".env"
+    archivo.write_text(f"TWILIO_AUTH_TOKEN={TOKEN}\n", encoding="utf-8")
+    monkeypatch.setattr(srv, "RUTA_DOTENV", archivo)
+    monkeypatch.setattr(dotenv, "load_dotenv", dotenv.main.load_dotenv)  # el conftest lo anula en las demás
+    # setenv y luego delenv: así pytest devuelve el entorno a como estaba aunque dotenv escriba la variable.
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "temporal")
+    monkeypatch.delenv("TWILIO_AUTH_TOKEN")
+    monkeypatch.delenv("TWILIO_ACCOUNT_SID", raising=False)
+    monkeypatch.setenv("PUBLIC_BASE_URL", BASE)
+    monkeypatch.delenv("PUENTE_DEMO_PUBLICA", raising=False)
+    monkeypatch.delenv("VERCEL", raising=False)
+    with TestClient(srv.app) as cliente:
+        r = _enviar(cliente, "hola")
+        assert _enviar(cliente, "hola", firma="firma-falsa").status_code == 403
+    assert r.status_code == 200, r.text
+    assert "Soy Puente" in r.text
 
 
 def test_sin_public_base_url_reconstruye_la_url_del_tunel(entorno, monkeypatch: pytest.MonkeyPatch) -> None:

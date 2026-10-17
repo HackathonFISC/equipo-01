@@ -341,11 +341,11 @@ Con `LLM_MODO=reproducir` (sin red) solo se leen las entradas que tienen grabaci
 
 El joven también puede hacer la entrevista por WhatsApp. El bot es solo un canal: pide el mismo formulario fijo (nombre, edad, corregimiento, horario de clases, horario para trabajar, salario y pasaje) y las mismas 5 preguntas de `/joven`, y el perfil sale por el mismo camino (`preparar_entrada_joven`, guardrails, agente Perfil, `registrar_perfil_joven`). Al terminar contesta «perfil listo» y pregunta SÍ o NO por cada vacante de su lista corta. Un SÍ deja marcada la casilla «El joven consintió» en el tablero. Un NO deja la postulación en `no_seleccionado`, no se envía nada y Aprobar responde 422. Solo texto: las notas de voz y los archivos son la fase 2.
 
-Es el **sandbox de Twilio**: un número compartido, gratis, solo para pruebas, que únicamente habla con teléfonos que se unieron con «join <palabra>». La API oficial de Meta exige verificar el negocio. Para recibir mensajes hace falta una URL pública. Vercel no sirve, porque responde 403 a todo POST, así que el webhook corre en la laptop de la demo detrás de un túnel:
+Es el **sandbox de Twilio**: un número compartido, gratis, solo para pruebas, que únicamente habla con teléfonos que se unieron con «join <palabra>». La API oficial de Meta exige verificar el negocio. Para recibir mensajes hace falta una URL pública. Vercel no sirve: allí el estado vive en `/tmp` y se pierde entre invocaciones, así que la conversación no sobrevive de un mensaje al siguiente, y además el LLM queda en `reproducir`. Por eso el webhook corre en la laptop de la demo detrás de un túnel:
 
 1. En la consola de Twilio: *Messaging → Try it out → Send a WhatsApp message*. Desde el teléfono de prueba se envía `join <palabra>` al +1 415 523 8886.
 2. En `.env`: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` y `TWILIO_WHATSAPP_FROM=whatsapp:+14155238886`. Para entrevistas nuevas también `LLM_MODO=vivo` y `ANTHROPIC_API_KEY`: en `reproducir`, Perfil solo lee respuestas grabadas, igual que en `/joven`.
-3. Servidor: `uv run python -m app.server`. Túnel, en otra terminal:
+3. Servidor: `uv run python -m app.server`, que lee `.env` al arrancar sin pisar lo que ya esté exportado. `uv run --env-file .env python -m app.server` también sirve. Túnel, en otra terminal:
 
    ```bash
    cloudflared tunnel --url http://localhost:8000

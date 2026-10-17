@@ -16,6 +16,8 @@ import re
 import sqlite3
 import tempfile
 import uuid
+
+import dotenv
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -139,6 +141,7 @@ from app import whatsapp  # Chatbot de WhatsApp del joven (#160): la lógica viv
 RUTA_APP = Path(__file__).resolve().parent
 RUTA_STATIC = RUTA_APP / "static"
 RUTA_RAIZ = RUTA_APP.parent
+RUTA_DOTENV = RUTA_RAIZ / ".env"
 RUTA_DATA = RUTA_RAIZ / "data"
 RUTA_OUTBOX = (
     Path(tempfile.gettempdir()) / "puente_outbox"
@@ -3961,8 +3964,24 @@ async def endpoint_perfil_archivo(request: Request) -> JSONResponse:
 RUTA_STATIC.mkdir(parents=True, exist_ok=True)
 
 
+def cargar_dotenv() -> bool:
+    """Lee `.env` al arrancar el servidor sin pisar el entorno (`override=False`), como `puente/llm.py`.
+
+    Sin esto, lo que se lee en cada solicitud (TWILIO_*, PUBLIC_BASE_URL) solo existía si se exportaba a mano o con
+    `uv run --env-file .env`, y el webhook de WhatsApp respondía 503 a todo (#160). Lo que este módulo lee al
+    importarse (PUENTE_DB del estado inicial, PUENTE_DEMO_PUBLICA para el LLM y el outbox) sigue saliendo del
+    entorno, como antes. Se llama por `dotenv.load_dotenv`: así el conftest de las pruebas lo anula.
+    """
+    try:
+        return bool(dotenv.load_dotenv(RUTA_DOTENV, override=False))
+    except Exception:  # noqa: BLE001 - un .env ilegible no tumba el servidor; faltarán las claves y se avisa
+        _registro.exception("No se pudo leer %s", RUTA_DOTENV)
+        return False
+
+
 @contextlib.asynccontextmanager
 async def _ciclo_de_vida(_app: Starlette):
+    cargar_dotenv()  # #160: antes de atender, para que el webhook vea TWILIO_AUTH_TOKEN
     anunciar_codigos_joven(ESTADO_GLOBAL)
     empresa.anunciar_codigos_empresa(ESTADO_GLOBAL)  # #167
     yield
