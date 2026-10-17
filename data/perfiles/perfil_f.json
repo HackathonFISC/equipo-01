@@ -1,0 +1,38 @@
+{
+  "id": "P06",
+  "nombre": "Perfil F (ficticio)",
+  "edad": 27,
+  "corregimiento": "Bella Vista",
+  "horario_libre": [
+    {
+      "dias": [
+        "lunes",
+        "martes",
+        "miercoles",
+        "jueves",
+        "viernes"
+      ],
+      "hora_inicio": "08:00",
+      "hora_fin": "18:00"
+    }
+  ],
+  "salario_minimo": 700,
+  "presupuesto_pasaje_diario": 2.0,
+  "experiencia_texto": "En una asociación vecinal archivé formularios, contesté mensajes de consulta y preparé un listado digital de participantes.",
+  "habilidades": [
+    {
+      "skill_id": "archivo_documentos",
+      "evidencia": "archivé formularios"
+    },
+    {
+      "skill_id": "atencion_cliente",
+      "evidencia": "contesté mensajes de consulta"
+    },
+    {
+      "skill_id": "registro_datos",
+      "evidencia": "preparé un listado digital de participantes"
+    }
+  ],
+  "datos_sinteticos": true,
+  "horario_clases": []
+}

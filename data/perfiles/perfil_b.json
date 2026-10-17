@@ -1,0 +1,39 @@
+{
+  "id": "P02",
+  "nombre": "Perfil B (ficticio)",
+  "edad": 22,
+  "corregimiento": "Arraiján",
+  "horario_libre": [
+    {
+      "dias": [
+        "lunes",
+        "martes",
+        "miercoles",
+        "jueves",
+        "viernes",
+        "sabado"
+      ],
+      "hora_inicio": "08:00",
+      "hora_fin": "18:00"
+    }
+  ],
+  "salario_minimo": 620,
+  "presupuesto_pasaje_diario": 3.5,
+  "experiencia_texto": "En un bazar familiar recibo mercancía, acomodo productos en estantes y ayudo a clientes a encontrar tallas.",
+  "habilidades": [
+    {
+      "skill_id": "recepcion_mercancia",
+      "evidencia": "recibo mercancía"
+    },
+    {
+      "skill_id": "reposicion_productos",
+      "evidencia": "acomodo productos en estantes"
+    },
+    {
+      "skill_id": "atencion_cliente",
+      "evidencia": "ayudo a clientes a encontrar tallas"
+    }
+  ],
+  "datos_sinteticos": true,
+  "horario_clases": []
+}
