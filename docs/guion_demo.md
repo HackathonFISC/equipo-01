@@ -63,7 +63,7 @@ Columna «Rúbrica»: Impacto, Diseño agéntico (agentes, herramientas, código
 
 **Pantalla:** README en GitHub, sección «Problema» (INEC, agosto de 2026). Después, el tablero arriba, con el recorrido de agentes y el panel «Ilustrativo, datos de la demo».
 
-**Se dice:** «En Panamá, la desocupación de 20 a 24 años es de 22,6 % y el 45,8 % del empleo no agrícola es informal. Yaritza tiene 20 años, estudia de noche y atiende la fonda de su mamá en La Chorrera. No tiene CV, y muchas ofertas piden edad o sexo, o le quedan a hora y media. Puente la conecta con empresas y cursos.»
+**Se dice:** «En Panamá, la desocupación de 20 a 24 años es de 22,6 % y el 45,8 % del empleo no agrícola es informal. Yaritza tiene 20 años, estudia de noche y atiende la fonda de su mamá en La Chorrera. No tiene CV, y muchas ofertas piden edad o sexo, o le quedan a hora y media. SkillMatch la conecta con empresas y cursos.»
 
 **Cuidado:** el panel dice «Ilustrativo»: no se presenta como impacto medido.
 
@@ -134,7 +134,7 @@ El chat corre sin red con la grabación de #209, verificada en `LLM_MODO=reprodu
 2. Pulsa **Rechazar**, escribe un motivo corto (*Falta experiencia en inventario*) y confirma.
 3. De vuelta en el tablero, que se actualiza solo (#230): **la pestaña del tablero tiene que estar visible al volver de la vista de la empresa**, porque con la pestaña oculta el refresco automático no hace nada y se pone al día al volver a verla. Después, **Trazas** (la más nueva arriba): aparecen las trazas «Empresa», «Evento de la empresa», «Avisos», «Matching», «Auditor» y «Formación»; las que caen en el mismo segundo pueden salir en otro orden, así que no leas la cadena en voz alta como una secuencia fija. Yaritza sigue con su opción de La Chorrera.
 
-**Se dice:** «En su vista, la empresa ve la lista sin nombres: Candidato 1. Si rechaza, el grafo no se queda ahí: avisa a Yaritza, recalcula y le deja su siguiente opción al orientador. Cada agente dejó su traza. Puente: el LLM lee y redacta, el código decide lo legal y lo justo, y una persona aprueba.»
+**Se dice:** «En su vista, la empresa ve la lista sin nombres: Candidato 1. Si rechaza, el grafo no se queda ahí: avisa a Yaritza, recalcula y le deja su siguiente opción al orientador. Cada agente dejó su traza. SkillMatch: el LLM lee y redacta, el código decide lo legal y lo justo, y una persona aprueba.»
 
 **Plan B:** si la vista de la empresa no abre (código vencido), usa la terminal B con el comando del grafo con `--auto`. Muestra el bloque `↺ Evento de la empresa · rechaza`, el aviso al joven y la nueva aprobación pendiente sin Yaritza.
 

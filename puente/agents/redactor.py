@@ -668,7 +668,7 @@ def _decision(
 def mensaje_empresa(propuesta: Propuesta) -> str:
     """Texto para la empresa: sin datos de los candidatos, solo el texto sugerido y la cifra del solver."""
     lineas = [
-        f"Puente · Propuesta de redacción para su oferta «{propuesta.puesto_original}» ({propuesta.oferta_id})",
+        f"SkillMatch · Propuesta de redacción para su oferta «{propuesta.puesto_original}» ({propuesta.oferta_id})",
         "",
         "Algunos requisitos de la oferta no cumplen la Ley 11 de 2005 o filtran por criterios que no miden el trabajo.",
         "Texto sugerido:",
@@ -677,7 +677,7 @@ def mensaje_empresa(propuesta: Propuesta) -> str:
         "Cambios:",
         *[f"- «{c['frase']}» → " + (f"«{c['reemplazo']}»" if c["reemplazo"] else "se quita") for c in propuesta.cambios],
         "",
-        f"Con esta versión, {propuesta.viables_despues} de los {propuesta.pool} perfiles de Puente cumplen los requisitos "
+        f"Con esta versión, {propuesta.viables_despues} de los {propuesta.pool} perfiles de SkillMatch cumplen los requisitos "
         f"de horario, salario, traslado y habilidades (con la versión original: {propuesta.viables_antes}).",
     ]
     return "\n".join(lineas)

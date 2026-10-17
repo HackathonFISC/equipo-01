@@ -152,8 +152,88 @@ function pintar(datos) {
   $("panel").hidden = false;
   $("empresa-nombre").textContent = datos.empresa.nombre;
   const nombres = datos.nombres_habilidades || {};
+  pintarResumen(datos.resumen);
   const vacantes = datos.vacantes.map((v) => tarjetaVacante(v, nombres));
   vaciar($("vacantes"), vacantes.length ? vacantes : el("p", { class: "vacio", text: "No hay vacantes de tu empresa en SkillMatch." }));
+}
+
+// ---------- Mini dashboard de la empresa (#279) ----------
+// Solo conteos de las vacantes de esta empresa: nunca quién. El rótulo dice que son datos de la demo.
+
+const TEXTO_SITUACION = { activa: "Activa", cubierta: "Cubierta", bloqueada: "Bloqueada por la Ley 11" };
+
+function cifra(numero, etiqueta, tono = "") {
+  return el("div", { class: `cifra ${tono}`.trim() }, el("strong", { text: String(numero) }), el("span", { text: etiqueta }));
+}
+
+function filaResumen(f, etiquetas) {
+  const embudo = Object.entries(etiquetas).map(([clave, texto]) =>
+    el("li", {}, el("span", { class: "dato", text: texto }), el("strong", { text: String(f.embudo[clave] ?? 0) })),
+  );
+  let salario = null;
+  if (f.salario_zona) {
+    const z = f.salario_zona;
+    const comparacion =
+      f.salario_mensual == null
+        ? "tu vacante no publica salario"
+        : f.salario_mensual < z.mediana
+          ? "tu salario está por debajo"
+          : "tu salario está en la mediana o arriba";
+    salario = el(
+      "p",
+      { class: "dato" },
+      `Salario de referencia en la zona de tu vacante: ${dinero(z.mediana)} (mediana de ${z.n} ofertas${z.muestra_pequena ? ", muestra pequeña" : ""}); ${comparacion}.`,
+    );
+  }
+  let viables = null;
+  if (f.viables_pool != null) {
+    const texto =
+      f.situacion === "bloqueada"
+        ? "Nadie la ve mientras esté bloqueada: revisa la versión legal que propone SkillMatch abajo."
+        : f.viables_pool <= 1
+          ? `Pocos candidatos cumplen estas condiciones (${f.viables_pool} en el grupo de la demo).`
+          : `${f.viables_pool} candidatos del grupo de la demo cumplen traslado, pasaje, horario y salario.`;
+    viables = el("p", { class: `dato ${f.viables_pool <= 1 ? "aviso-suave" : ""}`.trim() }, texto);
+  }
+  return el(
+    "article",
+    { class: "resumen-vacante" },
+    el(
+      "header",
+      {},
+      el("h3", { text: f.puesto }),
+      el("span", { class: `etiqueta etiqueta-${f.situacion}`, text: TEXTO_SITUACION[f.situacion] || f.situacion }),
+    ),
+    el("ul", { class: "embudo" }, embudo),
+    f.pendientes ? el("p", { class: "pendiente", text: `${f.pendientes} por responder` }) : null,
+    salario,
+    viables,
+  );
+}
+
+function pintarResumen(r) {
+  const caja = $("resumen");
+  if (!caja) return;
+  if (!r || !r.vacantes || !r.vacantes.length) {
+    caja.hidden = true;
+    return;
+  }
+  caja.hidden = false;
+  const t = r.totales || {};
+  vaciar(
+    caja,
+    el("div", { class: "resumen-cabecera" }, el("h2", { id: "resumen-titulo", text: "Resumen de tus vacantes" }), el("span", { class: "rotulo", text: r.rotulo })),
+    el(
+      "div",
+      { class: "cifras" },
+      cifra(r.pendientes || 0, "por responder", r.pendientes ? "tono-warn" : ""),
+      cifra(t.enviado || 0, "enviados"),
+      cifra(t.entrevista || 0, "en entrevista"),
+      cifra(t.contratado || 0, "contratados", t.contratado ? "tono-ok" : ""),
+      cifra(t.en_revision || 0, "en revisión del orientador"),
+    ),
+    el("div", { class: "resumen-vacantes" }, r.vacantes.map((f) => filaResumen(f, r.etiquetas_embudo || {}))),
+  );
 }
 
 // ---------- Mensajes de los candidatos (#289) ----------

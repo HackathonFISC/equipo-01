@@ -828,7 +828,7 @@ def nodos_fase_2(
 def _mensaje_sugerido(oferta: Any, candidatos: list[dict]) -> str:
     nombres = ", ".join(c["nombre"] for c in candidatos)
     return (
-        f"Buen día, {_campo(oferta, 'empresa', 'equipo')}: desde Puente les presentamos a {nombres} "
+        f"Buen día, {_campo(oferta, 'empresa', 'equipo')}: desde SkillMatch les presentamos a {nombres} "
         f"para la vacante de {_campo(oferta, 'puesto', '')}. Quedamos atentos para coordinar entrevistas."
     )
 

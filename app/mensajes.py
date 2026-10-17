@@ -79,7 +79,7 @@ def enviar_mensaje(estado: dict[str, Any], perfil_id: str, oferta_id: str, texto
 
     alias, puestos = _alias_por_candidato(estado, empresa_id)
     de_quien = alias.get((oferta_id, ref), "Un candidato")
-    aviso = f"Puente · Nuevo mensaje de {de_quien} para «{puestos.get(oferta_id, oferta_id)}»:\n{limpio}"
+    aviso = f"SkillMatch · Nuevo mensaje de {de_quien} para «{puestos.get(oferta_id, oferta_id)}»:\n{limpio}"
     entrega.entregar_a_la_empresa(aviso, empresa_id, outbox=outbox)
     return {"ok": True, "texto": limpio, "se_limpio": limpio != crudo}
 
