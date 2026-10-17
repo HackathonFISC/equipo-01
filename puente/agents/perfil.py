@@ -377,10 +377,6 @@ def llm_puente(prompt: str) -> PerfilExtraido:
     return generar_estructurado(prompt, PerfilExtraido, agente=AGENTE)
 
 
-# Alias temporal: puente/graph.py (#10, PR #69) lo importa con este nombre. Se quita cuando graph.py use llm_puente.
-llm_gemini = llm_puente
-
-
 def construir_prompt(texto: str, modo: str, taxonomia: dict[str, dict]) -> str:
     catalogo = "\n".join(
         f"- {sid}: {d.get('nombre_es', sid)}" + (f" (también: {', '.join(d['sinonimos'])})" if d.get("sinonimos") else "")
