@@ -1373,3 +1373,45 @@ def test_la_ruta_de_respaldo_registra_la_hora_por_confirmar(tmp_path: Path, monk
                      if t["salida_resumen"] == "sin franja compatible: fecha por confirmar" and "aviso de respaldo" in t["razon"]]
     assert len(por_confirmar) == 1
     assert (tmp_path / "entrevista_PERFIL-YARITZA_OF-CHORRERA-01.ics").exists()
+
+
+def test_tablero_se_refresca_solo_sin_pisar_lo_que_se_esta_haciendo() -> None:
+    """El tablero vuelve a pedir /api/estado (intervalo, foco y visibilidad) y solo redibuja si cambió (#230)."""
+    js = (Path(__file__).resolve().parents[1] / "app" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "setInterval(refrescarSiCambio" in js
+    assert '"visibilitychange", refrescarSiCambio' in js and '"focus", refrescarSiCambio' in js
+    assert 'document.visibilityState !== "visible"' in js  # pestaña oculta: no pide nada
+    assert 'querySelector("dialog[open]")' in js  # no cierra la confirmación de «Aprobar y enviar»
+    assert "matches(CAMPO_DE_ESCRITURA)" in js and "textarea" in js  # no borra la nota que se está escribiendo
+    assert "input:not([type=checkbox])" in js  # la casilla de consentimiento con el foco no frena el refresco
+    assert "JSON.stringify(payload) !== firmaEstado" in js  # sin cambios, no redibuja
+    assert "onclick=" not in js
+
+
+def test_respuesta_de_cada_accion_es_igual_al_estado_siguiente(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """El refresco del tablero (#230) compara con la última respuesta aplicada: tras cada acción del guion, el GET
+    siguiente debe dar el mismo JSON, o el tablero redibujaría sin motivo y cerraría lo que el orientador abrió."""
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path / "outbox")
+    acciones = [
+        ("/api/reset", None),
+        ("/api/cargar-data", {"tipo": "oferta", "item_id": "data/ofertas/CT02.txt"}),
+        ("/api/auditor/simular-sesgo", {"activar": True}),
+        ("/api/auditor/simular-sesgo", {"activar": False}),
+        ("/api/orientador/accion", {"accion": "quitar", "perfil_id": "PERFIL-DANIELA", "oferta_id": "OF-VISTAALEGRE-02"}),
+        ("/api/orientador/accion", {"accion": "aprobar", "perfil_id": "PERFIL-YARITZA",
+                                    "oferta_id": "OF-VISTAALEGRE-02", "consentimiento_joven": True}),
+    ]
+
+    async def _ejecutar() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            for url, cuerpo in acciones:
+                r = await (client.post(url, json=cuerpo) if cuerpo is not None else client.post(url))
+                assert r.status_code == 200, (url, r.text[:200])
+                siguiente = await client.get("/api/estado")
+                assert r.text == siguiente.text, url
+            assert (await client.get("/api/estado")).text == siguiente.text  # dos GET seguidos, iguales
+
+    asyncio.run(_ejecutar())

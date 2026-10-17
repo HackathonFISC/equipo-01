@@ -216,8 +216,45 @@ async function cargarEstado() {
   aplicarEstado(await llamarApi("/api/estado"));
 }
 
+// ---------- Refresco cuando otra vista cambia el estado (#230) ----------
+// La empresa (/empresa/lista-corta) y el joven (/joven) responden desde otra pestaña: el servidor recalcula y
+// este tablero no se entera. Con la pestaña visible se pide /api/estado cada REFRESCO_MS y al volver el foco, y
+// solo se vuelve a dibujar si la respuesta cambió: dos pedidos seguidos sin cambios dan el mismo JSON. Tampoco
+// se dibuja con el diálogo de confirmación abierto ni mientras se escribe en un campo, para no perder la nota
+// del orientador ni cerrar lo que está mirando; se reintenta en el siguiente ciclo.
+const REFRESCO_MS = 4000;
+let firmaEstado = null;
+let refrescando = false;
+// Solo pausa el refresco un campo donde se escribe: una casilla o un botón con el foco no tienen texto que perder.
+const CAMPO_DE_ESCRITURA =
+  "textarea, select, [contenteditable], input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit])";
+
+async function refrescarSiCambio() {
+  if (refrescando || document.visibilityState !== "visible") return;
+  if (document.querySelector("dialog[open]")) return;
+  if (document.activeElement && document.activeElement.matches(CAMPO_DE_ESCRITURA)) return;
+  refrescando = true;
+  try {
+    const resp = await fetch("/api/estado"); // sin llamarApi: un fallo de este ciclo no muestra avisos
+    if (!resp.ok) return;
+    const payload = await resp.json();
+    if (JSON.stringify(payload) !== firmaEstado) aplicarEstado(payload);
+  } catch (err) {
+    // Sin servidor por un momento: se reintenta en el siguiente ciclo.
+  } finally {
+    refrescando = false;
+  }
+}
+
+function iniciarRefresco() {
+  window.setInterval(refrescarSiCambio, REFRESCO_MS);
+  document.addEventListener("visibilitychange", refrescarSiCambio);
+  window.addEventListener("focus", refrescarSiCambio);
+}
+
 function aplicarEstado(payload) {
   if (!payload) return false;
+  firmaEstado = JSON.stringify(payload); // antes de normalizar: el refresco compara con la respuesta cruda (#230)
   estadoActual = normalizarEstado(payload);
   renderizarTodo();
   return true;
@@ -864,7 +901,7 @@ async function ejecutarAccionOrientador(boton) {
     const ok = await confirmar({
       titulo: `¿Enviar la postulación de ${match?.nombre_perfil || perfilId}?`,
       html: `<p><strong>${puesto}</strong> en ${empresa}. Al aprobar, el grafo se reanuda y se generan:</p>
-        <ul><li>CV en PDF sin cédula, teléfono ni dirección</li><li>Mensaje de Telegram para la empresa</li><li>Cita de entrevista en <code>.ics</code></li></ul>`,
+        <ul><li>CV en PDF sin cédula, teléfono ni dirección</li><li>Mensaje para la empresa (Telegram u <code>outbox/</code>)</li><li>Cita de entrevista en <code>.ics</code></li></ul>`,
       textoBoton: "Aprobar y enviar",
     });
     if (!ok) return;
@@ -1568,6 +1605,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   cargarEstado();
+  iniciarRefresco();
 });
 
 function renderizarOperacionYUmbrales() {
