@@ -407,7 +407,7 @@ def _ocr_local(ruta: Path) -> str:  # pragma: no cover - depende del entorno
     try:
         from rapidocr_onnxruntime import RapidOCR
     except ImportError as exc:
-        raise RuntimeError("leer CV en foto requiere OCR local: instala las dependencias con uv sync") from exc
+        raise RuntimeError("leer CV en foto requiere OCR local: instala el grupo ocr con `uv sync --group ocr`") from exc
     resultado, _ = RapidOCR()(str(ruta))
     return "\n".join(fila[1] for fila in resultado or [])
 
