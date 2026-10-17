@@ -1,0 +1,32 @@
+{
+  "hash": "e296d77ecd8c154063187d5376634a2093f0380b0454954ae2a551ae12150969",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "perfil",
+  "esquema": "PerfilExtraido",
+  "salida": {
+    "habilidades": [
+      {
+        "skill_id": "limpieza",
+        "evidencia": "Limpio casas y oficinas los sábados"
+      },
+      {
+        "skill_id": "trabajo_equipo",
+        "evidencia": "trabajo en equipo con mi prima"
+      }
+    ],
+    "edad": null,
+    "corregimiento": null,
+    "ubicacion_texto": null,
+    "salario_minimo": null,
+    "horario_libre": [],
+    "horario_clases": [],
+    "transcripcion_literal": null
+  },
+  "uso": {
+    "entrada": 2558,
+    "salida": 152
+  },
+  "creado": "2026-10-17T03:19:44+00:00"
+}

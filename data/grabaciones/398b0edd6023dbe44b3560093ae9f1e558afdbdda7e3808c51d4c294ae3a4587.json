@@ -1,0 +1,33 @@
+{
+  "hash": "398b0edd6023dbe44b3560093ae9f1e558afdbdda7e3808c51d4c294ae3a4587",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "mercado",
+  "esquema": "OfertaExtraida",
+  "salida": {
+    "puesto": "Ayudante general / dependiente",
+    "empresa": "Empresa P",
+    "corregimiento": "24 de Diciembre",
+    "ubicacion_texto": "24 de Diciembre",
+    "salario_mensual": null,
+    "salario_tipo": "no_publicado",
+    "horario": null,
+    "horario_tipo": "no_publicado",
+    "plazas": null,
+    "franjas_entrevista": [],
+    "habilidades": [],
+    "requisitos_texto": "Bachiller completo y carné de salud verde y blanco. Edad entre 18 a 26 años; Solo varones",
+    "transcripcion_literal": null
+  },
+  "uso": {
+    "entrada": 2004,
+    "salida": 460
+  },
+  "creado": "2026-10-17T03:31:09+00:00",
+  "atendido_por": {
+    "proveedor": "anthropic",
+    "modelo": "claude-opus-5-5",
+    "modo": "json_libre_por_timeout_esquema"
+  }
+}

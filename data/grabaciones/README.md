@@ -55,6 +55,21 @@ Si la respuesta vino del proveedor de respaldo tras un rechazo, se guarda bajo l
 Cambiar el modelo, el proveedor, una letra del prompt, el esquema o un byte de un archivo da otro hash: hay que
 volver a grabar. Para calcularlo a mano: `puente.llm.clave_grabacion(...)`.
 
+## Ofertas de la carga inicial (#46)
+
+Las 20 ofertas de `data/ofertas/` tienen grabaciones de Claude Opus 5.5 validadas con
+`OfertaExtraida`. La API con `output_config.format=json_schema` agotó el tiempo de espera
+en esta carga; se obtuvo el JSON con el mismo modelo y las instrucciones de Mercado,
+añadiendo el esquema al mensaje de sistema. Cada grabación indica
+`atendido_por.modo=json_libre_por_timeout_esquema` para hacer visible esta diferencia.
+Su `hash` corresponde a la petición normal de Mercado, de modo que
+`LLM_MODO=reproducir uv run python -m puente.cargar` funciona sin red. Si cambia el
+prompt, el esquema o el modelo, hay que volver a validar y grabar las respuestas.
+
+En la primera carga se guardaron 20 ofertas (7 bloqueadas) y 10 perfiles. Una segunda
+corrida reutilizó las 20 extracciones y dejó los mismos conteos. Las reglas de
+discriminación y la deduplicación se aplican al reproducir mediante `puente.cargar`.
+
 ## Cómo regrabar el caso de Yaritza (lo hace una persona, con clave)
 
 **Requisito previo:** los PRs de adopción de `puente/llm.py` en `mercado.py`, `perfil.py` y `formacion.py` (#43, #44 y

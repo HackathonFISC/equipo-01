@@ -1,0 +1,37 @@
+{
+  "hash": "36655dd7793fcbcc47eb3afead48204c855e76dff3de30b254af0e90b75fd1e1",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "mercado",
+  "esquema": "OfertaExtraida",
+  "salida": {
+    "puesto": "Ayudante general temporal - Panamá Este",
+    "empresa": "Empresa O",
+    "corregimiento": "Tocumen",
+    "ubicacion_texto": "Tocumen",
+    "salario_mensual": null,
+    "salario_tipo": "no_publicado",
+    "horario": null,
+    "horario_tipo": "no_publicado",
+    "plazas": null,
+    "franjas_entrevista": [],
+    "habilidades": [
+      "Carga y descarga de mercancía",
+      "Distribución de mercancía",
+      "Despacho de mercancía"
+    ],
+    "requisitos_texto": "Secundaria preferida; experiencia previa en carga y descarga; residencia en Panamá Este deseable. Buena presencia",
+    "transcripcion_literal": null
+  },
+  "uso": {
+    "entrada": 2024,
+    "salida": 579
+  },
+  "creado": "2026-10-17T03:31:05+00:00",
+  "atendido_por": {
+    "proveedor": "anthropic",
+    "modelo": "claude-opus-5-5",
+    "modo": "json_libre_por_timeout_esquema"
+  }
+}

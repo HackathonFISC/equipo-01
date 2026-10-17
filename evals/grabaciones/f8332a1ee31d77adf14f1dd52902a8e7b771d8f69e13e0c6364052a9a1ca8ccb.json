@@ -1,0 +1,36 @@
+{
+  "hash": "f8332a1ee31d77adf14f1dd52902a8e7b771d8f69e13e0c6364052a9a1ca8ccb",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "perfil",
+  "esquema": "PerfilExtraido",
+  "salida": {
+    "habilidades": [
+      {
+        "skill_id": "atencion_cliente",
+        "evidencia": "Atiendo a los clientes"
+      },
+      {
+        "skill_id": "manejo_caja",
+        "evidencia": "cobro en caja"
+      },
+      {
+        "skill_id": "inventario",
+        "evidencia": "llevo el control del inventario de lo que se vende"
+      }
+    ],
+    "edad": null,
+    "corregimiento": null,
+    "ubicacion_texto": null,
+    "salario_minimo": null,
+    "horario_libre": [],
+    "horario_clases": [],
+    "transcripcion_literal": null
+  },
+  "uso": {
+    "entrada": 2559,
+    "salida": 177
+  },
+  "creado": "2026-10-17T03:19:37+00:00"
+}

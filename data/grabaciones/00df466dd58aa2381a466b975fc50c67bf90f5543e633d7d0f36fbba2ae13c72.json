@@ -1,0 +1,36 @@
+{
+  "hash": "00df466dd58aa2381a466b975fc50c67bf90f5543e633d7d0f36fbba2ae13c72",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "mercado",
+  "esquema": "OfertaExtraida",
+  "salida": {
+    "puesto": "Ayudante general",
+    "empresa": "Empresa L",
+    "corregimiento": null,
+    "ubicacion_texto": "Capira, Panamá Oeste",
+    "salario_mensual": 632.0,
+    "salario_tipo": "exacto",
+    "horario": null,
+    "horario_tipo": "no_publicado",
+    "plazas": null,
+    "franjas_entrevista": [],
+    "habilidades": [
+      "Adherencia o cumplimiento de normas",
+      "Compromiso"
+    ],
+    "requisitos_texto": "Educación mínima: Bachillerato / Educación Media; 1 año de experiencia; Conocimientos: Adherencia o cumplimiento de normas, Compromiso",
+    "transcripcion_literal": null
+  },
+  "uso": {
+    "entrada": 2050,
+    "salida": 467
+  },
+  "creado": "2026-10-17T03:30:49+00:00",
+  "atendido_por": {
+    "proveedor": "anthropic",
+    "modelo": "claude-opus-5-5",
+    "modo": "json_libre_por_timeout_esquema"
+  }
+}
