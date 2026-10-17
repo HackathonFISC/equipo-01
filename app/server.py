@@ -35,7 +35,14 @@ import puente.rules.traslados as _mod_traslados
 from puente.agents import mercado
 from puente.agents.auditor import nodo_auditor
 from puente.agents.formacion import nodo_formacion
-from puente.agents.postulacion import consentimiento_otorgado, consentimientos_para, postular
+from puente.agents.postulacion import (
+    agendar_entrevistas,
+    consentimiento_otorgado,
+    consentimientos_para,
+    decisiones_de_agenda,
+    postular,
+)
+from puente.tools.calendario import ZONA_PANAMA
 from puente.graph import (
     aprobacion_pendiente,
     checkpointer_sqlite,
@@ -128,6 +135,19 @@ RUTA_OUTBOX = (
     if es_modo_demo_publica()
     else RUTA_RAIZ / "outbox"
 )
+# Después del condicional del #178: así, también en la demo pública, PUENTE_OUTBOX manda.
+_RUTA_OUTBOX_POR_DEFECTO = RUTA_OUTBOX
+
+
+def _ruta_outbox() -> Path:
+    """Carpeta del CV, el .ics y los mensajes: PUENTE_OUTBOX si está definida, como PUENTE_DB.
+
+    Se lee en cada llamada. Si alguien fijó ``RUTA_OUTBOX`` a mano (las pruebas), manda esa;
+    sin ninguna de las dos, la de siempre (``outbox/`` del repo, o la temporal en la demo pública).
+    """
+    if RUTA_OUTBOX != _RUTA_OUTBOX_POR_DEFECTO:
+        return RUTA_OUTBOX
+    return Path(os.getenv("PUENTE_OUTBOX") or RUTA_OUTBOX)
 RUTA_DB_TABLERO = Path(tempfile.gettempdir()) / "puente_tablero.db"
 
 PATRON_ID_SEGURO = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -744,17 +764,33 @@ def _compilar_grafo_tablero(
             return {}
         perfiles_map = {p.id: p for p in modelos_perfiles}
         ofertas_map = {o.id: o for o in modelos_ofertas}
-        RUTA_OUTBOX.mkdir(parents=True, exist_ok=True)
+        matches_aprob = [m for m in matches_aprob if m.perfil_id in perfiles_map and m.oferta_id in ofertas_map]
+        _ruta_outbox().mkdir(parents=True, exist_ok=True)
         conn = _conectar_db_estado(estado)
         try:
+            # Cada candidato en su propia franja, con la agenda del nodo de Postulación (#186).
+            matches_aprob, inicios, avisos = agendar_entrevistas(
+                matches_aprob, perfiles_map, ofertas_map, conn, desde=datetime.now(ZONA_PANAMA)
+            )
+            # Hora de respaldo «por confirmar» o sin ninguna hora: la misma Decision que deja el nodo.
+            de_agenda = decisiones_de_agenda(avisos)
+            for decision in de_agenda:
+                db.registrar_decision(conn, decision)
+            # La ruta de respaldo vuelve a agendar si el grafo no generó archivos: que no repita estas.
+            estado.setdefault("_agenda_registrada", set()).update(par for par, _, _ in avisos)
+            if not matches_aprob:
+                return {"decisiones": [*(estado_g.get("decisiones") or []), *de_agenda]} if de_agenda else {}
             res = postular(
                 matches_aprob,
                 perfiles_map,
                 ofertas_map,
                 aprobacion=aprobacion,
                 conn=conn,
-                outbox=RUTA_OUTBOX,
+                outbox=_ruta_outbox(),
                 consentimientos=consentimientos,
+                # El mensaje que editó el orientador llega a la empresa, cegado (#187).
+                mensaje_orientador=str(aprobacion.get("mensaje") or ""),
+                inicio_entrevista=lambda m: inicios[(m.perfil_id, m.oferta_id)],
             )
         finally:
             conn.close()
@@ -764,7 +800,7 @@ def _compilar_grafo_tablero(
                 arch.name for arch in res.archivos
             ]
         return {
-            "decisiones": [*(estado_g.get("decisiones") or []), *res.decisiones],
+            "decisiones": [*(estado_g.get("decisiones") or []), *de_agenda, *res.decisiones],
         }
 
     ruta_db = estado.get("_db_path") or os.getenv("PUENTE_DB") or str(RUTA_DB_TABLERO)
@@ -1544,7 +1580,7 @@ def procesar_accion_orientador(
 
         # Validación de ruta segura en outbox para el par antes de ejecutar
         _ = _ruta_segura_en_outbox(
-            RUTA_OUTBOX, f"cv_{req.perfil_id}_{req.oferta_id}.pdf"
+            _ruta_outbox(), f"cv_{req.perfil_id}_{req.oferta_id}.pdf"
         )
 
         # El orientador confirma solo si el joven no dejó su propio registro (el «sí» de /joven queda con su medio).
@@ -1626,9 +1662,21 @@ def procesar_accion_orientador(
             # Los del grafo primero y luego los del tablero; manda el último registro de la pareja (#52, #54).
             previos = _consentimientos_combinados(estado)
             consentimientos = consentimientos_para([(req.perfil_id, req.oferta_id)], previos, ahora)
-            RUTA_OUTBOX.mkdir(parents=True, exist_ok=True)
+            _ruta_outbox().mkdir(parents=True, exist_ok=True)
             conn = _conectar_db_estado(estado)
             try:
+                if req.perfil_id not in perfiles_map or req.oferta_id not in ofertas_map:
+                    raise ValueError(f"falta el perfil {req.perfil_id} o la oferta {req.oferta_id}")
+                # Misma agenda que el nodo: no cruza otras entrevistas de la empresa ni del joven (#186).
+                con_fecha, inicios, avisos = agendar_entrevistas(
+                    [m_schema], perfiles_map, ofertas_map, conn, desde=datetime.now(ZONA_PANAMA)
+                )
+                ya_registradas = estado.get("_agenda_registrada") or set()
+                for decision in decisiones_de_agenda([a for a in avisos if a[0] not in ya_registradas]):
+                    db.registrar_decision(conn, decision)
+                    estado["decisiones"].append(_serializar_decision(decision))
+                if not con_fecha:
+                    raise ValueError(f"sin franja compatible ({avisos[0][1] if avisos else 'sin hora posible'})")
                 res_post = postular(
                     [m_schema],
                     perfiles_map,
@@ -1639,8 +1687,11 @@ def procesar_accion_orientador(
                         "aprobados": [{"perfil_id": req.perfil_id, "oferta_id": req.oferta_id}],
                     },
                     conn=conn,
-                    outbox=RUTA_OUTBOX,
+                    outbox=_ruta_outbox(),
                     consentimientos=consentimientos,
+                    # El mensaje que editó el orientador llega a la empresa, cegado (#187).
+                    mensaje_orientador=req.mensaje_empresa or post_activo.get("mensaje_empresa") or "",
+                    inicio_entrevista=lambda m: inicios[(m.perfil_id, m.oferta_id)],
                 )
             except ValueError as error:
                 # Sin consentimiento, oferta bloqueada o datos incompletos: error claro, nunca un 500.
@@ -2216,7 +2267,7 @@ def aprobar_cobertura_turnos(
         previos,
         ahora,
     )
-    RUTA_OUTBOX.mkdir(parents=True, exist_ok=True)
+    _ruta_outbox().mkdir(parents=True, exist_ok=True)
     conn = _conectar_db_estado(estado)
     try:
         res_post = postular(
@@ -2225,7 +2276,7 @@ def aprobar_cobertura_turnos(
             ofertas_map,
             aprobacion=aprobacion,
             conn=conn,
-            outbox=RUTA_OUTBOX,
+            outbox=_ruta_outbox(),
             consentimientos=consentimientos,
             mensaje_orientador=f"Propuesta de cobertura compartida por turnos ({seg_m['inicio']}-{seg_m['fin']} y {seg_t['inicio']}-{seg_t['fin']}) aprobada por {req.orientador}.",
         )
@@ -2543,7 +2594,8 @@ def _rechazo_guardrails(estado: dict[str, Any], datos: dict[str, Any]) -> str | 
 def _cargar_oferta_desde_archivo(estado: dict[str, Any], ruta: Path) -> dict[str, Any]:
     """Lee un anuncio de data/ofertas con el agente Mercado (puente.llm; en reproducir, las grabaciones de #139)."""
     rel = f"data/ofertas/{ruta.name}"
-    texto = ruta.read_text(encoding="utf-8")
+    # Sin cédula ni teléfono antes de Mercado y del tablero; la dirección de la empresa se queda (#95, #188).
+    texto = limpiar_entrada({"ofertas": ruta.read_text(encoding="utf-8")})["ofertas"]
     rechazo = _rechazo_guardrails(estado, {"texto": texto})
     if rechazo:
         raise ErrorValidacionTablero(rechazo)
@@ -2580,7 +2632,9 @@ def _cargar_perfil_desde_archivo(estado: dict[str, Any], ruta: Path) -> dict[str
     """Suma al tablero un perfil sintético de data/perfiles tal como está en el archivo (#188)."""
     rel = f"data/perfiles/{ruta.name}"
     try:
-        perfil = Perfil.model_validate(json.loads(ruta.read_text(encoding="utf-8")))
+        # Todo texto del archivo (nombre, evidencias) sin cédula, teléfono ni dirección exacta, como cualquier
+        # otra entrada; el corregimiento se conserva (#188).
+        perfil = Perfil.model_validate(limpiar_entrada(json.loads(ruta.read_text(encoding="utf-8"))))
     except ValueError as exc:
         raise ErrorValidacionTablero(f"{rel} no es un perfil válido: {exc}") from exc
     perfil = perfil.model_copy(update={"id": f"PERFIL-DATA-{perfil.id}"})
@@ -3526,7 +3580,7 @@ async def endpoint_joven_ics(request: Request) -> FileResponse | JSONResponse:
     if nombre is None:
         return JSONResponse({"detail": "Todavía no hay entrevista propuesta para esta vacante."}, status_code=404)
     try:
-        ruta = _ruta_segura_en_outbox(RUTA_OUTBOX, nombre)
+        ruta = _ruta_segura_en_outbox(_ruta_outbox(), nombre)
     except ErrorValidacionTablero as exc:
         return JSONResponse({"detail": str(exc)}, status_code=422)
     if not ruta.is_file():

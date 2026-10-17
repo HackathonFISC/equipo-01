@@ -114,7 +114,7 @@ Los siete agentes mínimos que sugiere el documento del reto y dónde están en 
 | 2. Perfil: leer el CV y entrevistar para descubrir habilidades no declaradas | Perfil: CV o entrevista de 5 preguntas, cada habilidad con su frase literal de evidencia; vista `/joven`; la tirilla de matrícula da el horario de clases | #6, #44, #52, #164, #166 | Completo, con preguntas fijas |
 | 3. Matching: asignación con capacidades y restricciones de transporte, horario y salario | Solver OR-Tools CP-SAT con restricciones duras, hasta 3 candidatos por plaza (no por vacante) y hasta 2 vacantes por joven | #4, #48 | Completo |
 | 4. Ruta de formación: plan de cursos con cupos, horarios, costo y transporte | Formación: set cover voraz (no óptimo) sobre cursos del INADEH con cupo, horario, costo y traslado | #14, #53 | Completo; cupos y horarios son datos de prueba |
-| 5. Postulación: adaptar el CV, agendar entrevistas y enviar listas cortas | Postulación: CV ciego por oferta, `.ics` de la entrevista, mensaje a la empresa por Telegram o `outbox/`; vista de la empresa | #7, #12, #123, #167 | Completo, sin carta de presentación aparte |
+| 5. Postulación: adaptar el CV, agendar entrevistas y enviar listas cortas | Postulación: CV y carta de presentación por oferta, sin datos sensibles (la carta, por plantilla y con la frase literal de cada habilidad), `.ics` de la entrevista, mensaje a la empresa por Telegram o `outbox/`; vista de la empresa | #7, #12, #123, #167, #212 | Completo: CV y carta |
 | 6. Entrevista simulada con retroalimentación | No se construyó | — | Fuera de alcance |
 | 7. Auditor: medir sesgo por nombre, género o corregimiento y bloquear ofertas discriminatorias | Auditor v2 con contrafactuales y línea base; el bloqueo lo hacen las reglas de Mercado | #8, #50, #5 | Completo |
 
@@ -376,7 +376,7 @@ Cada afirmación de diseño tiene una prueba que cualquiera puede repetir:
 
   En el tablero, `POST /api/orientador/accion` responde **422 sin efectos** en tres casos: si falta el consentimiento, si el joven dijo «no» en `/joven` o si el Auditor marcó sesgo en el lote (#189). Lo cubre `tests/test_tablero.py`.
 - **La Ley 11 de 2005, con la frase.** Cada hallazgo de [`puente/rules/discriminacion.py`](puente/rules/discriminacion.py) guarda la regla y la frase literal de la oferta. Solo bloquean el límite de edad (art. 2) y la exigencia de sexo (art. 1), y las demás causales del art. 1 alertan citando el artículo. «Buena presencia», foto y estado civil solo alertan, sin artículo, porque la ley no menciona la apariencia. Lo cubren los 11 casos de requisitos discriminatorios de los evals.
-- **CV ciego.** `cegar()` en [`puente/tools/pdf.py`](puente/tools/pdf.py) quita de la evidencia que llega a la empresa la edad, la fecha de nacimiento, el corregimiento, el estado civil, la pareja, los hijos, el embarazo y los términos de género. El CV nunca lleva el presupuesto, el salario mínimo pedido ni las ofertas descartadas.
+- **CV ciego.** `cegar()` en [`puente/tools/pdf.py`](puente/tools/pdf.py) quita de la evidencia que llega a la empresa la edad, la fecha de nacimiento, el corregimiento, el estado civil, la pareja, los hijos, el embarazo y los términos de género. El CV nunca lleva el presupuesto, el salario mínimo pedido ni las ofertas descartadas. La carta de presentación ([`puente/tools/carta.py`](puente/tools/carta.py), #212) pasa por lo mismo: se arma por plantilla, sin LLM, solo con habilidades que tienen evidencia. La evidencia y el nombre de cada habilidad pasan por `cegar()`; el texto de la oferta (empresa y puesto) no, porque tapar ahí el corregimiento del joven se lo revelaría a la empresa (pruebas en `tests/test_carta.py`).
   - El nombre, por decisión de @jesus12ga del 16 de octubre (#123), va o no según lo que mande la persona: Puente no lo agrega ni lo quita, y todo lo demás de esta lista sí se oculta.
   - La vista de la empresa sí lo quita: allí cada persona es «Candidato N».
   - Pruebas en `tests/test_cv_ciego.py`.
@@ -395,7 +395,7 @@ Las palabras clave de inyección ("ignora tus instrucciones", "eres ahora", "sys
 
 ## Evals
 
-42 casos propios en [`evals/casos.yaml`](evals/casos.yaml), cada uno con el resultado esperado escrito antes de correr. El runner es [`evals/run.py`](evals/run.py) y los resultados, con el registro de fallos y su historial, están en [`evals/resultados.md`](evals/resultados.md). Esta tabla es de la corrida en modo reproducir sobre `main`. **Se regenera con `uv run python -m evals.run` sobre el commit final, antes del tag.**
+48 casos propios en [`evals/casos.yaml`](evals/casos.yaml), cada uno con el resultado esperado escrito antes de correr. El runner es [`evals/run.py`](evals/run.py) y los resultados, con el registro de fallos y su historial, están en [`evals/resultados.md`](evals/resultados.md). Esta tabla es de la corrida en modo reproducir sobre `main`. **Se regenera con `uv run python -m evals.run` sobre el commit final, antes del tag.**
 
 | Categoría | Casos | Aciertos | Métrica | Meta | Cumple |
 |---|---:|---:|---|---:|---|
@@ -409,10 +409,15 @@ Las palabras clave de inyección ("ignora tus instrucciones", "eres ahora", "sys
 | Horario: validación | 1 | 1/1 | Bloques inválidos rechazados y válidos convertidos | 100 % | sí |
 | Redactor | 3 | 3/3 | Versión legal sin hallazgos y viables antes y después iguales a lo calculado a mano | 100 % | sí |
 | Micromisión | 4 | 4/4 | Puntaje calculado en código, igual con nombre y género cambiados, scorecard sin datos personales | 100 % | sí |
+| Postulación | 2 | 2/2 | Sin consentimiento no sale nada; con consentimiento, CV, carta, .ics y mensaje sin datos sensibles | 100 % | sí |
+| Reacomodo | 1 | 1/1 | Tras el rechazo de la empresa: pareja excluida, aviso al joven y nueva aprobación pendiente | 100 % | sí |
+| Formación | 2 | 2/2 | Cursos calculados a mano, con cupo, horario sin cruce, traslado de hasta 60 min y pasaje dentro del presupuesto | 100 % | sí |
+| De punta a punta | 1 | 0/1 | Listas cortas calculadas a mano y CV, carta e .ics por pareja en outbox, sin datos sensibles | 100 % | no (#238) |
 
 Para leer esta tabla con honestidad:
 
 - **No siempre fue así.** El 16 de octubre, 4 de los 5 casos de extracción fallaban (#152 a #155). Se corrigieron en el código de Mercado, sin tocar lo esperado, y el historial queda en `evals/resultados.md`.
+- **Un caso falla hoy.** E2E-01 recorre el caso Yaritza de punta a punta. Coinciden las parejas enviadas, los archivos y la ausencia de datos sensibles, pero la lista corta de la cocina sale ordenada por id (Carlos 50, María 50, Yaritza 100) y no por puntaje. El fallo queda anotado y se sigue en #238.
 - **Las metas son provisionales.** Las propuso el equipo.
 - **No se mide la variación.** En modo reproducir cada caso con LLM usa una sola grabación.
 - **Todos los datos de los casos son sintéticos.**

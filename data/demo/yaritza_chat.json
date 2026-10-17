@@ -1,0 +1,40 @@
+{
+  "_nota": "Guion sintético del video (#194). Yaritza Ficticia no existe; sin cédula, teléfono ni dirección. Las 5 respuestas van en el orden de PREGUNTAS_ENTREVISTA de puente/agents/perfil.py, una por pregunta; las de tests/fixtures/caso_yaritza.json no siguen ese orden y ese archivo no se toca, porque la demo por terminal y su grabación dependen de él. En /joven se pega cada respuesta tal cual: una letra distinta cambia el hash y la vista sin conexión ya no encuentra la lectura grabada. El formulario es el del fixture salvo el corregimiento: La Chorrera y no Barrio Colón, porque la vista solo acepta orígenes de data/traslados.csv. Lo graba scripts/grabar_video.sh.",
+  "formulario": {
+    "nombre": "Yaritza Ficticia",
+    "edad": 20,
+    "corregimiento": "La Chorrera",
+    "horario_clases": [
+      {"dias": ["lunes", "martes", "miercoles", "jueves", "viernes"], "hora_inicio": "18:00", "hora_fin": "22:00"}
+    ],
+    "horario_libre": [],
+    "salario_minimo": 400,
+    "presupuesto_pasaje_diario": 3.0
+  },
+  "entrevista": [
+    {
+      "pregunta": "¿Ayudas o has ayudado en algún negocio de tu familia, de un vecino o por tu cuenta? Cuéntame qué hacías en un día normal.",
+      "respuesta": "Sí, en la fonda de mi mamá. Le ayudo todas las mañanas antes de irme a clases: atiendo a los clientes, les tomo el pedido, cobro y doy el vuelto. A la hora del almuerzo se llena y hay que estar pilas."
+    },
+    {
+      "pregunta": "¿Has tenido otros trabajos, aunque sean por días o sin contrato? ¿Qué tareas hacías?",
+      "respuesta": "No, no he tenido otros trabajos. Todo lo que sé lo aprendí en la fonda."
+    },
+    {
+      "pregunta": "¿Has hecho voluntariado o actividades en la iglesia, el deporte o tu comunidad? ¿Qué tareas te tocaban?",
+      "respuesta": "No he hecho voluntariado. Entre la fonda y las clases de noche no me queda tiempo."
+    },
+    {
+      "pregunta": "¿Qué sabes usar o hacer (computadora, celular, cocina, cobrar, idiomas)?",
+      "respuesta": "Sé usar bien el celular, para WhatsApp y para cobrar por Yappy. También ayudo a cocinar: pico la verdura y preparo el arroz y las lentejas del almuerzo."
+    },
+    {
+      "pregunta": "¿En qué te piden ayuda en tu casa, tus amigos o tus vecinos? Cuéntame un ejemplo.",
+      "respuesta": "La señora de al lado me pide que le ayude con el celular, por ejemplo a pagar la luz por Yappy, porque ella no se entiende con eso. Le enseño paso a paso hasta que lo hace sola."
+    }
+  ],
+  "micromision": {
+    "reto_id": "CAJA-01",
+    "texto": "Primero sumo el almuerzo con la soda, eso se lo resto a los 10 del billete y le doy 5.45 de vuelto."
+  }
+}

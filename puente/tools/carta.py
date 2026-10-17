@@ -1,10 +1,14 @@
 """Carta de presentación ciega por plantilla, desde la evidencia literal del perfil. Issue #212.
 
-Sin LLM: misma entrada, misma salida. La carta lleva el saludo a la empresa, el puesto, de 2 a 3
-habilidades que la oferta pide y el perfil respalda (cada una con su frase literal) y la
-disponibilidad. Cada línea pasa por `cegar()` y `limpiar_pii()`, igual que el CV. El nombre va tal
-como lo da la persona y solo si lo dio (#123); Puente no lo agrega ni lo quita. Nunca lleva edad,
-género, corregimiento, estado civil, hijos, presupuesto, salario pedido ni ofertas descartadas.
+Sin LLM: misma entrada, misma salida. La carta lleva el saludo a la empresa, el puesto, hasta 3
+habilidades que la oferta pide y el perfil respalda (si son menos de 2, completa con otras que tengan
+evidencia), cada una con su frase literal, y la disponibilidad. Nunca lleva edad, género,
+corregimiento, estado civil, hijos, presupuesto, salario pedido ni ofertas descartadas.
+
+La evidencia del joven pasa por `cegar()`, igual que en el CV; toda línea pasa por `limpiar_pii()`.
+El texto de la oferta (empresa y puesto) no se ciega: lo escribió la empresa, y tapar ahí el
+corregimiento del joven ("Farmacia [dato omitido]") se lo revelaría (#226). El nombre va tal como lo
+da la persona y solo si lo dio (#123); Puente no lo agrega ni lo quita.
 
 La plantilla no usa palabras con género ("estimado", "atenta", "señores"): la carta es la misma
 para cualquier persona.
@@ -71,9 +75,16 @@ def habilidades_para_carta(
 
 
 def _cabe(horario: Horario, libres: list[Horario]) -> bool:
-    """El horario de la oferta queda dentro de la disponibilidad, día por día."""
+    """El horario de la oferta queda dentro de la disponibilidad, día por día.
+
+    Una franja que cruza la medianoche ("22:00-06:00") nunca se da por compatible: comparar las horas
+    como texto la haría caber en "18:00-23:00" (#226). Ante la duda, la carta no lo afirma.
+    """
+    if horario.hora_fin <= horario.hora_inicio:
+        return False
     return all(
-        any(dia in libre.dias and libre.hora_inicio <= horario.hora_inicio and horario.hora_fin <= libre.hora_fin
+        any(dia in libre.dias and libre.hora_inicio < libre.hora_fin
+            and libre.hora_inicio <= horario.hora_inicio and horario.hora_fin <= libre.hora_fin
             for libre in libres)
         for dia in horario.dias
     )
@@ -86,10 +97,15 @@ def contenido_carta(
     pedidas, extra = habilidades_para_carta(perfil, oferta)
 
     def item(h: HabilidadPerfil) -> str:
-        return f"- {nombre_habilidad(skill_id_de(h), taxonomia)}: «{evidencia_de(h).strip()}»"
+        # La evidencia es literal y puede traer la edad o dónde vive la persona: esto sí se ciega.
+        evidencia = cegar(evidencia_de(h).strip(), perfil)
+        # El nombre sale de la taxonomía; sin ella cae al skill_id, que puede traer un dato personal (#244).
+        nombre = cegar(nombre_habilidad(skill_id_de(h), taxonomia), perfil)
+        return f"- {nombre}: «{evidencia}»"
 
-    cuerpo = [SALUDO.format(empresa=oferta.empresa)]
-    intro = f"Me postulo al puesto de {oferta.puesto}."
+    empresa, puesto = str(oferta.empresa or "").strip(), str(oferta.puesto or "").strip()
+    cuerpo = [SALUDO.format(empresa=empresa) if empresa else "Al equipo de selección:"]
+    intro = f"Me postulo al puesto de {puesto}." if puesto else "Me postulo a esta vacante."
     if pedidas:
         cuerpo.append(f"{intro} Estas son las habilidades que el puesto pide y que respaldo con lo que "
                       "hago hoy, en mis propias palabras:")
@@ -105,14 +121,15 @@ def contenido_carta(
 
     if perfil.horario_libre:
         disponibilidad = f"Disponibilidad: {'; '.join(formatear_horario(h) for h in perfil.horario_libre)}."
-        if oferta.horario is not None and _cabe(oferta.horario, perfil.horario_libre):
+        # Solo con horario fijo: uno rotativo queda «por confirmar» en el solver y la carta no lo afirma.
+        fijo = oferta.horario is not None and oferta.horario_tipo == "fijo"
+        if fijo and _cabe(oferta.horario, perfil.horario_libre):
             disponibilidad += f" El horario del puesto ({formatear_horario(oferta.horario)}) cabe en ella."
     else:
         disponibilidad = "Disponibilidad: por confirmar."
     cuerpo += [disponibilidad, CIERRE, DESPEDIDA]
 
-    # Todo pasa por cegar(): la evidencia es literal y puede traer la edad o dónde vive la persona.
-    lineas = [limpiar_pii(cegar(linea, perfil)) for linea in cuerpo]
+    lineas = [limpiar_pii(linea) for linea in cuerpo]
     nombre = str(perfil.nombre or "").strip()
     if nombre:
         lineas.append(limpiar_pii(nombre))
