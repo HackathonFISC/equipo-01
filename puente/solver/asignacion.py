@@ -445,7 +445,7 @@ def verificar_compatibilidad_horario(perfil: Any, oferta: Any) -> tuple[bool, st
 
 
 def _campos_por_confirmar_oferta(oferta: Any) -> list[str]:
-    """Determina qué campos desconocidos de la oferta requieren confirmación (#42, #48)."""
+    """Determina qué campos desconocidos de la oferta requieren confirmación (#42, #48, #127)."""
     faltan: list[str] = []
 
     salario_raw = _get_field(oferta, "salario_mensual", "salario", default=None)
@@ -466,6 +466,9 @@ def _campos_por_confirmar_oferta(oferta: Any) -> list[str]:
     corregimiento = str(_get_field(oferta, "corregimiento", default="") or "").strip()
     if not corregimiento:
         faltan.append("corregimiento")
+
+    if not extraer_skill_ids_oferta(oferta):
+        faltan.append("habilidades")
 
     return faltan
 
@@ -587,7 +590,9 @@ def evaluar_factibilidad_par(
     else:
         cubiertas = []
         brechas = []
-        cobertura = 1.0
+        cobertura = 0.0
+        if "habilidades" not in requiere_confirmacion:
+            requiere_confirmacion.append("habilidades")
 
     cobertura_entera = int(round(cobertura * config.peso_cobertura))
     penalizacion_confirmacion = len(requiere_confirmacion) * config.penalizacion_por_confirmar
@@ -740,6 +745,16 @@ def asignar(
     if not perfiles:
         return []
 
+    # Orden canónico por id para que barajar el orden de entrada no altere variables ni empates (#127)
+    perfiles = sorted(
+        perfiles,
+        key=lambda p: str(_get_field(p, "id", "perfil_id", default="")),
+    )
+    ofertas = sorted(
+        ofertas,
+        key=lambda o: str(_get_field(o, "id", "oferta_id", default="")),
+    )
+
     mapa_excluidos = _normalizar_mapa_excluidos(excluidos or parejas_excluidas)
     set_fijas = _normalizar_parejas_fijas(parejas_fijas)
 
@@ -815,6 +830,9 @@ def asignar(
         ]
         min_traslado_por_joven[i] = min(viables_i) if viables_i else 0
 
+    n_perfiles = len(perfiles)
+    n_ofertas = max(1, len(ofertas))
+    escala_desempate = max(1000, (n_perfiles * n_ofertas + 1) * (n_perfiles + 2))
     bono_factibilidad = 100_000
     escala_puntaje = 100
     terminos_objetivo = []
@@ -824,9 +842,11 @@ def asignar(
             delta_traslado = max(
                 0, min(99, ev["minutos_traslado"] - min_traslado_por_joven.get(i, 0))
             )
-            coef_entero = int(
+            base_obj = int(
                 bono_factibilidad + ev["puntaje"] * escala_puntaje - delta_traslado
             )
+            desempate_id = (n_perfiles - i)
+            coef_entero = base_obj * escala_desempate + desempate_id
             terminos_objetivo.append(coef_entero * var)
 
     if terminos_objetivo:
