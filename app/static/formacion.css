@@ -1,0 +1,22 @@
+/* Vista del centro de formación (#286). Usa los tokens de empresa_lista.css. */
+.f-cabecera { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.f-cabecera h2, .f-subtitulo { margin: 0; font-size: 1.1rem; }
+.f-subtitulo { margin: 1rem 0 0.6rem; }
+.f-cifras { display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); gap: 0.6rem; margin: 0.9rem 0 0.4rem; }
+.f-cifra { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 0.75rem; display: flex; flex-direction: column; gap: 0.15rem; }
+.f-cifra strong { font-size: 1.4rem; line-height: 1.1; }
+.f-cifra span, .f-demanda span { font-size: 0.8rem; color: var(--text-2); }
+.f-curso header { display: flex; justify-content: space-between; gap: 0.75rem; align-items: flex-start; flex-wrap: wrap; }
+.f-curso h3 { margin: 0; font-size: 1rem; }
+.f-demanda { display: flex; flex-direction: column; align-items: flex-end; text-align: right; }
+.f-demanda strong { font-size: 1.5rem; line-height: 1; color: var(--brand); }
+.f-presion { display: flex; align-items: center; gap: 0.6rem; margin: 0.4rem 0; }
+.f-presion-barra { flex: 1; height: 0.5rem; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
+.f-presion-barra span { display: block; height: 100%; background: var(--brand); }
+.f-sincupo { color: var(--bad); font-weight: 600; margin: 0.4rem 0; }
+.f-impacto { margin: 0.3rem 0; font-weight: 600; }
+.f-chips { list-style: none; padding: 0; margin: 0.4rem 0 0; display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.f-chip { font-size: 0.78rem; border: 1px solid var(--border-strong); border-radius: 999px; padding: 0.15rem 0.55rem; background: var(--surface-2); }
+.f-brechas { list-style: none; padding: 0; margin: 0.4rem 0 0; display: grid; gap: 0.35rem; }
+.f-brechas li { display: flex; justify-content: space-between; gap: 0.75rem; border-bottom: 1px solid var(--border); padding: 0.3rem 0; }
+@media (max-width: 480px) { .f-demanda { align-items: flex-start; text-align: left; } }
