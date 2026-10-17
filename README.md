@@ -17,7 +17,7 @@ Sistema agéntico de inserción laboral juvenil: conecta jóvenes, vacantes y cu
 
 En Panamá, la Encuesta de Mercado Laboral del INEC de **agosto de 2026** estimó una tasa de desocupación nacional de **8,5 %**. Para las personas de **20 a 24 años** fue **22,6 %**, y para las de **25 a 29 años**, **14,4 %**. El mismo boletín reportó **45,8 %** de empleo informal no agrícola. Son indicadores de contexto nacional, no resultados ni línea base de Puente: [comentario oficial](https://www.inec.gob.pa/archivos/P053342420260930151945Comentarios.pdf), [cuadro de desocupación por edad](https://www.inec.gob.pa/archivos/P0579518620260930152328Cuadro%205.pdf) y [boletín oficial, cuadro 26](https://www.inec.gob.pa/archivos/P0862619320260930153357Bolet%C3%ADn%20de%20la%20Encuesta%20de%20Mercado%20Laboral%20-%20Agosto%202026.pdf).
 
-En **Panamá Oeste**, la provincia de Arraiján y La Chorrera, el mismo [cuadro 5](https://www.inec.gob.pa/archivos/P0579518620260930152328Cuadro%205.pdf) da cifras peores para los jóvenes. Son tasas de desocupación de agosto de 2026:
+En **Panamá Oeste**, la provincia donde están Arraiján y La Chorrera (también Capira, Chame y San Carlos), el mismo [cuadro 5](https://www.inec.gob.pa/archivos/P0579518620260930152328Cuadro%205.pdf) da cifras peores para los jóvenes. Son tasas de desocupación de agosto de 2026:
 
 | Grupo | Panamá Oeste | Todo el país |
 | --- | ---: | ---: |
@@ -31,7 +31,7 @@ Es la población a la que apunta la demo.
 | Quién | Qué le pasa hoy | Qué gana con Puente |
 | --- | --- | --- |
 | **Joven de 18 a 29 años en Panamá Oeste** | Sabe hacer cosas que no están en ningún papel. Postula a anuncios que quedan a más de una hora, cuestan más pasaje del que puede pagar o chocan con sus clases. Algunos anuncios piden edad o sexo, y eso es ilegal. | Solo le llegan vacantes a las que llega en 60 minutos o menos, con pasaje dentro de su presupuesto y sin cruce con sus clases. Sus habilidades cuentan, cada una con una frase suya como evidencia. Su CV sale ciego y solo con su consentimiento. |
-| **Empresa** | Recibe candidatos que después no pueden sostener el traslado o el horario. | Una lista corta de hasta 3 personas por vacante que cumplen traslado, pasaje, horario y salario, y el aviso si su anuncio choca con la Ley 11 de 2005. |
+| **Empresa** | Recibe candidatos que después no pueden sostener el traslado o el horario. | Una lista corta de hasta 3 personas por plaza que cumplen traslado, pasaje, horario y salario, y el aviso si su anuncio choca con la Ley 11 de 2005. |
 | **Orientador** | Revisa ofertas y perfiles a mano, sin saber por qué una opción conviene más que otra. | Decide al final, con el motivo de cada puntaje, las alertas del Auditor si un nombre o un género cambia el resultado y cursos del INADEH con cupo para las brechas. |
 
 El reto que aborda esta demo es concreto: una persona joven puede tener habilidades adquiridas en trabajo informal sin un certificado que las haga visibles, mientras una oferta aparentemente cercana puede exigir un viaje o pasaje incompatible con su horario y presupuesto. Puente toma evidencia literal de esas habilidades, evalúa restricciones de traslado, horario y salario, y presenta al orientador humano una lista corta con motivos verificables. La demo usa perfiles y vacantes sintéticos; todavía no demuestra colocaciones ni reducción real del desempleo.
@@ -56,7 +56,7 @@ La comparación usa las **20 ofertas reales anonimizadas** de `data/ofertas/` (C
 | **Qué revisa** | Los 20 anuncios, uno por uno. | 1 opción viable, con su motivo. |
 | **Requisitos ilegales** | 7 anuncios piden edad o sexo (Ley 11 de 2005) y nadie le avisa. | Las 7 ofertas quedan bloqueadas antes de llegarle; el orientador ve la regla y la frase. |
 | **Traslado** | 4 anuncios están en Juan Díaz o Tocumen: de 80 a 95 minutos de ida y B/. 4,70 diarios de pasaje, por encima de sus B/. 3,00. | Su mejor opción, *Auxiliar de servicio al cliente* en Arraiján (B/. 666 al mes), está a **30 minutos** y cuesta **B/. 2,00 diarios** (B/. 44,00 al mes por 22 días). |
-| **Anuncios sin lugar claro** | 8 anuncios no dicen en qué corregimiento es el trabajo; tendría que preguntar en cada uno. | No se le proponen: sin traslado medido, el Matching no los da por viables. |
+| **Anuncios sin lugar claro** | 10 de los 20 anuncios no dicen en qué corregimiento es el trabajo; tendría que preguntar en cada uno. | No se le proponen: sin traslado medido, el Matching no los da por viables. |
 | **Sus habilidades** | Sin CV, lo que hace en la fonda no aparece en ningún papel. | **3 habilidades con evidencia literal:** atención al cliente («atiendo pedidos»), manejo de caja («cobro en caja») e inventario («cuento los productos que quedan al cerrar»). La oferta propuesta pide atención al cliente. |
 | **Lo que falta** | — | La opción cubre 1 de las 2 habilidades que pide la oferta y su horario no está publicado, así que queda «por confirmar» (puntaje 40). El orientador decide si la aprueba. |
 
@@ -266,7 +266,7 @@ cp .env.example .env
 uv run pytest -q
 ```
 
-**Modo sin red.** Con `LLM_MODO=reproducir` (el valor de `.env.example`) ningún agente llama a la red; si falta una grabación, el agente falla con un mensaje que dice cuál es, en vez de llamar al modelo. En Windows, si la salida va a un archivo o a otra consola, antepón `PYTHONUTF8=1` para que los acentos y los símbolos no corten la salida. Sin `.env`, exporta `LLM_MODO=reproducir` antes de cada comando, porque el valor por defecto de `puente/llm.py` es `vivo`.
+**Modo sin red.** Con `LLM_MODO=reproducir` (el valor de `.env.example`) ningún agente llama a la red; si falta una grabación, el agente falla con un mensaje que dice cuál es, en vez de llamar al modelo. La excepción es Micromisión: sin grabación usa su respaldo con expresiones regulares (`"metodo": "respaldo"`). En Windows, si la salida va a un archivo o a otra consola, antepón `PYTHONUTF8=1` para que los acentos y los símbolos no corten la salida. Sin `.env`, exporta `LLM_MODO=reproducir` antes de cada comando, porque el valor por defecto de `puente/llm.py` es `vivo`.
 
 **1. El caso de Yaritza en la terminal.** Recorre todo el grafo con los agentes reales y sus respuestas grabadas, y se detiene en cada vacante para preguntar qué hace el orientador.
 
@@ -280,7 +280,7 @@ Sin preguntas, con aprobación, rechazo de la empresa y reacomodo:
 uv run python -m puente.graph --auto "aprobar,aprobar,empresa_rechaza:yaritza@of-cajero-vista-alegre,aprobar"
 ```
 
-El CV ciego, el `.ics` y los mensajes quedan en `outbox/` y la base en `puente.db`. Telegram solo sale con `--telegram`.
+El CV ciego, el `.ics` y los mensajes quedan en `outbox/` (o en `PUENTE_OUTBOX`) y la base en `puente.db` (o en `PUENTE_DB`). Telegram solo sale con `--telegram`.
 
 **2. La extracción real de Mercado sobre las 20 ofertas.** Las pasa por Mercado con las respuestas grabadas de Claude y las guarda en `puente.db`, junto con 10 perfiles. La primera corrida imprime «ofertas: 20 leídas con el LLM, 0 desde cargas · en la base: 20 (7 bloqueadas)». Las siguientes reutilizan lo ya extraído.
 
@@ -357,8 +357,8 @@ Solo existe [`.env.example`](.env.example), sin claves reales: se copia a `.env`
 | `LANGSMITH_HIDE_INPUTS`, `LANGSMITH_HIDE_OUTPUTS` | En `true`, las trazas no guardan entradas ni salidas con datos personales (#56) |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID_EMPRESA` | Bot y chat de la empresa de demo. Sin ellos, los mensajes van a `outbox/` |
 | `TELEGRAM_CHATS_JOVENES` | Un chat por joven (`perfil_id=chat_id`); quien no esté recibe su aviso en `outbox/` |
-| `PUENTE_DB` | Base SQLite; por defecto `puente.db` |
-| `PUENTE_OUTBOX` | Carpeta del CV ciego, el `.ics` y los mensajes; por defecto `outbox/` |
+| `PUENTE_DB` | Base SQLite; por defecto `puente.db`. El tablero, sin esta variable, usa `%TEMP%/puente_tablero.db` |
+| `PUENTE_OUTBOX` | Carpeta del CV ciego, el `.ics` y los mensajes; por defecto `outbox/`. Vale para la terminal; el tablero escribe en `outbox/` de la raíz hasta que entre el #207 |
 | `PUENTE_ENTREVISTA_INICIO` | Fecha ISO 8601 de la entrevista; vacía, mañana a las 10:00, marcada como provisional |
 | `PUENTE_SAL_ANONIMO` | Clave del código anónimo del scorecard (#158); vacía, una al azar por proceso |
 
@@ -384,7 +384,7 @@ Cada afirmación de diseño tiene una prueba que cualquiera puede repetir:
 
 ## Lo que todavía no hace
 
-- **En el tablero, Mercado con LLM solo entra por «Cargar un ejemplo desde `data/`».** Ese botón pasa los anuncios de `data/ofertas/` por Mercado con sus grabaciones, sin red: CT02, CT24 y CT40 quedan bloqueadas por la Ley 11 (#205). Los perfiles de `data/perfiles/` entran tal cual, con su evidencia y su horario. «Analizar una oferta nueva», el registro de perfiles y las 5 ofertas iniciales siguen con los stubs de `_compilar_grafo_tablero()` en [`app/server.py`](app/server.py), y las entradas rotuladas «ejemplo sintético (no es un archivo)» son de prueba. Matching, Auditor, Formación y Postulación sí son los reales.
+- **En el tablero, Mercado con LLM solo entra por «Cargar un ejemplo desde `data/`».** Ese botón pasa los anuncios de `data/ofertas/` por Mercado con sus grabaciones, sin red: las 7 que choca con la Ley 11 quedan bloqueadas, cinco por edad (CT02, CT24, CT40, CT46 y CT54), K02 por edad y sexo, y K03 por sexo (#205, #211). Los perfiles de `data/perfiles/` entran tal cual, con su evidencia y su horario. «Analizar una oferta nueva», el registro de perfiles y las 5 ofertas iniciales siguen con los stubs de `_compilar_grafo_tablero()` en [`app/server.py`](app/server.py), y las entradas rotuladas «ejemplo sintético (no es un archivo)» son de prueba. Matching, Auditor, Formación y Postulación sí son los reales.
 - **`/joven` sí llama a Perfil y a Horario con el LLM.** En modo reproducir solo lee lo que tiene grabación: la respuesta de Yaritza y la tirilla sintética. Con texto nuevo hace falta `LLM_MODO=vivo` y `ANTHROPIC_API_KEY`; sin eso responde con un error claro y no inventa el perfil.
 - **Telegram en el tablero.** El tablero no tiene un interruptor de Telegram como el `--telegram` de la terminal: si el entorno trae `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID_EMPRESA`, la lista corta sale de verdad.
 - **Variación del LLM.** Los evals en modo reproducir usan una grabación por caso; no miden la variación entre corridas del LLM.
