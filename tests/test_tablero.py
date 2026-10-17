@@ -824,3 +824,16 @@ def test_cargar_desde_data_lee_el_archivo_y_rotula_lo_sintetico(tmp_path: Path, 
             assert r.status_code == 422 and "ya está en el tablero" in r.json()["detail"]
 
     asyncio.run(_ejecutar())
+
+
+def test_catalogo_de_data_trae_todos_los_archivos() -> None:
+    """El catálogo lista las 20 ofertas de data/ofertas (Computrabajo y Konzerta) y todos los perfiles (#188)."""
+    import app.server as srv
+
+    catalogo = srv.listar_catalogo_data()
+    ids = {item["id"] for item in catalogo["ofertas"] + catalogo["perfiles"]}
+    ofertas = {f"data/ofertas/{a.name}" for a in (srv.RUTA_DATA / "ofertas").glob("*.txt")}
+    perfiles = {f"data/perfiles/{a.name}" for a in (srv.RUTA_DATA / "perfiles").glob("*.json")}
+    assert len(ofertas) == 20 and ofertas <= ids
+    assert perfiles <= ids
+    assert any(i.startswith("data/ofertas/K") for i in ids)  # las de Konzerta ya no quedan fuera
