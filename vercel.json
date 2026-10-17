@@ -10,7 +10,7 @@
   "routes": [
     {
       "src": "/(.*)",
-      "dest": "https://superior-secretary-steps-those.trycloudflare.com/$1"
+      "dest": "app/server.py"
     }
   ],
   "env": {
