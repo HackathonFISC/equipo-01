@@ -35,7 +35,8 @@ CAJERO = "of-cajero-vista-alegre"
 COCINA = "of-ayudante-cocina-chorrera"
 TOCUMEN = "of-tocumen-sintetica"
 CHAT_EMPRESA = "chat-empresa-ficticio"
-CHAT_JOVEN = "chat-joven-ficticio"
+CHAT_CARLOS = "chat-carlos-ficticio"
+CHAT_YARITZA = "chat-yaritza-ficticio"
 MOTIVO_TOCUMEN = "traslado de 95 min a Tocumen"
 
 
@@ -45,7 +46,7 @@ def entorno(monkeypatch):
     monkeypatch.setenv("LANGSMITH_TRACING", "false")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token-ficticio")
     monkeypatch.setenv("TELEGRAM_CHAT_ID_EMPRESA", CHAT_EMPRESA)
-    monkeypatch.setenv("TELEGRAM_CHAT_ID_JOVEN", CHAT_JOVEN)
+    monkeypatch.setenv("TELEGRAM_CHATS_JOVENES", f"carlos={CHAT_CARLOS},yaritza={CHAT_YARITZA}")
     monkeypatch.delenv("PUENTE_ENTREVISTA_INICIO", raising=False)
 
     def prohibido(*a, **k):
@@ -301,9 +302,13 @@ def test_mensaje_al_joven_trae_postulacion_descarte_e_ics(tmp_path):
     caso = Caso(tmp_path, con_tocumen=True)
     caso.aprobar()
 
-    por_chat = {m[1] for m in caso.joven.mensajes}
-    assert por_chat == {CHAT_JOVEN}  # nunca al chat de la empresa
+    por_chat = {m[1]: m[2] for m in caso.joven.mensajes}
+    assert set(por_chat) == {CHAT_CARLOS, CHAT_YARITZA}  # uno por joven, nunca el de la empresa
     assert len(caso.joven.mensajes) == 2  # Carlos y Yaritza
+    # Cada joven recibe solo lo suyo: ni el nombre ni los descartes del otro.
+    assert por_chat[CHAT_YARITZA].startswith("Hola, Yaritza") and "Carlos" not in por_chat[CHAT_YARITZA]
+    assert por_chat[CHAT_CARLOS].startswith("Hola, Carlos") and "Yaritza" not in por_chat[CHAT_CARLOS]
+    assert MOTIVO_TOCUMEN not in por_chat[CHAT_CARLOS]
     textos = {m[2].split(".")[0].removeprefix("Hola, "): m for m in caso.joven.mensajes}
     _, _, texto, adjuntos = textos["Yaritza Ficticia"]
     assert "Cajero(a) de minisúper" in texto and "Minisúper Ficticio El Ahorro" in texto
@@ -322,13 +327,14 @@ def test_mensaje_al_joven_trae_postulacion_descarte_e_ics(tmp_path):
 
 
 def test_sin_chat_del_joven_el_mensaje_queda_en_outbox(tmp_path, monkeypatch):
-    monkeypatch.delenv("TELEGRAM_CHAT_ID_JOVEN")
+    monkeypatch.delenv("TELEGRAM_CHATS_JOVENES")
     caso = Caso(tmp_path, con_tocumen=True)
     caso.aprobar()
 
     assert caso.joven.mensajes == []
     archivos = sorted(caso.outbox.glob("joven_*.txt"))
     assert len(archivos) == 2
+    assert [a.name.split("_")[1] for a in archivos] == ["carlos", "yaritza"]  # un archivo por joven
     yaritza = next(a for a in archivos if "Yaritza Ficticia" in a.read_text(encoding="utf-8"))
     contenido = yaritza.read_text(encoding="utf-8")
     assert MOTIVO_TOCUMEN in contenido and "entrevista_yaritza_" in contenido
@@ -637,3 +643,47 @@ def test_una_persona_sin_ninguna_hora_posible_no_frena_al_resto_de_la_oferta(tmp
         assert "sin franja compatible" in decision["razon"]
     finally:
         conn.close()
+
+
+def test_perfiles_y_ofertas_que_no_vienen_en_el_estado_salen_de_la_base(tmp_path):
+    """El Matching puede traer parejas de puente.db (#46, #48): el nodo completa lo que falte."""
+    caso = Caso(tmp_path)
+    valores, solicitud = caso.valores, caso.solicitud
+    conn = caso.conexion()
+    try:
+        for p in valores["perfiles"]:
+            db.guardar_perfil(conn, p)
+        for o in valores["ofertas"]:
+            db.guardar_oferta(conn, o)
+    finally:
+        conn.close()
+    nodo = crear_nodo_postulacion(
+        ruta_db=caso.ruta_db, outbox=caso.outbox, enviar=caso.empresa, enviar_joven=caso.joven,
+        ahora=lambda: AHORA,
+    )
+    aprobados = [{"perfil_id": c["perfil_id"], "oferta_id": solicitud["oferta_id"]} for c in solicitud["candidatos"]]
+    salida = nodo({
+        **valores, "perfiles": [], "ofertas": [],
+        "aprobacion": {"orientador": "Orientadora Ficticia", "timestamp": AHORA.isoformat(),
+                       "aprobados": aprobados, "oferta_id": solicitud["oferta_id"], "mensaje": ""},
+    })
+    assert len(caso.empresa.mensajes) == 1 and not salida["errores"]
+    assert set(salida["postulaciones"].values()) == {EstadoPostulacion("enviado")}
+
+
+def test_una_pareja_sin_perfil_en_ningun_lado_sale_sola_y_las_demas_siguen(tmp_path):
+    caso = Caso(tmp_path)
+    valores, solicitud = caso.valores, caso.solicitud
+    nodo = crear_nodo_postulacion(
+        ruta_db=caso.ruta_db, outbox=caso.outbox, enviar=caso.empresa, enviar_joven=caso.joven,
+        ahora=lambda: AHORA,
+    )
+    aprobados = [{"perfil_id": c["perfil_id"], "oferta_id": solicitud["oferta_id"]} for c in solicitud["candidatos"]]
+    sin_carlos = [p for p in valores["perfiles"] if p.id != "carlos"]
+    salida = nodo({
+        **valores, "perfiles": sin_carlos,
+        "aprobacion": {"orientador": "Orientadora Ficticia", "timestamp": AHORA.isoformat(),
+                       "aprobados": aprobados, "oferta_id": solicitud["oferta_id"], "mensaje": ""},
+    })
+    assert len(caso.empresa.mensajes) == 1 and "Carlos" not in caso.empresa.mensajes[0][2]
+    assert any("falta el perfil carlos" in e for e in salida["errores"])

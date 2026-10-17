@@ -590,6 +590,12 @@ def _ejecutar_nodo(
 
     perfiles = {p.id: p for p in (_como(Perfil, x) for x in estado.get("perfiles") or [])}
     ofertas = {o.id: o for o in (_como(Oferta, x) for x in estado.get("ofertas") or [])}
+    # El Matching también trae perfiles y ofertas de puente.db (#46, #48): lo que no venga en
+    # el estado se completa desde la base para que esas parejas no se pierdan.
+    if any(m.perfil_id not in perfiles for m in matches):
+        perfiles = {**{p.id: p for p in db.listar_perfiles(conn)}, **perfiles}
+    if any(m.oferta_id not in ofertas for m in matches):
+        ofertas = {**{o.id: o for o in db.listar_ofertas(conn, no_bloqueadas=False)}, **ofertas}
     inicios: dict[tuple[str, str], datetime] = {}
     # Entrevistas ya propuestas a cada empresa en esta llamada: cada candidato de una oferta
     # recibe una hora distinta, la siguiente libre para la empresa.
@@ -602,9 +608,14 @@ def _ejecutar_nodo(
         fila = conn.execute(
             "SELECT estado FROM postulaciones WHERE perfil_id = ? AND oferta_id = ?", par
         ).fetchone()
-        if perfil is None or oferta is None or (fila is not None and fila["estado"] in _YA_POSTULADA):
-            # postular() decide: rechaza el lote si falta el perfil o la oferta, y salta con su
-            # Decision "ya postulada" lo que ya salió. Ninguno de los dos necesita fecha.
+        if perfil is None or oferta is None:
+            # Ni en el estado ni en la base: esta pareja no sale, pero no frena a las demás.
+            falta = f"el perfil {par[0]}" if perfil is None else f"la oferta {par[1]}"
+            errores.append(f"postulacion: falta {falta} en el estado y en puente.db; no se envió")
+            anotar(f"{par[0]} -> {par[1]}", "no se envió nada", f"Falta {falta} en el estado y en puente.db")
+            continue
+        if fila is not None and fila["estado"] in _YA_POSTULADA:
+            # postular() la salta con su Decision "ya postulada": no necesita fecha.
             con_fecha.append(match)
             continue
         traslado = dict(match.desglose).get("minutos_traslado", 0)
@@ -679,7 +690,7 @@ def _ejecutar_nodo(
             for oferta, _ in enviados
             if (perfil_id, oferta.id) in resultado.calendarios
         ]
-        envio = enviar_al_joven(texto, adjuntos, outbox=outbox, enviar=enviar_joven)
+        envio = enviar_al_joven(texto, adjuntos, perfil_id=perfil_id, outbox=outbox, enviar=enviar_joven)
         anotar(f"mensaje al joven {perfil_id}", f"canal {envio.canal}, ok={envio.ok}", envio.detalle)
         if not envio.ok:
             errores.append(f"postulacion: no se pudo avisar a {perfil_id} ({envio.detalle})")

@@ -123,8 +123,8 @@ def elegir_franja(
             if perfil.horario_libre and not any(l_ini <= ventana[0] and ventana[1] <= l_fin for l_ini, l_fin in libres):
                 continue
             resultado = datetime(fecha.year, fecha.month, fecha.day, tzinfo=ZONA_PANAMA) + timedelta(minutes=inicio)
-            if resultado <= desde:
-                continue
+            if resultado <= desde or resultado - timedelta(minutes=traslado) < desde:
+                continue  # ya pasó, o el joven no alcanza a llegar
             entrevista = (resultado, resultado + timedelta(minutes=duracion_min))
             if any(_se_cruzan(entrevista, tomada) for tomada in tomadas):
                 continue

@@ -264,3 +264,10 @@ def test_con_respaldo_tampoco_se_cruza_con_las_entrevistas_ocupadas():
     inicio, aviso = elegir_franja_con_respaldo(_oferta(), perfil, 60, desde=LUNES_7, ocupadas=[ocupada])
     assert inicio == datetime(2026, 10, 20, 19, 0, tzinfo=ZONA_PANAMA)
     assert "horario libre" in aviso
+
+
+def test_el_joven_alcanza_a_llegar_desde_ahora():
+    oferta = _oferta([_h(SEMANA, "08:00", "12:00")])
+    # Son las 07:30 y el traslado es de 60 min: a las 08:00 no llega; la primera es 08:30.
+    desde = datetime(2026, 10, 19, 7, 30, tzinfo=ZONA_PANAMA)
+    assert elegir_franja(oferta, _perfil(), 60, desde=desde) == datetime(2026, 10, 19, 8, 30, tzinfo=ZONA_PANAMA)
