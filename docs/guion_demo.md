@@ -114,7 +114,7 @@ El chat corre sin red con la grabación de #209, verificada en `LLM_MODO=reprodu
 
 **Se dice:** «Si le falta Excel, Formación propone un curso del INADEH que no choca con sus clases. El Auditor repite el caso cambiando nombre y género: si el resultado cambia, se recalcula una vez y, si el sesgo sigue, el caso se detiene: no se puede aprobar.»
 
-**Cuidado:** restaura el sesgo **antes** del paso 6. Mientras esté activo no se puede aprobar: el botón queda bloqueado y la API responde 422 (#189). El banner dice «el caso volvió a Matching», pero la tarjeta sigue visible: no leas ese texto en voz alta ni lo enfoques de cerca (su arreglo va aparte).
+**Cuidado:** restaura el sesgo **antes** del paso 6. Mientras esté activo no se puede aprobar: el botón queda bloqueado y la API responde 422 (#189). El banner dice «El recálculo no quitó el sesgo: el caso queda con el orientador…» y el badge, «Auditor detectó sesgo: aprobación bloqueada» (#262).
 
 ### 6 · El orientador decide (2:05–2:30) · Humano en el ciclo · En vivo
 
@@ -122,7 +122,7 @@ El chat corre sin red con la grabación de #209, verificada en `LLM_MODO=reprodu
 
 1. En la tarjeta de Daniela, **Quitar** en una vacante → «Quitar y recalcular». El Matching se recalcula y Daniela sigue disponible para la otra.
 2. En la mejor opción de Yaritza, **Aprobar y enviar** sin marcar la casilla: aviso «Marca la casilla “El joven consintió”».
-3. Marca **El joven consintió…** y pulsa **Aprobar y enviar**. El diálogo muestra un bloque ámbar con la alerta de la Ley 11 de esa oferta, «buena presencia», y su norma (#251): el humano decide con esa información. Confirma. El diálogo de confirmación dice «Mensaje para la empresa (Telegram u outbox/)»: sin token, como se graba, ese mensaje queda como archivo `mensaje_….txt` en el outbox. No lo leas en voz alta como un envío por Telegram. La opción queda **Enviada**, con «CV · PDF», «Cita .ics» y el archivo del mensaje a la empresa.
+3. Marca **El joven consintió…** y pulsa **Aprobar y enviar**. El diálogo muestra un bloque ámbar con la alerta de la Ley 11 de esa oferta, «buena presencia», y su norma (#251): el humano decide con esa información. Confirma. El diálogo de confirmación dice «Mensaje para la empresa (Telegram u outbox/)»: sin token, como se graba, ese mensaje queda como archivo `mensaje_….txt` en el outbox. No lo leas en voz alta como un envío por Telegram. La opción queda **Enviada**, con los cuatro chips: «CV · PDF», «Carta · PDF», «Cita .ics» y «Mensaje».
 
 **Se dice:** «Nada sale sin el orientador. Puede quitar a alguien y el sistema recalcula. Y sin el consentimiento de Yaritza, Postulación no envía nada. Con su sí, se genera un CV sin edad, género ni dirección, el mensaje para la empresa y la cita.»
 
@@ -150,7 +150,6 @@ El chat corre sin red con la grabación de #209, verificada en `LLM_MODO=reprodu
 - **Archivos del tablero:** el tablero escribe el CV, la carta, el mensaje y el `.ics` en `PUENTE_OUTBOX` (`$DEMO/outbox-tablero`) (#207).
 - **Navegador:** si un diálogo de confirmación no responde, recarga (F5) y sigue: el estado queda guardado en SQLite.
 - **Casillas de consentimiento:** no dejes marcadas casillas «El joven consintió» sin enviar en otras tarjetas: frenan la actualización automática del tablero.
-- **Chips de la tarjeta (#227):** tras «Reiniciar demo», hasta que entre el PR #261, la tarjeta de Yaritza queda sin los chips «CV · PDF» y «Cita .ics» aunque los archivos sí salen al outbox. Comprueba que el #261 esté en `main` antes de grabar el paso 6.
 - **Evals:** si los mencionas, no digas «62 de 62»: hoy son 61 ok y 1 fallo (E2E-01, #238). El README ya lo cuenta así.
 
 ## Plan B general
