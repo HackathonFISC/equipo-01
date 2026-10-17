@@ -1,6 +1,6 @@
 # Metodología de Puente
 
-Reto 3 del Hackathon FISC 2026: empleabilidad juvenil. Puente ayuda a un orientador a conectar jóvenes de 18 a 29 años con vacantes que de verdad pueden tomar. Puede tomar una vacante quien llega en menos de una hora, paga el pasaje y cumple el horario sin perder sus clases. Este documento cubre:
+Reto 3 del Hackathon FISC 2026: empleabilidad juvenil. Puente ayuda a un orientador a conectar jóvenes de 18 a 29 años con vacantes que de verdad pueden tomar. Puede tomar una vacante quien llega en 60 minutos o menos, paga el pasaje y cumple el horario sin perder sus clases. Este documento cubre:
 
 1. [Arquitectura](#1-arquitectura): qué piezas hay y cómo se hablan.
 2. [Funcionamiento](#2-funcionamiento): el recorrido de un caso, nodo por nodo.
@@ -16,11 +16,12 @@ Todo lo que se describe está en `main`. Las cifras salen de archivos del reposi
 
 ### Principio: el LLM en los bordes y el código en el centro
 
-**El LLM** se usa para cuatro cosas:
+**El LLM** se usa para:
 - leer texto desordenado: ofertas copiadas de portales y respuestas de una entrevista;
+- leer la foto o el PDF de la tirilla de matrícula;
 - extraer campos;
-- redactar;
-- explicar.
+- redactar la versión legal de una oferta bloqueada;
+- explicar las rutas de Formación, solo si se activa `usar_llm_formacion`, que está apagado por defecto.
 
 **Todo lo que tiene que poder verificarse lo decide el código**, con la misma salida para la misma entrada:
 - si una oferta es legal;
@@ -32,38 +33,94 @@ Por eso `puente/solver/` y `puente/rules/` no importan ningún modelo de lenguaj
 
 ### Grafo de agentes
 
-El flujo es un grafo de **LangGraph** (`puente/graph.py`, #10) con 14 nodos. Por defecto `construir_grafo()` usa los agentes reales (`nodos_fase_2()`). Los stubs de la fase 1 (`NODOS_FASE_1`) solo se usan para probar la mecánica del grafo.
+El flujo es un grafo de **LangGraph** (`puente/graph.py`, #10) con 14 nodos. Por defecto `construir_grafo()` usa los agentes reales (`nodos_fase_2()`). Los stubs de la fase 1 (`NODOS_FASE_1`) sirven para probar la mecánica del grafo, y el tablero los usa para Mercado y Perfil (ver [Límites](#5-límites)).
+
+El diagrama sale del grafo real, sin red:
+
+```bash
+uv run python -c "from puente.graph import construir_grafo; print(construir_grafo().get_graph().draw_mermaid())"
+```
+
+A mano solo se marcó en rojo el nodo `aprobacion`, que es el `interrupt()` del orientador; el resto sale tal cual, igual que en el [README](../README.md). Las flechas punteadas son aristas condicionales.
 
 ```mermaid
-flowchart TD
-    S([Entrada]) --> G[Guardrails]
-    G -- rechazo --> F1([Fin con mensaje])
-    G --> R{Router}
-    R -- consulta --> C[Consulta] --> F2([Fin])
-    R -- oferta --> M[Mercado]
-    R -- perfil --> P[Perfil]
-    R -- evento de la empresa --> E[Evento empresa] --> AV[Avisos] --> MA
-    M -- todas bloqueadas --> AO[Alerta de oferta] --> F3([Fin])
-    M --> MA[Matching CP-SAT]
-    P --> MA
-    MA -- sin lista corta --> SM[Sin matches] --> F4([Fin])
-    MA --> AU[Auditor]
-    AU -- "cambia el resultado (máx. 1 recálculo)" --> P
-    AU -- "cambia el resultado (máx. 1 recálculo)" --> MA
-    AU --> FO[Formación]
-    FO --> AP[["Aprobación del orientador<br/>interrupt()"]]
-    AP -- quitar --> MA
-    AP -- "aprobar / editar" --> PO[Postulación]
-    AP -- rechazar --> F5([Siguiente vacante o fin])
-    PO -- quedan vacantes --> AP
-    PO --> F6([Fin])
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	guardrails(guardrails)
+	router(router)
+	consulta(consulta)
+	mercado(mercado)
+	alerta_oferta(alerta_oferta)
+	perfil(perfil)
+	matching(matching)
+	sin_matches(sin_matches)
+	auditor(auditor)
+	formacion(formacion)
+	aprobacion{{"aprobacion · interrupt() del orientador"}}:::humano
+	postulacion(postulacion)
+	evento_empresa(evento_empresa)
+	avisos(avisos)
+	__end__([<p>__end__</p>]):::last
+	__start__ -.-> __end__;
+	__start__ -.-> guardrails;
+	__start__ -.-> router;
+	aprobacion -.-> __end__;
+	aprobacion -.-> matching;
+	aprobacion -.-> postulacion;
+	auditor -. &nbsp;continuar&nbsp; .-> formacion;
+	auditor -.-> matching;
+	auditor -.-> perfil;
+	avisos --> matching;
+	evento_empresa -.-> aprobacion;
+	evento_empresa -.-> avisos;
+	formacion --> aprobacion;
+	guardrails -.-> __end__;
+	guardrails -.-> router;
+	matching -.-> auditor;
+	matching -.-> sin_matches;
+	mercado -.-> alerta_oferta;
+	mercado -.-> matching;
+	perfil --> matching;
+	postulacion -.-> __end__;
+	postulacion -.-> aprobacion;
+	router -.-> consulta;
+	router -.-> evento_empresa;
+	router -.-> mercado;
+	router -.-> perfil;
+	alerta_oferta --> __end__;
+	consulta --> __end__;
+	sin_matches --> __end__;
+	aprobacion -.-> aprobacion;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+	classDef humano fill:#fde2e2,stroke:#c0282d,stroke-width:3px
 ```
+
+Cómo se lee cada arista condicional:
+
+- **`__start__`.** Una entrada nueva va a `guardrails`. Un evento de la empresa entra directo al `router`, sin Guardrails: es una acción estructurada, como la respuesta al `interrupt()`, y su nota ya llega limpia de datos personales. Una invocación sin nada que revisar termina sin efectos.
+- **`auditor`.**
+  - Vuelve a `perfil` solo si la diferencia viene de cómo se leyó el perfil (`accion_auditor="perfil"`).
+  - Si la diferencia está en la asignación, vuelve a `matching`.
+  - Las dos vueltas comparten el tope de un recálculo. Si no hay diferencia, o se llegó al tope, sigue a `formacion` («continuar»).
+- **`aprobacion`.**
+  - «Quitar» vuelve a `matching`.
+  - «Aprobar» y «editar» pasan a `postulacion`.
+  - «Rechazar» pasa a la siguiente vacante pendiente, que es el lazo de `aprobacion` sobre sí misma, o termina si no queda ninguna. Una respuesta inválida también repite la pausa.
+- **`postulacion`.** Vuelve a `aprobacion` mientras queden vacantes por decidir.
+- **`evento_empresa`.** Pasa a `avisos` y de ahí a `matching`. Si el evento no cambia nada, vuelve a `aprobacion`.
 
 ### Módulos
 
 | Módulo | Issues | Qué hace |
 |---|---|---|
-| `puente/schemas.py` | #2, #42 | Contratos Pydantic: `Oferta`, `Perfil`, `Match`, `Decision`, `EstadoPuente` y `EstadoPostulacion`, más `OfertaExtraida` y `PerfilExtraido`, que son lo único que produce el LLM. |
+| `puente/schemas.py` | #2, #42 | Contratos Pydantic: `Oferta`, `Perfil`, `Match`, `Decision`, `EstadoPuente` y `EstadoPostulacion`, más `OfertaExtraida` y `PerfilExtraido`, que es lo que produce el LLM en el flujo principal. Las extensiones tienen su propia salida del LLM, que el código también valida: `TirillaExtraida` (Horario), `TextoRedactado` (Redactor) y `RespuestaExtraida` (Micromisión). |
 | `puente/graph.py` | #10, #12, #54 | Grafo, router, `interrupt()` del orientador, checkpointer SQLite, reacomodo por evento de la empresa y demo por terminal. |
 | `puente/guardrails.py` | #9, #56, #128 | Validación de entradas y limpieza de datos personales, sin LLM. |
 | `puente/llm.py` | #45, #125, #137 | Capa única de acceso al LLM: Claude por defecto, modos vivo, grabar y reproducir, tope de gasto y esquema simplificado para la salida estructurada. |
@@ -75,9 +132,9 @@ flowchart TD
 | `puente/agents/postulacion.py`, `puente/tools/` | #7, #12, #84 | SQLite, CV ciego en PDF, Telegram con respaldo en `outbox/`, `.ics` y agenda de la entrevista. |
 | `puente/cargar.py` | #46 | Carga inicial de `data/` en `puente.db`. |
 | `puente/metricas.py` | #47 | Indicadores ilustrativos con datos de la demo, rotulados como tales. |
-| `app/server.py`, `app/static/` | #11, #33, #49, #52, #166 | Tablero del orientador (Starlette y Uvicorn, con HTML, CSS y JS sin framework) y vista del joven (`/joven`). |
+| `app/server.py`, `app/empresa.py`, `app/joven_fase2.py`, `app/static/` | #11, #33, #49, #52, #166, #167 | Starlette y Uvicorn, con HTML, CSS y JS sin framework. Sirve tres vistas: el tablero del orientador (`/`); la vista del joven (`/joven`), con formulario, entrevista de una vez o por chat, tirilla de matrícula y «Mis postulaciones»; y la lista corta ciega de la empresa (`/empresa/lista-corta`), con aceptar, rechazar o vacante cubierta. |
 | `evals/run.py`, `evals/casos.yaml` | #13, #129 | Evals propios, con el resultado esperado escrito antes de correr. |
-| `puente/agents/horario.py`, `redactor.py`, `micromision.py` | #164, #157, #158 | Fase 1 de tres extensiones. No están conectadas al grafo ni al tablero; se usan desde su propia CLI y desde los evals (ver [Límites](#5-límites)). |
+| `puente/agents/horario.py`, `redactor.py`, `micromision.py` | #164, #157, #158 | Fase 1 de tres extensiones. Horario ya lee la tirilla desde `/joven`. Redactor y Micromisión se usan desde su propia CLI y desde los evals, sin conexión al grafo ni al tablero (ver [Límites](#5-límites)). |
 
 ### Contratos y estado
 
@@ -189,7 +246,7 @@ flowchart TD
     - **Si rechaza a un candidato:** su postulación pasa a `no_seleccionado`, la pareja queda excluida, la vacante vuelve a estar pendiente y el Matching recalcula. El orientador aprueba la lista nueva en la misma pausa de siempre.
     - **Si la vacante se cubre:** sale del Matching.
 
-    Los avisos al joven salen por Telegram o se escriben en `outbox/`. Funciona en el grafo y en la terminal; el tablero todavía no lo usa.
+    Los avisos al joven salen por Telegram o se escriben en `outbox/`, y el joven los ve en «Mis postulaciones» de `/joven`. El reacomodo funciona en el grafo, en la terminal (con `--auto` o escribiendo la respuesta de la empresa) y en la web: en `/empresa/lista-corta`, rechazar o dar la vacante por cubierta llama a `evento_empresa` y recalcula (#167). El tablero del orientador no tiene un botón propio para esto.
 
 **Estados de una postulación:** `perfil_listo`, `preseleccionado`, `aprobado`, `consentido`, `enviado`, `entrevista`, `contratado` y `no_seleccionado`.
 
@@ -329,10 +386,10 @@ El registro completo está en [`decisiones.md`](decisiones.md). El horario y las
 - **El determinismo vale a la escala de la demo.** El solver usa 1 hilo, semilla fija (42) y orden por id, así que con la misma entrada da el mismo resultado. Pero la búsqueda se corta a los 1.8 segundos (`max_time_in_seconds`). Con los datos de la demo llega al resultado antes de ese corte. Con muchos más jóvenes y vacantes, el corte podría dejar una asignación distinta según la máquina.
 - **El tablero usa stubs de Mercado y Perfil.** Construye el grafo con `stub_mercado` y `stub_perfil` (`app/server.py`, en la función que arma el grafo del tablero). Sus ofertas y perfiles vienen sembrados en el código o del formulario: pasan por las reglas de la Ley 11 y por los guardrails, pero sin extracción por LLM. El Matching, el Auditor, Formación y Postulación del tablero sí son reales. La vista `/joven` usa el agente Perfil real.
 - **La demo por terminal no pasa por Mercado.** El caso Yaritza entra como perfil, con las ofertas ya cargadas, y por defecto usa respuestas grabadas (`--llm grabado`). La extracción real de ofertas se ve con `puente.cargar`.
-- **El reacomodo** (#54) funciona en el grafo y en la terminal, pero el tablero todavía no envía eventos de la empresa.
-- **El CV ciego todavía lleva el nombre** del joven, que es ficticio en la demo. El mensaje a la empresa también lo nombra.
 - **El Auditor dentro del grafo** recalcula el Matching con las variantes, pero no vuelve a correr el LLM de Perfil. Por eso mide que el solver no dependa del nombre, el género o el corregimiento. Hoy nada mide si el nombre cambia lo que extrae el LLM de Perfil: los evals de sesgo tampoco usan LLM.
-- **Tres extensiones en fase 1 sin conectar.** El horario desde la tirilla de matrícula (#164), el redactor de una versión legal de la oferta (#157) y la micro-misión con *scorecard* ciego (#158) existen como módulos con su CLI y sus evals, pero no están en el grafo ni en el tablero.
-- **Notas de voz:** se rechazan con un mensaje claro hasta que exista #55.
-- **Extracción de ofertas por debajo de la meta en los evals.** La última corrida guardada (`evals/resultados.md`, generado el 16 de octubre a las 23:24) da 29 casos bien y 4 fallos de 33. Los 4 fallos son de extracción de ofertas: 1 acierto de 5 (20 %) contra una meta de 80 %. Ese archivo es anterior a los casos de horario, redactor y micro-misión: `evals/casos.yaml` ya tiene 42 casos en 10 categorías, y `resultados.md` se vuelve a generar en el ensayo (#17). Las metas por categoría son propuestas del equipo.
+- **Dos extensiones sin conectar.** El redactor de una versión legal de la oferta (#157) y la micro-misión con *scorecard* ciego (#158) existen como módulos con su CLI y sus evals, pero no están en el grafo ni en el tablero. Horario (#164) sí está conectado: `/joven` lee la tirilla, la confirma y recalcula.
+- **La foto de la tirilla va completa a Claude**, con lo que traiga: nombre, cédula o número de carnet. `limpiar_entrada` solo limpia lo que vuelve del modelo, y la imagen no se guarda.
+- **`cegar()` es heurístico:** son expresiones regulares, y un dato escrito de una forma que no prevén puede pasar.
+- **Los evals y la CI corren con grabaciones**, no con el LLM en vivo. En modo reproducir cada caso con LLM usa una sola grabación, así que no se mide la variación entre corridas. La última corrida está en [`evals/resultados.md`](../evals/resultados.md); las metas por categoría son propuestas del equipo.
+- **Notas de voz: fuera de alcance.** Se rechazan con un mensaje claro; #55 se cerró sin implementar.
 - **Cobertura geográfica:** la matriz de traslados tiene 13 corregimientos del corredor Panamá Oeste, Centro, San Miguelito y Este. Diez de las 20 ofertas no indican un lugar de esa matriz, así que el Matching no las puede asignar (`data/FUENTES.md`).
