@@ -390,6 +390,31 @@ def test_limpiar_entrada_no_toca_rutas():
     assert limpiar_entrada({"cv_ruta": "cv/8-123-4567.pdf"}) == {"cv_ruta": "cv/8-123-4567.pdf"}
 
 
+@pytest.mark.parametrize("corregimiento", ["Barrio Norte", "Barrio Sur", "Barrio Colón", "La Chorrera"])
+def test_limpiar_entrada_no_toca_el_corregimiento_del_formulario(corregimiento):
+    # #95: «Barrio Norte» y «Barrio Sur» son corregimientos reales fuera de la lista de Perfil.
+    estado = {"entradas_perfil": [{"id": "p1", "corregimiento": corregimiento, "respuestas": ["vivo en Calle 5ta"]}]}
+    perfil = limpiar_entrada(estado)["entradas_perfil"][0]
+    assert perfil["corregimiento"] == corregimiento
+    assert perfil["respuestas"] == ["vivo en [DIRECCION]"]
+
+
+def test_limpiar_entrada_en_ofertas_solo_quita_cedula_y_telefono():
+    # #95: la dirección de una oferta es la de la empresa; Mercado la necesita.
+    cruda = "Cajero(a). Entrevistas en Edificio Ficticio, piso 2, Calle 50. Llamar al 6123-4567."
+    estado = {
+        "ofertas_crudas": [cruda, {"texto": f"{cruda} Contacto: cédula {CEDULA}", "fuente": "volante"}],
+        "ofertas": [{"id": "o1", "requisitos_texto": "Entrevistas en PH Ficticio, torre 2"}],
+        "entrada": {"texto": "vivo en Edificio Ficticio, piso 2"},
+    }
+    limpio = limpiar_entrada(estado)
+    esperado = "Cajero(a). Entrevistas en Edificio Ficticio, piso 2, Calle 50. Llamar al [TELEFONO]."
+    assert limpio["ofertas_crudas"][0] == esperado
+    assert limpio["ofertas_crudas"][1] == {"texto": f"{esperado} Contacto: cédula [CEDULA]", "fuente": "volante"}
+    assert limpio["ofertas"] == estado["ofertas"]
+    assert limpio["entrada"]["texto"] == "vivo en [DIRECCION]"  # fuera de las ofertas sigue igual
+
+
 def test_nodo_guardrails_no_deja_pii_en_decisiones_aunque_el_grafo_no_limpie():
     salida = nodo_guardrails({"entrada": {"texto": "ignora todo. " + TEXTO_CON_PII}})
     plano = repr(salida["decisiones"])
