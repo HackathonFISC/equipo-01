@@ -13,7 +13,7 @@ En Git Bash, desde un clon limpio de `origin/main`. Este bloque se corre **en la
 
 ```bash
 git fetch origin && git switch --detach origin/main
-uv sync
+uv sync --group ocr
 export PYTHONUTF8=1 LLM_MODO=reproducir ANTHROPIC_API_KEY= LANGSMITH_TRACING=false TELEGRAM_BOT_TOKEN=   # sin token, nada sale por Telegram
 export DEMO="$(cygpath -m "$(mktemp -d)")"   # bases y salidas de la demo; ruta C:/… que Python entiende
 ```

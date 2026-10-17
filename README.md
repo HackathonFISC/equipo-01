@@ -155,7 +155,7 @@ La demo en vivo de WhatsApp corre desde la rama de #253 en la laptop. Durante la
   - Los guardrails de tamaño (5 MB) y de tipo se aplican antes de leer el archivo, y el audio se rechaza.
   - La cédula y el teléfono se quitan antes del LLM.
   - En `/joven`, el primer paso permite elegir **PDF, foto JPG/PNG o completar los datos**. `POST /api/joven/cv` valida el archivo y los horarios, extrae el texto y llama a Perfil; después recalcula las vacantes y devuelve un código privado al joven. Con CV no se exige la entrevista.
-  - Las fotos se leen con **RapidOCR local** (incluido al ejecutar `uv sync`); la imagen original no sale al modelo. Solo el texto limpio llega a Perfil. El archivo temporal se elimina y no se conserva su texto crudo.
+  - Las fotos se leen con **RapidOCR local** (se instala con `uv sync --group ocr`; Vercel no lo lleva porque pasa de 500 MB, #317); la imagen original no sale al modelo. Solo el texto limpio llega a Perfil. El archivo temporal se elimina y no se conserva su texto crudo.
   - Sin red solo funcionan los archivos de prueba, con grabaciones escritas a mano (#236): `tests/fixtures/volante_sintetico.jpg` y `tests/fixtures/cv_sintetico.pdf`.
 - **Demo pública de solo lectura (#161).** `vercel.json` publica el tablero con `PUENTE_DEMO_PUBLICA=1` y `LLM_MODO=reproducir`. Toda acción que no sea GET responde 403 y el estado es efímero. **No es la demo en vivo** (#169), que corre en local. Para verlo en local: `PUENTE_DEMO_PUBLICA=1 uv run python -m app.server`.
 
@@ -302,7 +302,7 @@ Requisitos: [uv](https://docs.astral.sh/uv/). `uv` descarga Python 3.12 si no es
 ```bash
 git clone https://github.com/HackathonFISC/equipo-01.git
 cd equipo-01
-uv sync
+uv sync --group ocr   # el grupo ocr lee CVs en foto; sin él todo lo demás funciona
 cp .env.example .env
 uv run pytest -q
 ```
