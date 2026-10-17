@@ -124,6 +124,19 @@ Los siete agentes mínimos que sugiere el documento del reto y dónde están en 
 
 **Fuera de alcance, y por qué.** La entrevista simulada daría como resultado la opinión de un LLM sobre una conversación, y no hay forma de verificarla en código en 24 horas. Priorizamos lo que sí se puede verificar: que nada salga sin aprobación y consentimiento.
 
+**Stretch que no entró antes del tag (fuera de alcance de esta entrega).** Quedaron diseñados o en PR, pero no están en `main` el 17 de octubre a las 11:30:
+
+| Stretch | Dónde quedó | Por qué no entró |
+| --- | --- | --- |
+| Chatbot del joven por WhatsApp y Telegram (#160, #221) | PR #253 (borrador) | Unas 2000 líneas sin revisar a tiempo; necesita Twilio y una URL pública. La burbuja de la web (#304) solo aparece si el servidor tiene número configurado |
+| Perfiles de más de 29 años (#299) | PR #300 (borrador) | Cambia el contrato (`puente/schemas.py`) y faltaban el servidor y el CV ciego |
+| «Qué te falta y cómo llegar» con botón «Me interesa» (#219) | Issue | Formación ya calcula la ruta de cursos; falta el botón en `/joven` |
+| «Cómo conseguir más candidatos» por palanca para la empresa (#220) | Issue | El redactor ya cuenta viables con el solver; falta variar salario y pasaje |
+| Panel de tendencias en el tablero (#218) | Issue | Las tendencias se calculan en código (`puente.metricas --tendencias`); falta el panel |
+| Reserva tripartita con formación (#159) | Issue | Diseño en la metodología |
+| CV en PDF y cuestionario opcional en `/joven` (#274); empresa de prueba y registro (#276) | Issues | Sin tiempo antes del tag |
+| Persistencia en Supabase (#172) | Issue | La demo usa SQLite; diseño en la metodología |
+
 **Tendencias del mercado (#198).** `puente/metricas.py` calcula en código las habilidades más pedidas, el salario por zona y los bloqueos de la Ley 11 sobre las ofertas de la base: `uv run python -m puente.cargar` y después `uv run python -m puente.metricas --tendencias`. Con las 20 ofertas de `data/`, atención al cliente es la más pedida (6).
 
 **Más allá de los siete agentes (stretch).** Verificado en `main` el 17 de octubre, sin red:
