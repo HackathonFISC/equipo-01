@@ -2650,7 +2650,7 @@ def obtener_panel_operacion(estado: dict[str, Any]) -> dict[str, Any]:
         "roles_sistema": [
             {"rol": "admin", "nombre": "Admin (Orientador)", "ruta": "/", "agente": "orientador"},
             {"rol": "aplicante", "nombre": "Aplicante (Joven)", "ruta": "/joven", "agente": "joven"},
-            {"rol": "empresa", "nombre": "Empresa", "ruta": "/empresa", "agente": "empresa"},
+            {"rol": "empresa", "nombre": "Empresa", "ruta": "/empresa/lista-corta", "agente": "empresa"},
         ],
     }
 
