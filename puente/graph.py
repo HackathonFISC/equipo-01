@@ -41,6 +41,9 @@ de #84 (outbox/ o Telegram) y los saca de ahí; los del orientador quedan para e
 
     uv run python -m puente.graph --auto "aprobar,aprobar,empresa_rechaza:yaritza@of-cajero-vista-alegre,aprobar"
 
+Sin `--auto`, la respuesta de la empresa se escribe con la misma sintaxis en la pregunta de acción
+(`empresa_rechaza:yaritza@of-cajero-vista-alegre`) o, al terminar el flujo, en la pregunta final.
+
 LangSmith se activa solo con LANGSMITH_TRACING=true y LANGSMITH_API_KEY en `.env`; cada nodo
 aparece como un run con su nombre (guardrails, router, mercado, perfil, matching, auditor,
 formacion, aprobacion, postulacion, evento_empresa, avisos) bajo el run `puente:<thread_id>`.
@@ -1272,16 +1275,37 @@ def cargar_caso(ruta: str | Path = CASO_YARITZA) -> tuple[str, dict[str, Any]]:
 # ---------------------------------------------------------------- demo por consola
 
 
+def _preguntar_orientador(leer: Callable[[str], str]) -> str:
+    """Nombre de quien decide; la terminal no acepta una decisión sin él.
+
+    El grafo solo lo exige para aprobar y editar, pero la Decision de quitar, rechazar o de la
+    respuesta de la empresa también dice quién la tomó.
+    """
+    nombre = ""
+    while not nombre:
+        nombre = leer("Orientador(a): ").strip()
+    return nombre
+
+
 def _preguntar_respuesta(solicitud: dict[str, Any], leer: Callable[[str], str]) -> dict[str, Any]:
-    accion = ""
-    while accion not in ACCIONES:
-        accion = leer(f"Acción ({' / '.join(ACCIONES)}): ").strip().lower()
+    """La decisión del orientador o, con la sintaxis de `--auto`, la respuesta de la empresa (#54).
+
+    Para la empresa devuelve `{"evento": ...}`: main() lo registra con `evento_empresa()` en vez de reanudar.
+    """
+    while True:
+        texto = leer(f"Acción ({' / '.join(ACCIONES)}; o la respuesta de la empresa: {SINTAXIS_EVENTO}): ").strip()
+        if (evento := _evento_tecleado(texto)) is not None:
+            return {"evento": _completar_evento(evento, leer)}
+        accion = texto.lower()
+        if accion in ACCIONES:
+            break
     respuesta: dict[str, Any] = {"accion": accion, "oferta_id": solicitud["oferta_id"]}
     if accion == "quitar":
         respuesta["perfil_id"] = leer("perfil_id a quitar: ").strip()
-        return respuesta
-    respuesta["orientador"] = leer("Orientador(a): ").strip()
+    respuesta["orientador"] = _preguntar_orientador(leer)
     respuesta["nota"] = leer("Nota (opcional): ").strip()
+    if accion == "quitar":
+        return respuesta
     if accion == "editar":
         respuesta["mensaje"] = leer("Mensaje editado: ").strip()
     if accion in ("aprobar", "editar"):
@@ -1323,7 +1347,55 @@ def _evento_automatico(paso: str) -> dict[str, Any] | None:
     return {"tipo": tipo, "oferta_id": oferta_id, "perfil_id": perfil_id or None}
 
 
+SINTAXIS_EVENTO = "empresa_rechaza:perfil@oferta · empresa_cubierta:[perfil@]oferta"
+
+
+def _evento_tecleado(texto: str) -> dict[str, Any] | None:
+    """La respuesta de la empresa escrita en la terminal, con la sintaxis de `--auto`; None si no es un evento completo.
+
+    También vale un espacio en vez de los dos puntos (`empresa_rechaza yaritza@of-cajero-vista-alegre`).
+    Un evento que no aplica al caso (pareja sin postular, vacante desconocida) sí pasa: lo rechaza el grafo
+    y queda en `errores`, igual que desde el tablero.
+    """
+    paso = texto.strip()
+    if ":" not in paso:
+        paso = ":".join(paso.split(None, 1))
+    evento = _evento_automatico(paso)
+    if evento is None:
+        return None
+    evento = {**evento, "oferta_id": evento["oferta_id"].strip(), "perfil_id": (evento["perfil_id"] or "").strip() or None}
+    if evento["tipo"] not in EVENTOS_EMPRESA or not evento["oferta_id"]:
+        return None
+    if evento["tipo"] == "rechaza" and not evento["perfil_id"]:
+        return None
+    return evento
+
+
+def _completar_evento(evento: dict[str, Any], leer: Callable[[str], str]) -> dict[str, Any]:
+    """Quién registra la respuesta de la empresa y su nota, como en cualquier decisión del orientador."""
+    return {**evento, "orientador": _preguntar_orientador(leer), "nota": leer("Nota (opcional): ").strip()}
+
+
+def _preguntar_evento_final(estado: dict, leer: Callable[[str], str]) -> dict[str, Any] | None:
+    """Al terminar el flujo interactivo la empresa todavía puede responder sobre quien ya se postuló (#54).
+
+    Solo pregunta si hay alguna postulación ante la empresa. Enter, o el fin de la entrada, termina.
+    """
+    if not any(e in ESTADOS_ANTE_EMPRESA for e in (estado.get("postulaciones") or {}).values()):
+        return None
+    while True:
+        try:
+            texto = leer(f"¿La empresa respondió? ({SINTAXIS_EVENTO}; Enter para terminar): ").strip()
+        except EOFError:
+            return None
+        if not texto:
+            return None
+        if (evento := _evento_tecleado(texto)) is not None:
+            return _completar_evento(evento, leer)
+
+
 def _aplicar_evento(grafo: Any, config: dict, evento: dict[str, Any], escribir: Callable[[str], None]) -> dict:
+    """Registra el evento y muestra qué pasó. Sin `orientador` ni `nota` (pasos de `--auto`) usa los de la demo."""
     valores = grafo.get_state(config).values
     antes = list(valores.get("avisos_pendientes") or [])
     decisiones_antes = len(valores.get("decisiones") or [])
@@ -1335,8 +1407,8 @@ def _aplicar_evento(grafo: Any, config: dict, evento: dict[str, Any], escribir: 
         evento["oferta_id"],
         evento["perfil_id"],
         tipo=evento["tipo"],
-        nota="demo automática",
-        orientador="Orientadora Ficticia",
+        nota=evento.get("nota", "demo automática"),
+        orientador=evento.get("orientador", "Orientadora Ficticia"),
     )
     escribir(f"   {final.get('respuesta')}")
     for decision in (final.get("decisiones") or [])[decisiones_antes:]:
@@ -1348,21 +1420,118 @@ def _aplicar_evento(grafo: Any, config: dict, evento: dict[str, Any], escribir: 
     return final
 
 
-def _mostrar(solicitud: dict[str, Any], escribir: Callable[[str], None]) -> None:
+def _recortar(texto: str, largo: int = 110) -> str:
+    texto = " ".join(str(texto).split())
+    return texto if len(texto) <= largo else texto[: largo - 1].rstrip() + "…"
+
+
+def _traslado(match: Any) -> str:
+    """« · 20 min · pasaje $1.50/día ($33.00/mes)» con el desglose del solver; vacío si no hay match."""
+    desglose = _campo(match, "desglose") or {}
+    partes = []
+    if desglose.get("minutos_traslado") is not None:
+        partes.append(f"{desglose['minutos_traslado']:g} min")
+    if desglose.get("pasaje_diario") is not None:
+        mensual = desglose.get("pasaje_mensual")
+        partes.append(f"pasaje ${desglose['pasaje_diario']:.2f}/día" + (f" (${mensual:.2f}/mes)" if mensual is not None else ""))
+    return "".join(f" · {p}" for p in partes)
+
+
+def _linea_evidencia(perfil: Any, oferta: Any) -> str | None:
+    """La evidencia literal de la primera habilidad que pide la vacante (o de la primera del perfil), con las
+    demás habilidades pedidas que citan la misma frase."""
+    frases = {
+        _campo(h, "skill_id"): _campo(h, "evidencia")
+        for h in _campo(perfil, "habilidades") or []
+        if _campo(h, "evidencia")
+    }
+    orden = [s for s in _campo(oferta, "habilidades") or [] if s in frases] or list(frases)
+    if not orden:
+        return None
+    frase = frases[orden[0]]
+    return f"Evidencia ({', '.join(s for s in orden if frases[s] == frase)}): «{_recortar(frase)}»"
+
+
+def _descartes(estado: dict, oferta_id: str, en_lista: set[str]) -> list[str]:
+    """Quién no entra a la lista corta de la vacante y por qué: el motivo del solver o la exclusión.
+
+    El solver deja el motivo en `ofertas_descartadas` de cada match del perfil (o en `motivo_descarte` del
+    match no viable); quitar un candidato o el rechazo de la empresa (#54) lo deja en `excluidos`.
+    """
+    motivos: dict[str, str] = {}
+    for m in estado.get("matches") or []:
+        desglose = _campo(m, "desglose") or {}
+        motivo = (desglose.get("ofertas_descartadas") or {}).get(oferta_id)
+        if not motivo and _campo(m, "oferta_id") == oferta_id:
+            motivo = desglose.get("motivo_descarte")
+        if motivo:
+            motivos.setdefault(_campo(m, "perfil_id"), motivo)
+    for e in estado.get("excluidos") or []:
+        if e.get("oferta_id") == oferta_id:
+            motivos[e.get("perfil_id")] = e.get("motivo") or "quitado por el orientador"
+    return [f"{_nombre(estado, pid)} ({pid}): {motivo}" for pid, motivo in motivos.items() if pid not in en_lista]
+
+
+def _resumen_auditor(estado: dict, solicitud: dict[str, Any]) -> str | None:
+    """El resumen del Auditor (#50): `auditoria` del estado o, si no está, la línea «Resumen» del reporte."""
+    auditoria = estado.get("auditoria") or {}
+    if auditoria.get("resumen_corto"):
+        partes = [auditoria["resumen_corto"]]
+        if auditoria.get("porcentaje_identico_global") is not None:
+            partes.append(f"consistencia {auditoria['porcentaje_identico_global']:.1f}%")
+        if auditoria.get("corridas_linea_base"):
+            partes.append(f"línea base de {auditoria['corridas_linea_base']} corridas")
+        if auditoria.get("accion_grafo") == "orientador":
+            partes.append("tope de recálculo alcanzado: decide el orientador")
+        return " · ".join(partes)
+    reporte = solicitud.get("reporte_auditor")
+    for linea in reporte.splitlines() if isinstance(reporte, str) else []:
+        if "Resumen:" in linea:
+            return linea.split("Resumen:", 1)[1].strip(" *")
+    return None
+
+
+def _mostrar(solicitud: dict[str, Any], escribir: Callable[[str], None], estado: dict | None = None) -> None:
+    """La aprobación pendiente con el porqué de cada candidato, compacto.
+
+    Por candidato: traslado y pasaje del solver, una línea de evidencia literal y la explicación del
+    Matching. Por vacante: los descartes con su motivo y el resumen del Auditor. Todo sale del estado
+    del grafo (`estado`, el del checkpoint); sin él solo se muestra lo que trae la solicitud.
+    """
+    estado = estado or {}
     oferta = solicitud["oferta"]
-    escribir(f"\n⏸  Aprobación pendiente · {solicitud['oferta_id']} · {oferta['puesto']} en {oferta['empresa']}")
+    oferta_id = solicitud["oferta_id"]
+    escribir(f"\n⏸  Aprobación pendiente · {oferta_id} · {oferta['puesto']} en {oferta['empresa']}")
     if oferta.get("requiere_confirmacion"):
         escribir(f"   Por confirmar con la empresa: {', '.join(oferta['requiere_confirmacion'])}")
+    matches = {_campo(m, "perfil_id"): m for m in _lista_corta_de(estado, oferta_id)}
+    perfiles = {_campo(p, "id"): p for p in estado.get("perfiles") or []}
     for c in solicitud["candidatos"]:
         brechas = f" · brechas: {', '.join(c['brechas'])}" if c["brechas"] else ""
         ya = f" · postulación: {c['estado_postulacion']}" if c.get("estado_postulacion") else ""
-        escribir(f"   - {c['nombre']} ({c['perfil_id']}) puntaje {c['puntaje']}{brechas}{ya}")
+        traslado = _traslado(matches.get(c["perfil_id"]))
+        escribir(f"   - {c['nombre']} ({c['perfil_id']}) puntaje {c['puntaje']}{traslado}{brechas}{ya}")
+        evidencia = _linea_evidencia(perfiles.get(c["perfil_id"]), _oferta(estado, oferta_id))
+        if evidencia:
+            escribir(f"     {evidencia}")
+        # La cola « | Descartes: …» del solver habla de las otras vacantes del joven; los de esta van abajo
+        explicacion = (c.get("explicacion") or "").split(" | Descartes:")[0].strip()
+        if explicacion:
+            escribir(f"     Matching: {explicacion}")
         for ruta in c.get("rutas_formacion") or []:
             cursos = ", ".join(curso["curso"] for curso in ruta.get("cursos_seleccionados") or [])
             if cursos:
                 escribir(f"     Formación sugerida: {cursos}")
+    descartes = _descartes(estado, oferta_id, {c["perfil_id"] for c in solicitud["candidatos"]})
+    if descartes:
+        escribir("   Descartes:")
+        for descarte in descartes:
+            escribir(f"     - {descarte}")
+    resumen = _resumen_auditor(estado, solicitud)
+    if resumen:
+        escribir(f"   Auditor: {resumen}")
     if solicitud["alertas_auditor"]:
-        escribir(f"   Auditor: {'; '.join(solicitud['alertas_auditor'])}")
+        escribir(f"   Alertas del Auditor: {'; '.join(solicitud['alertas_auditor'])}")
     if solicitud["error"]:
         escribir(f"   ⚠ {solicitud['error']}")
     escribir(f"   Mensaje sugerido: {solicitud['mensaje_sugerido']}")
@@ -1418,7 +1587,8 @@ def main(argv: list[str] | None = None, leer: Callable[[str], str] = input, escr
         default=None,
         help=(
             "decisiones sin preguntar, p. ej. 'quitar:maria,aprobar,rechazar'; la respuesta de la empresa (#54) es "
-            "otro paso: 'empresa_rechaza:yaritza@of-cajero-vista-alegre' o 'empresa_cubierta:of-ayudante-cocina-chorrera'"
+            "otro paso: 'empresa_rechaza:yaritza@of-cajero-vista-alegre' o 'empresa_cubierta:of-ayudante-cocina-chorrera'. "
+            "Sin --auto, esa misma respuesta se escribe en la pregunta de acción o al terminar el flujo"
         ),
     )
     parser.add_argument(
@@ -1467,13 +1637,18 @@ def main(argv: list[str] | None = None, leer: Callable[[str], str] = input, escr
     while True:
         solicitud = aprobacion_pendiente(grafo, config)
         if solicitud is not None:
-            _mostrar(solicitud, escribir)
+            _mostrar(solicitud, escribir, grafo.get_state(config).values)
         if pasos and (evento := _evento_automatico(pasos[0])) is not None:
             pasos.pop(0)
             final = _aplicar_evento(grafo, config, evento, escribir)
             continue
         if solicitud is None:
-            break
+            # Interactivo: la empresa todavía puede responder sobre quien ya se postuló (#54)
+            evento = _preguntar_evento_final(grafo.get_state(config).values, leer) if pasos is None else None
+            if evento is None:
+                break
+            final = _aplicar_evento(grafo, config, evento, escribir)
+            continue
         if pasos is not None:
             if not pasos:
                 escribir("Sin más decisiones automáticas; el caso queda detenido en la aprobación.")
@@ -1483,6 +1658,9 @@ def main(argv: list[str] | None = None, leer: Callable[[str], str] = input, escr
             escribir(f"   → {respuesta['accion']}")
         else:
             respuesta = _preguntar_respuesta(solicitud, leer)
+            if "evento" in respuesta:
+                final = _aplicar_evento(grafo, config, respuesta["evento"], escribir)
+                continue
         final = grafo.invoke(Command(resume=respuesta), config)
 
     escribir("\nFlujo terminado.")

@@ -1,0 +1,85 @@
+{
+  "hash": "6f0c1977217647b1409b70d216173571706f609216b421b63056ef241a309101",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "horario",
+  "esquema": "TirillaExtraida",
+  "salida": {
+    "bloques": [
+      {
+        "dia": "lunes",
+        "hora_inicio": "18:30",
+        "hora_fin": "20:00",
+        "materia": "Matemática Básica I"
+      },
+      {
+        "dia": "miercoles",
+        "hora_inicio": "18:30",
+        "hora_fin": "20:00",
+        "materia": "Matemática Básica I"
+      },
+      {
+        "dia": "lunes",
+        "hora_inicio": "20:00",
+        "hora_fin": "21:30",
+        "materia": "Contabilidad I"
+      },
+      {
+        "dia": "miercoles",
+        "hora_inicio": "20:00",
+        "hora_fin": "21:30",
+        "materia": "Contabilidad I"
+      },
+      {
+        "dia": "martes",
+        "hora_inicio": "18:30",
+        "hora_fin": "20:00",
+        "materia": "Inglés Técnico I"
+      },
+      {
+        "dia": "jueves",
+        "hora_inicio": "18:30",
+        "hora_fin": "20:00",
+        "materia": "Inglés Técnico I"
+      },
+      {
+        "dia": "martes",
+        "hora_inicio": "20:00",
+        "hora_fin": "21:30",
+        "materia": "Informática Básica"
+      },
+      {
+        "dia": "jueves",
+        "hora_inicio": "20:00",
+        "hora_fin": "21:30",
+        "materia": "Informática Básica"
+      },
+      {
+        "dia": "viernes",
+        "hora_inicio": "18:30",
+        "hora_fin": "21:30",
+        "materia": "Expresión Oral y Escrita"
+      }
+    ],
+    "excepciones": [
+      {
+        "desde": "2026-10-19",
+        "hasta": "2026-10-23",
+        "motivo": "parciales"
+      },
+      {
+        "desde": "2026-12-07",
+        "hasta": "2026-12-12",
+        "motivo": "finales"
+      }
+    ],
+    "vigente_hasta": "2026-12-12",
+    "confianza": 0.97
+  },
+  "uso": {
+    "entrada": 3937,
+    "salida": 535
+  },
+  "creado": "2026-10-17T05:00:54+00:00"
+}

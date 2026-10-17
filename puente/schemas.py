@@ -9,13 +9,14 @@ legalidad ni ids: el código arma `Oferta` y `Perfil` después de normalizar y a
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Required, TypedDict, get_args
 
 from pydantic import AfterValidator, BaseModel, Field, field_validator, model_validator
 
 PATRON_HORA = r"^([01]\d|2[0-3]):[0-5]\d$"
+PATRON_FECHA = r"^\d{4}-\d{2}-\d{2}$"
 DIAS_VALIDOS = ("lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo")
 SIN_OFERTA = "SIN_OFERTA"
 
@@ -126,6 +127,34 @@ class Oferta(BaseModel):
         return faltan
 
 
+def _fecha_real(valor: str | None) -> str | None:
+    """Rechaza fechas con el formato bien pero inexistentes, como 2026-02-30."""
+    if valor is not None:
+        date.fromisoformat(valor)
+    return valor
+
+
+# Fecha ISO "AAAA-MM-DD" guardada como texto (igual que los timestamps): serializa a JSON sin conversiones.
+FechaISO = Annotated[str, Field(pattern=PATRON_FECHA), AfterValidator(_fecha_real)]
+
+
+class ExcepcionHorario(BaseModel):
+    """Fechas en que el joven no está disponible aunque su horario semanal lo permita (#164).
+
+    Semanas de parciales o de finales, laboratorios de un día. `desde` y `hasta` van incluidas.
+    """
+
+    desde: FechaISO
+    hasta: FechaISO
+    motivo: str = ""
+
+    @model_validator(mode="after")
+    def _rango_en_orden(self) -> ExcepcionHorario:
+        if self.hasta < self.desde:  # en ISO el orden de texto es el orden de fechas
+            raise ValueError(f"la excepción termina ({self.hasta}) antes de empezar ({self.desde})")
+        return self
+
+
 class HabilidadPerfil(BaseModel):
     skill_id: str
     evidencia: str = ""
@@ -142,6 +171,13 @@ class Perfil(BaseModel):
     salario_minimo: float = Field(ge=0)
     presupuesto_pasaje_diario: float = Field(ge=0)
     habilidades: list[HabilidadPerfil] = Field(default_factory=list)
+    # Horario vivo (#164), opcionales y aditivos: un Perfil sin ellos se comporta igual que antes.
+    excepciones: list[ExcepcionHorario] = Field(
+        default_factory=list, description="Fechas sin disponibilidad (parciales, laboratorios)"
+    )
+    vigente_hasta: FechaISO | None = Field(
+        None, description="Fin del semestre o cuatrimestre de horario_clases; al vencer se pide la tirilla nueva"
+    )
 
     @field_validator("horario_libre", "horario_clases", mode="before")
     @classmethod

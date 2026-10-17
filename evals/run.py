@@ -29,7 +29,7 @@ import sys
 import unicodedata
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +55,12 @@ PERFIL_LLM = ("puente.agents.perfil", "llm_puente", 6)  # (prompt) -> PerfilExtr
 GUARDRAILS_EVALUAR = ("puente.guardrails", "evaluar_entrada", 9)  # (entrada) -> list[ResultadoGuardrail]
 SOLVER_ASIGNAR = ("puente.solver.asignacion", "asignar", 4)
 AUDITOR_AUDITAR = ("puente.agents.auditor", "auditar_lista_corta", 8)
+HORARIO_LEER = ("puente.agents.horario", "leer_tirilla", 164)  # (archivo, *, hoy) -> RevisionTirilla (usa puente.llm)
+HORARIO_VALIDAR = ("puente.agents.horario", "validar_bloques", 164)  # (bloques) -> ValidacionBloques
+HORARIO_CONVERTIR = ("puente.agents.horario", "a_horario_clases", 164)  # (bloques válidos) -> list[Horario]
+REDACTOR_PROPONER = ("puente.agents.redactor", "proponer_version", 157)  # (oferta, perfiles, *, redactar, traslados, minutos) -> Propuesta
+REDACTOR_PLANTILLA = ("puente.agents.redactor", "redactor_plantilla", 157)  # (texto, cambios) -> TextoRedactado, sin LLM
+RAIZ_REPO = Path(__file__).resolve().parent.parent
 
 # Reglas de discriminación -> artículo de la Ley 11 de 2005 (solo las que bloquean) o alerta (las que no).
 ARTICULO_POR_REGLA = {"edad": "art. 2", "sexo": "art. 1"}
@@ -216,6 +222,17 @@ def _norm(texto: Any) -> str:
     return " ".join(_sin_tildes(texto).casefold().split())
 
 
+# Diferencias cosméticas de puesto y empresa que no son un error de extracción (#152): la marca de género
+# («Cajero/a», «Mesero(a)») y el sufijo societario («S.A.», «S. de R.L.», «Inc.», «Corp.»).
+_MARCA_GENERO = re.compile(r"(?<=\w)(?:/(?:as|os|a|o)|\s?\(\s?(?:as|os|a|o)\s?\))(?!\w)")
+_SUFIJO_SOCIETARIO = re.compile(r"(?:[\s,]+(?:s\.?\s?a\.?|s\.?\s?de\s?r\.?\s?l\.?|inc\.?|corp\.?))+\s*$")
+
+
+def _norm_nombre(texto: Any) -> str:
+    """`_norm` sin marca de género ni sufijo societario: «Cajero/a» -> «cajero», «Rio Ficticio S.A.» -> «rio ficticio»."""
+    return _SUFIJO_SOCIETARIO.sub("", _MARCA_GENERO.sub("", _norm(texto))).strip()
+
+
 def _norm_literal(texto: Any) -> str:
     """Minúsculas y espacios colapsados, conservando las tildes (para evidencia literal)."""
     return " ".join(str(texto).casefold().split())
@@ -301,7 +318,7 @@ def _diferencias_extraccion(esperado: dict, observado: dict) -> list[str]:
     malos = []
     for campo in ("puesto", "empresa"):
         if campo in esperado:
-            e, o = _norm(esperado[campo]), _norm(observado.get(campo) or "")
+            e, o = _norm_nombre(esperado[campo]), _norm_nombre(observado.get(campo) or "")
             # Lo esperado debe estar completo en lo observado: una extracción truncada no es un acierto.
             if not e or not o or e not in o:
                 malos.append(campo)
@@ -400,6 +417,62 @@ def _diferencias_guardrails(esperado: dict, observado: dict) -> list[str]:
     return malos
 
 
+def _franjas(valor: Any) -> list[tuple[tuple[str, ...], str, str]]:
+    return sorted(
+        (tuple(_a_dict(h).get("dias") or ()), str(_a_dict(h).get("hora_inicio")), str(_a_dict(h).get("hora_fin")))
+        for h in _lista(valor or [])
+    )
+
+
+def _diferencias_horario(esperado: dict, observado: dict) -> list[str]:
+    """#164: horario_clases idéntico; problemas iguales por (índice, campo); vigencia y excepciones si se esperan."""
+    malos = []
+    if "horario_clases" in esperado and _franjas(esperado["horario_clases"]) != _franjas(observado.get("horario_clases")):
+        malos.append("horario_clases")
+    if "problemas" in esperado:
+        clave = lambda p: (int(_a_dict(p).get("indice") or 0), str(_a_dict(p).get("campo")))  # noqa: E731
+        if sorted(map(clave, esperado["problemas"] or [])) != sorted(map(clave, observado.get("problemas") or [])):
+            malos.append("problemas")
+    if "vigente_hasta" in esperado and esperado["vigente_hasta"] != observado.get("vigente_hasta"):
+        malos.append("vigente_hasta")
+    if "excepciones" in esperado:
+        rango = lambda e: (str(_a_dict(e).get("desde")), str(_a_dict(e).get("hasta")))  # noqa: E731
+        if sorted(map(rango, esperado["excepciones"] or [])) != sorted(map(rango, observado.get("excepciones") or [])):
+            malos.append("excepciones")
+    return malos
+
+
+def _diferencias_redactor(esperado: dict, observado: dict) -> list[str]:
+    """#157: bloqueo antes y después, hallazgos de revisar_texto sobre lo propuesto, cambios por (regla, frase) y
+    viables por id iguales a lo esperado. Del texto solo se exige lo que debe contener: lo redacta la plantilla o
+    el LLM, la legalidad la mide revisar_texto."""
+    malos = []
+    for campo in ("bloqueada_antes", "bloqueada_despues"):
+        if campo in esperado and bool(esperado[campo]) != bool(observado.get(campo)):
+            malos.append(campo)
+    if "hallazgos_despues" in esperado and sorted(map(_norm, _planos(esperado["hallazgos_despues"]))) != sorted(
+        map(_norm, _planos(observado.get("hallazgos_despues")))
+    ):
+        malos.append("hallazgos_despues")
+    if "cambios" in esperado:
+        clave = lambda c: (str(_a_dict(c).get("regla")), _norm(_a_dict(c).get("frase")))  # noqa: E731
+        if sorted(map(clave, _planos(esperado["cambios"]))) != sorted(map(clave, _planos(observado.get("cambios")))):
+            malos.append("cambios")
+    for campo in ("viables_antes", "viables_despues", "cumplen_filtro_original"):
+        if campo in esperado and sorted(map(str, _planos(esperado[campo]))) != sorted(map(str, _planos(observado.get(campo)))):
+            malos.append(campo)
+    for campo in ("redactado_por", "max_minutos_traslado"):
+        if campo in esperado and str(esperado[campo]) != str(observado.get(campo)):
+            malos.append(campo)
+    if "nota_contiene" in esperado and _norm(esperado["nota_contiene"]) not in _norm(observado.get("nota_redaccion") or ""):
+        malos.append("nota_redaccion")
+    texto = _norm(observado.get("texto_nuevo") or "")
+    malos += [f"texto sin «{f}»" for f in _planos(esperado.get("texto_contiene")) if _norm(f) not in texto]
+    if esperado.get("decision_pendiente") and not observado.get("decision_pendiente"):
+        malos.append("decision_pendiente")
+    return malos
+
+
 _DIFERENCIAS: dict[str, Callable[[dict, dict], list[str]]] = {
     "extraccion_ofertas": _diferencias_extraccion,
     "requisitos_discriminatorios": _diferencias_discriminacion,
@@ -407,6 +480,9 @@ _DIFERENCIAS: dict[str, Callable[[dict, dict], list[str]]] = {
     "matching_factible": _diferencias_matching,
     "sesgo_contrafactual": _diferencias_sesgo,
     "guardrails": _diferencias_guardrails,
+    "horario_tirilla": _diferencias_horario,
+    "horario_validacion": _diferencias_horario,
+    "redactor_puente": _diferencias_redactor,
 }
 
 
@@ -705,6 +781,64 @@ def _ejecutar_guardrails(caso: dict) -> dict:
     return {"veredicto": veredicto, "sigue_como_dato": not rechazos, "llamo_llm": espia["llamadas"] > 0}
 
 
+def _ejecutar_horario_tirilla(caso: dict) -> dict:
+    """#164: leer_tirilla(ruta, hoy=) -> RevisionTirilla. Claude con visión vía puente.llm (grabación en evals/grabaciones);
+    una grabación o clave faltante sube como ErrorLLM y el caso queda omitido."""
+    entrada = caso["entrada"]
+    argumentos: dict[str, Any] = {"hoy": date.fromisoformat(str(entrada["hoy"]))} if entrada.get("hoy") else {}
+    revision = _resolver(HORARIO_LEER)(RAIZ_REPO / entrada["ruta"], **argumentos)
+    datos = _a_dict(revision.como_dict() if hasattr(revision, "como_dict") else revision)
+    return {c: datos.get(c) for c in ("horario_clases", "problemas", "vigente_hasta", "excepciones", "confianza")}
+
+
+def _ejecutar_horario_validacion(caso: dict) -> dict:
+    """#164: validar_bloques(bloques) -> ValidacionBloques; a_horario_clases(válidos) -> list[Horario]. Sin LLM."""
+    validacion = _resolver(HORARIO_VALIDAR)(caso["entrada"]["bloques"])
+    horario = _resolver(HORARIO_CONVERTIR)(validacion.bloques)
+    return {
+        "problemas": [{"indice": p.indice, "campo": p.campo, "motivo": p.motivo} for p in validacion.problemas],
+        "horario_clases": [_a_dict(h) for h in _lista(horario)],
+    }
+
+
+def _ejecutar_redactor(caso: dict) -> dict:
+    """#157: proponer_version(oferta, perfiles, redactar=, traslados=, minutos=) -> Propuesta. Sin LLM real ni red:
+    redacta la plantilla del código o, si el caso trae `llm_falso`, un redactor falso que devuelve ese texto (el
+    código lo verifica igual que al LLM). Los hallazgos de después se miden aparte con revisar_texto sobre el puesto
+    y el texto propuestos; los viables son los ids que contó el solver."""
+    proponer = _resolver(REDACTOR_PROPONER)
+    revisar = _resolver(DISCRIMINACION_REVISAR)
+    entrada = caso["entrada"]
+    if "llm_falso" in entrada:
+        texto_llm = str(entrada["llm_falso"])
+        redactar: Callable[..., Any] = lambda _texto, _cambios: texto_llm  # noqa: E731
+    else:
+        redactar = _resolver(REDACTOR_PLANTILLA)
+    oferta = entrada.get("oferta") or json.loads((RAIZ_REPO / entrada["oferta_ruta"]).read_text(encoding="utf-8"))
+    argumentos: dict[str, Any] = {"redactar": redactar, "traslados": entrada.get("traslados")}
+    if entrada.get("minutos") is not None:
+        argumentos["minutos"] = int(entrada["minutos"])
+    propuesta = _a_dict(proponer(oferta, list(entrada.get("perfiles") or []), **argumentos))
+    propuesto = "\n".join(str(t) for t in (propuesta.get("puesto_nuevo"), propuesta.get("texto_nuevo")) if t)
+    hallazgos = [_a_dict(h) for h in _lista(revisar(propuesto))]
+    decision = _a_dict(propuesta.get("decision") or {})
+    return {
+        "viables": f"{propuesta.get('viables_antes')} → {propuesta.get('viables_despues')}",
+        "bloqueada_antes": propuesta.get("bloqueada_antes"),
+        "bloqueada_despues": propuesta.get("bloqueada_despues"),
+        "hallazgos_despues": [f"{h.get('regla')} «{h.get('frase')}»" for h in hallazgos],
+        "cambios": [{"regla": c.get("regla"), "frase": c.get("frase")} for c in map(_a_dict, _lista(propuesta.get("cambios")))],
+        "viables_antes": _lista(propuesta.get("viables_antes_ids")),
+        "viables_despues": _lista(propuesta.get("viables_despues_ids")),
+        "cumplen_filtro_original": _lista(propuesta.get("cumplen_filtro_original")),
+        "redactado_por": propuesta.get("redactado_por"),
+        "nota_redaccion": propuesta.get("nota_redaccion"),
+        "max_minutos_traslado": propuesta.get("max_minutos_traslado"),
+        "texto_nuevo": propuesta.get("texto_nuevo"),
+        "decision_pendiente": "pendiente del orientador" in str(decision.get("salida_resumen") or ""),
+    }
+
+
 def ejecutores_por_defecto(
     taxonomia: dict | None = None,
     *,
@@ -722,6 +856,9 @@ def ejecutores_por_defecto(
         "matching_factible": _ejecutar_matching,
         "sesgo_contrafactual": _ejecutar_sesgo,
         "guardrails": _ejecutar_guardrails,
+        "horario_tirilla": _ejecutar_horario_tirilla,
+        "horario_validacion": _ejecutar_horario_validacion,
+        "redactor_puente": _ejecutar_redactor,
     }
 
 
