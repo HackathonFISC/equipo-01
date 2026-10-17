@@ -3116,6 +3116,44 @@ ESTADOS_ENVIADOS = (
 ESTADOS_CERRADOS = (*ESTADOS_ENVIADOS, EstadoPostulacion.NO_SELECCIONADO.value)
 NOMBRES_DIAS = {"miercoles": "miércoles", "sabado": "sábado"}
 
+
+def cv_llego_a_la_empresa(post: dict[str, Any], estado: dict[str, Any] | None = None) -> bool:
+    """Si el CV se envió a la empresa alguna vez, aunque después ella haya dicho que no (#257).
+
+    El estado vigente pasa a `no_seleccionado` cuando la empresa rechaza o da la vacante por cubierta, y con él se
+    perdía el hecho de que el envío ya había ocurrido: el embudo lo mostraba sin enviar y la tarjeta decía «no se
+    envió». Se cuenta como enviada si el estado vigente lo dice, si la postulación conserva los archivos que genera
+    Postulación al enviar (el CV y el mensaje) o, sobre todo, si el historial de SQLite pasó por «enviado» o más
+    allá: los archivos se pierden cuando el tablero reconstruye su estado desde la base, el historial no.
+    Si el orientador rechaza antes de enviar, no hay archivos ni paso por «enviado».
+    """
+    if post.get("estado") in ESTADOS_ENVIADOS:
+        return True
+    archivos = [str(a) for a in post.get("archivos_generados") or []]
+    if any(a.startswith(("cv_", "mensaje_")) for a in archivos):
+        return True
+    if estado is None or post.get("estado") != EstadoPostulacion.NO_SELECCIONADO.value:
+        return False  # la base solo se consulta para las cerradas sin envío aparente: el resto no la necesita
+    return _paso_por_enviado_en_sqlite(estado, str(post.get("perfil_id")), str(post.get("oferta_id")))
+
+
+def _paso_por_enviado_en_sqlite(estado: dict[str, Any], perfil_id: str, oferta_id: str) -> bool:
+    ruta_db = estado.get("_db_path") or os.getenv("PUENTE_DB") or str(RUTA_DB_TABLERO)
+    marcas = ", ".join("?" for _ in ESTADOS_ENVIADOS)
+    try:
+        conn = db.conectar(ruta_db)
+        try:
+            fila = conn.execute(
+                "SELECT 1 FROM postulaciones_historial h JOIN postulaciones p ON p.id = h.postulacion_id "
+                f"WHERE p.perfil_id = ? AND p.oferta_id = ? AND h.estado_nuevo IN ({marcas}) LIMIT 1",
+                (perfil_id, oferta_id, *ESTADOS_ENVIADOS),
+            ).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return False
+    return fila is not None
+
 # Perfil (#6) extrae las habilidades con este LLM a través de `puente.llm` (#45); las pruebas lo
 # cambian por uno falso. El LLM solo propone: el código verifica taxonomía y evidencia literal.
 llm_perfil_joven: Callable[[str], Any] = llm_puente
@@ -3191,11 +3229,9 @@ def _dentro_del_limite(request: Request) -> bool:
     return dentro
 
 
-def _token_de(request: Request, *, permitir_query: bool = False) -> str | None:
-    token = request.headers.get(ENCABEZADO_TOKEN_JOVEN)
-    if not token and permitir_query:  # el enlace del .ics es un <a href>: no lleva encabezados
-        token = request.query_params.get("token")
-    return token
+def _token_de(request: Request) -> str | None:
+    # Solo en el encabezado: en la URL quedaría en el registro del servidor y en el historial del teléfono (#257).
+    return request.headers.get(ENCABEZADO_TOKEN_JOVEN)
 
 
 class PerfilJovenRequest(BaseModel):
@@ -3499,6 +3535,7 @@ def resultado_joven(estado: dict[str, Any], perfil_id: str) -> dict[str, Any]:
     matches = {m["oferta_id"]: m for m in estado.get("matches", []) if m.get("perfil_id") == perfil_id}
 
     vacantes: list[dict[str, Any]] = []
+    salieron_de_lista: list[dict[str, Any]] = []
     for post in estado.get("postulaciones", []):
         if post.get("perfil_id") != perfil_id:
             continue
@@ -3506,7 +3543,16 @@ def resultado_joven(estado: dict[str, Any], perfil_id: str) -> dict[str, Any]:
         match = matches.get(oferta_id)
         estado_post = post.get("estado", EstadoPostulacion.PRESELECCIONADO.value)
         if match is None and estado_post not in ESTADOS_CERRADOS:
-            continue  # ya no está en la lista corta tras un recálculo
+            # Ya no está en la lista corta tras un recálculo: se avisa en vez de dejarla desaparecer (#257).
+            oferta = ofertas.get(oferta_id, {})
+            salieron_de_lista.append(
+                {
+                    "oferta_id": oferta_id,
+                    "puesto": post.get("puesto") or oferta.get("puesto", oferta_id),
+                    "empresa": post.get("empresa") or oferta.get("empresa", ""),
+                }
+            )
+            continue
         consentimiento = _estado_consentimiento(_ultimo_consentimiento(estado, perfil_id, oferta_id))
         if estado_post in ESTADOS_CERRADOS or consentimiento != EstadoPostulacion.CONSENTIDO.value:
             estado_visible = estado_post
@@ -3530,6 +3576,8 @@ def resultado_joven(estado: dict[str, Any], perfil_id: str) -> dict[str, Any]:
                 "consentimiento": consentimiento,
                 "puede_consentir": match is not None and estado_post in ESTADOS_ADMITEN_CONSENTIMIENTO,
                 "enviada": estado_post in ESTADOS_ENVIADOS,
+                # El CV llegó a la empresa, aunque ella haya dicho después que no (#257).
+                "se_envio": cv_llego_a_la_empresa(post, estado),
                 "ics": next(
                     (a for a in post.get("archivos_generados") or [] if str(a).endswith(".ics")),
                     None,
@@ -3577,6 +3625,9 @@ def resultado_joven(estado: dict[str, Any], perfil_id: str) -> dict[str, Any]:
             sid: taxonomia.get(sid, {}).get("nombre_es", sid) for sid in sorted(i for i in ids_habilidades if i)
         },
         "vacantes": vacantes,
+        "salieron_de_lista": salieron_de_lista,
+        # Por qué no hay ninguna opción: las restricciones o el cupo lleno de las vacantes que sí las cumplen (#245).
+        "sin_opcion": (estado.get("sin_opcion") or {}).get(perfil_id),
         "descartes": descartes,
         "rutas_formacion": rutas,
         # TODO(#12/#84): el mensaje para el joven lo arma Postulación (#12). Cuando #84 esté en main,
@@ -3703,7 +3754,7 @@ async def endpoint_joven_ics(request: Request) -> FileResponse | JSONResponse:
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=422)
     try:
-        verificar_token_joven(ESTADO_GLOBAL, perfil_id, _token_de(request, permitir_query=True))
+        verificar_token_joven(ESTADO_GLOBAL, perfil_id, _token_de(request))
     except CredencialJovenInvalida as exc:
         return JSONResponse({"detail": str(exc)}, status_code=401)
     post = _buscar_postulacion(ESTADO_GLOBAL, perfil_id, oferta_id)

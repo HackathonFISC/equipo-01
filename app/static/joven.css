@@ -690,6 +690,12 @@ textarea[aria-invalid="true"] {
   box-shadow: 0 6px 24px rgba(24, 33, 42, 0.2);
   font-weight: 600;
   z-index: 10;
+  cursor: pointer; /* un toque lo cierra */
+}
+
+/* El aviso no debe tapar el último botón de la página (#257): queda espacio de sobra al final y un toque lo cierra. */
+body {
+  padding-bottom: 6rem;
 }
 
 .toast[data-tipo="error"] {

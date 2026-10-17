@@ -434,6 +434,7 @@ def mis_postulaciones(estado: dict[str, Any], perfil_id: str) -> dict[str, Any]:
     en_lista = {m["oferta_id"] for m in estado.get("matches", []) if m.get("perfil_id") == perfil_id}
 
     postulaciones = []
+    salieron_de_lista = []
     for post in estado.get("postulaciones", []):
         if post.get("perfil_id") != perfil_id:
             continue
@@ -443,8 +444,19 @@ def mis_postulaciones(estado: dict[str, Any], perfil_id: str) -> dict[str, Any]:
         vigente = del_grafo if del_grafo in _RESPUESTAS_EMPRESA else en_tablero
         aviso = aviso_por_oferta.get(oferta_id)
         if oferta_id not in en_lista and vigente not in srv.ESTADOS_CERRADOS and aviso is None:
-            continue  # ya no está en la lista corta tras un recálculo
+            # Ya no está en la lista corta tras un recálculo: se avisa en vez de dejarla desaparecer (#257).
+            oferta = ofertas.get(oferta_id, {})
+            salieron_de_lista.append(
+                {
+                    "oferta_id": oferta_id,
+                    "puesto": post.get("puesto") or oferta.get("puesto", oferta_id),
+                    "empresa": post.get("empresa") or oferta.get("empresa", ""),
+                }
+            )
+            continue
         enviada = en_tablero in srv.ESTADOS_ENVIADOS or del_grafo in _ENVIADAS_EN_GRAFO
+        # Tras el rechazo de la empresa el estado vigente ya no es «enviado», pero el CV sí llegó (#257).
+        se_envio = enviada or srv.cv_llego_a_la_empresa(post, estado)
         consentido = srv._consentimiento_vigente(estado, perfil_id, oferta_id)
         no_del_joven = srv._consentimiento_rechazado_por_joven(estado, perfil_id, oferta_id)
         oferta = ofertas.get(oferta_id, {})
@@ -455,7 +467,8 @@ def mis_postulaciones(estado: dict[str, Any], perfil_id: str) -> dict[str, Any]:
                 "empresa": post.get("empresa") or oferta.get("empresa", ""),
                 "corregimiento": oferta.get("corregimiento", ""),
                 "estado": vigente,
-                "pasos": _pasos(consentido, enviada, vigente),
+                "se_envio": se_envio,
+                "pasos": _pasos(consentido, se_envio, vigente),
                 "consentimiento": "consentido" if consentido else "no_consentido" if no_del_joven else "pendiente",
                 # El «no» del joven manda: el orientador no puede aprobar el envío (#52, #109).
                 "no_del_joven": no_del_joven,
@@ -473,6 +486,7 @@ def mis_postulaciones(estado: dict[str, Any], perfil_id: str) -> dict[str, Any]:
         "perfil_id": perfil_id,
         "pasos_embudo": list(PASOS_EMBUDO),
         "postulaciones": postulaciones,
+        "salieron_de_lista": salieron_de_lista,
         "avisos": avisos,
         # TODO(#158): el reto de la micro-misión y su scorecard van aquí cuando entre ese PR; la página
         # ya tiene su contenedor (#f2-mision) y `pintarMision()` en joven_fase2.js.
