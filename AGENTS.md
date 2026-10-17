@@ -1,6 +1,6 @@
 # AGENTS.md · Cómo trabajamos en Puente (3 humanos + agentes de IA)
 
-Hackathon FISC AI Agents 2026 · Reto 3: Empleabilidad · 24 horas continuas · demo MVP en la hora 12 · tag `final-24h` a las 23:30.
+Hackathon FISC AI Agents 2026 · Reto 3: Empleabilidad · 24 horas continuas · demo MVP en la hora 12 · hora límite 13:00 del 17 · código congelado a las 11:30 y tag `final-24h` a las 11:45 (horario en #41).
 
 Este archivo lo leen **las tres personas del equipo y todos los agentes de desarrollo** al inicio de cada sesión. En este equipo conviven **Claude Code**, **Codex (GPT)** y **Antigravity (Gemini)**; el protocolo es el mismo para los tres. Si otra instrucción lo contradice, manda este archivo. Los issues de GitHub mandan sobre este archivo en todo lo que sea alcance de una tarea.
 
@@ -71,7 +71,7 @@ Cada nodo escribe una `Decision` en la tabla `decisiones` vía `puente/tools/db.
 | `puente/agents/formacion.py` | #14 | Set cover voraz sobre `cursos.csv` (stretch) |
 | `README.md`, `docs/arquitectura.png`, `docs/metodologia.md`, `docs/bitacora_ia.md` | #15 | Entrega escrita |
 | Video | #16 | Guion de 7 pasos, caso Yaritza, grabar en la hora 21 |
-| Ensayos y tag | #17 | Modo sin conexión, tag a las 23:30 |
+| Ensayos y tag | #17 | Modo sin conexión, código congelado a las 11:30, tag a las 11:45 |
 
 **Reglas de diseño que ningún PR rompe.**
 - Solver y reglas sin llamadas al LLM. Misma entrada, misma salida (`num_workers=1`, semilla fija).
