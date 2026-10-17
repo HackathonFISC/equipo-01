@@ -17,6 +17,23 @@ Sistema agéntico de inserción laboral juvenil: conecta jóvenes, vacantes y cu
 
 En Panamá, la Encuesta de Mercado Laboral del INEC de **agosto de 2026** estimó una tasa de desocupación nacional de **8,5 %**. Para las personas de **20 a 24 años** fue **22,6 %**, y para las de **25 a 29 años**, **14,4 %**. El mismo boletín reportó **45,8 %** de empleo informal no agrícola. Son indicadores de contexto nacional, no resultados ni línea base de Puente: [comentario oficial](https://www.inec.gob.pa/archivos/P053342420260930151945Comentarios.pdf), [cuadro de desocupación por edad](https://www.inec.gob.pa/archivos/P0579518620260930152328Cuadro%205.pdf) y [boletín oficial, cuadro 26](https://www.inec.gob.pa/archivos/P0862619320260930153357Bolet%C3%ADn%20de%20la%20Encuesta%20de%20Mercado%20Laboral%20-%20Agosto%202026.pdf).
 
+En **Panamá Oeste**, la provincia de Arraiján y La Chorrera, el mismo [cuadro 5](https://www.inec.gob.pa/archivos/P0579518620260930152328Cuadro%205.pdf) da cifras peores para los jóvenes. Son tasas de desocupación de agosto de 2026:
+
+| Grupo | Panamá Oeste | Todo el país |
+| --- | ---: | ---: |
+| 20 a 24 años | **31,1 %** (11 630 de 37 355 personas activas) | 22,6 % |
+| Mujeres de 20 a 24 años | **35,4 %** (5 880 de 16 605) | 28,0 % |
+
+Es la población a la que apunta la demo.
+
+### Para quién es Puente
+
+| Quién | Qué le pasa hoy | Qué gana con Puente |
+| --- | --- | --- |
+| **Joven de 18 a 29 años en Panamá Oeste** | Sabe hacer cosas que no están en ningún papel. Postula a anuncios que quedan a más de una hora, cuestan más pasaje del que puede pagar o chocan con sus clases. Algunos anuncios piden edad o sexo, y eso es ilegal. | Solo le llegan vacantes a las que llega en 60 minutos o menos, con pasaje dentro de su presupuesto y sin cruce con sus clases. Sus habilidades cuentan, cada una con una frase suya como evidencia. Su CV sale ciego y solo con su consentimiento. |
+| **Empresa** | Recibe candidatos que después no pueden sostener el traslado o el horario. | Una lista corta de hasta 3 personas por vacante que cumplen traslado, pasaje, horario y salario, y el aviso si su anuncio choca con la Ley 11 de 2005. |
+| **Orientador** | Revisa ofertas y perfiles a mano, sin saber por qué una opción conviene más que otra. | Decide al final, con el motivo de cada puntaje, las alertas del Auditor si un nombre o un género cambia el resultado y cursos del INADEH con cupo para las brechas. |
+
 El reto que aborda esta demo es concreto: una persona joven puede tener habilidades adquiridas en trabajo informal sin un certificado que las haga visibles, mientras una oferta aparentemente cercana puede exigir un viaje o pasaje incompatible con su horario y presupuesto. Puente toma evidencia literal de esas habilidades, evalúa restricciones de traslado, horario y salario, y presenta al orientador humano una lista corta con motivos verificables. La demo usa perfiles y vacantes sintéticos; todavía no demuestra colocaciones ni reducción real del desempleo.
 
 El [plan original de Jesús del 16 de octubre](docs/plan.md) se conserva como documento histórico. Sus cifras de septiembre de 2025 y tecnologías previstas describen la propuesta inicial; para el horario y los recortes vigentes manda [el issue #41](https://github.com/HackathonFISC/equipo-01/issues/41), y esta sección usa los datos oficiales más recientes.
@@ -24,6 +41,43 @@ El [plan original de Jesús del 16 de octubre](docs/plan.md) se conserva como do
 ### Cómo mediremos el impacto en la demo
 
 `puente/metricas.py` calcula desde el desglose de los matches: (1) número de ofertas descartadas por traslado o pasaje y motivo; (2) diferencia mensual de minutos de ida y vuelta y de costo frente a **cada** oferta descartada con ruta conocida, con 22 días laborables por defecto, igual que el valor por defecto del solver; y (3) habilidades pedidas por una oferta asignada que el perfil respalda con evidencia literal. El rótulo de salida es **«Ilustrativo, datos de la demo»**. Las comparaciones son alternativas hipotéticas: no se suman entre ofertas ni se presentan como ahorro observado. Si falta una ruta o un match viable, no se calcula una diferencia. La evidencia literal no prueba por sí sola que una habilidad provenga de trabajo informal. Los traslados de la demo se documentan en [`data/FUENTES.md`](data/FUENTES.md); la estimación mensual depende de la cantidad de días laborables elegida.
+
+### Antes y después: Yaritza (ilustrativo, datos de la demo)
+
+**Yaritza** es un personaje ficticio (`data/perfiles/yaritza.json`):
+- 20 años, vive en La Chorrera y estudia de lunes a viernes de 18:30 a 21:30;
+- ayuda en la fonda de su mamá y no tiene CV;
+- pide al menos B/. 600 al mes y puede gastar B/. 3,00 diarios en pasaje.
+
+La comparación usa las **20 ofertas reales anonimizadas** de `data/ofertas/` (Computrabajo y Konzerta, 16 de octubre de 2026). Las cifras salen del filtro del Matching (`evaluar_factibilidad_par`) y del solver (`asignar`), sobre la base que deja `puente.cargar` en modo reproducir. No son resultados de campo.
+
+| | Sin Puente | Con Puente |
+| --- | --- | --- |
+| **Qué revisa** | Los 20 anuncios, uno por uno. | 1 opción viable, con su motivo. |
+| **Requisitos ilegales** | 7 anuncios piden edad o sexo (Ley 11 de 2005) y nadie le avisa. | Las 7 ofertas quedan bloqueadas antes de llegarle; el orientador ve la regla y la frase. |
+| **Traslado** | 4 anuncios están en Juan Díaz o Tocumen: de 80 a 95 minutos de ida y B/. 4,70 diarios de pasaje, por encima de sus B/. 3,00. | Su mejor opción, *Auxiliar de servicio al cliente* en Arraiján (B/. 666 al mes), está a **30 minutos** y cuesta **B/. 2,00 diarios** (B/. 44,00 al mes por 22 días). |
+| **Anuncios sin lugar claro** | 8 anuncios no dicen en qué corregimiento es el trabajo; tendría que preguntar en cada uno. | No se le proponen: sin traslado medido, el Matching no los da por viables. |
+| **Sus habilidades** | Sin CV, lo que hace en la fonda no aparece en ningún papel. | **3 habilidades con evidencia literal:** atención al cliente («atiendo pedidos»), manejo de caja («cobro en caja») e inventario («cuento los productos que quedan al cerrar»). La oferta propuesta pide atención al cliente. |
+| **Lo que falta** | — | La opción cubre 1 de las 2 habilidades que pide la oferta y su horario no está publicado, así que queda «por confirmar» (puntaje 40). El orientador decide si la aprueba. |
+
+Para reproducirlo, sin red ni clave:
+
+```bash
+LLM_MODO=reproducir uv run python -m puente.cargar --db yaritza.db
+uv run python - <<'EOF'
+import sqlite3
+from puente.rules.traslados import cargar_traslados, indexar_traslados
+from puente.schemas import Oferta, Perfil
+from puente.solver.asignacion import ConfigSolver, evaluar_factibilidad_par
+
+conn = sqlite3.connect("yaritza.db")
+yaritza = Perfil.model_validate_json(conn.execute("SELECT datos_json FROM perfiles WHERE id='P01'").fetchone()[0])
+indice = indexar_traslados(cargar_traslados())
+for (datos,) in conn.execute("SELECT datos_json FROM ofertas ORDER BY id"):
+    par = evaluar_factibilidad_par(yaritza, Oferta.model_validate_json(datos), indice, ConfigSolver())
+    print(par["oferta_id"], "viable" if par["viable"] else par["motivo_str"])
+EOF
+```
 
 ### Nivel alcanzado: autonomía acotada y verificable
 
