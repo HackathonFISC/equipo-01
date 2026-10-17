@@ -254,10 +254,23 @@ let refrescando = false;
 const CAMPO_DE_ESCRITURA =
   "textarea, select, [contenteditable], input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit])";
 
+// Lo que el orientador escribió o marcó en la lista corta y aún no envió: la nota, el mensaje editado a la empresa
+// y «El joven consintió». Un redibujo lo borraría aunque el campo ya no tenga el foco (#230). Se compara con el
+// valor con que se dibujó (`defaultValue`, `defaultChecked`); el refresco espera a que se envíe o se deje como estaba.
+function hayCambiosSinEnviar() {
+  return [...document.querySelectorAll("#contenedor-matches input, #contenedor-matches textarea, #contenedor-matches select")]
+    .some((campo) => {
+      if (campo.type === "checkbox" || campo.type === "radio") return campo.checked !== campo.defaultChecked;
+      if (campo.tagName === "SELECT") return [...campo.options].some((o) => o.selected !== o.defaultSelected);
+      return campo.value !== campo.defaultValue;
+    });
+}
+
 async function refrescarSiCambio() {
   if (refrescando || document.visibilityState !== "visible") return;
   if (document.querySelector("dialog[open]")) return;
   if (document.activeElement && document.activeElement.matches(CAMPO_DE_ESCRITURA)) return;
+  if (hayCambiosSinEnviar()) return;
   refrescando = true;
   try {
     const resp = await fetch("/api/estado"); // sin llamarApi: un fallo de este ciclo no muestra avisos
