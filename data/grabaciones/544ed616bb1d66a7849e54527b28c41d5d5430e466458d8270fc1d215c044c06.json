@@ -1,0 +1,44 @@
+{
+  "hash": "544ed616bb1d66a7849e54527b28c41d5d5430e466458d8270fc1d215c044c06",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "mercado",
+  "esquema": "OfertaExtraida",
+  "salida": {
+    "puesto": "Ejecutivo de Ventas Residencial - Telecomunicaciones",
+    "empresa": "Empresa C",
+    "corregimiento": null,
+    "ubicacion_texto": "Panamá, Panamá",
+    "salario_mensual": 800.0,
+    "salario_tipo": "exacto",
+    "horario": null,
+    "horario_tipo": "no_publicado",
+    "plazas": null,
+    "franjas_entrevista": [],
+    "habilidades": [
+      "Autodisciplina",
+      "Persuasión",
+      "Captación de clientes",
+      "Cierre de ventas",
+      "Enfoque a resultados",
+      "Prospección",
+      "Prospección de clientes",
+      "Seguimiento",
+      "Ventas",
+      "Ventas telefónicas"
+    ],
+    "requisitos_texto": "Educación mínima: Educación Técnico/Profesional; años de experiencia; Conocimientos: Autodisciplina, Persuasión, Captación de clientes, Cierre de ventas, Enfoque a resultados, Prospección, Prospección de clientes, Seguimiento, Ventas, Ventas telefónicas",
+    "transcripcion_literal": null
+  },
+  "uso": {
+    "entrada": 2140,
+    "salida": 664
+  },
+  "creado": "2026-10-17T03:30:00+00:00",
+  "atendido_por": {
+    "proveedor": "anthropic",
+    "modelo": "claude-opus-5-5",
+    "modo": "json_libre_por_timeout_esquema"
+  }
+}
