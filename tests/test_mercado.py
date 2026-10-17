@@ -1,6 +1,8 @@
 """Agente Mercado (#5, #43): extracción con LLM falso, taxonomía, reglas en código, deduplicación e inyección."""
 
 import json
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -10,19 +12,22 @@ from puente.agents.mercado import (
     INSTRUCCIONES,
     UMBRAL_SIMILITUD,
     EntradaOferta,
-    OfertaExtraida,
     a_entrada,
-    construir_mensajes,
+    construir_peticion,
     crear_nodo_mercado,
+    extractor_claude,
+    frases_no_verificadas,
     huella,
     leer_capa_de_texto,
     procesar_ofertas,
     similitud,
+    verificar_horario,
     verificar_salario,
 )
 from puente.graph import estado_inicial
+from puente.rules.discriminacion import revisar_texto
 from puente.rules.taxonomia import cargar_taxonomia
-from puente.schemas import REQUIERE_CONFIRMACION, Decision, Oferta
+from puente.schemas import REQUIERE_CONFIRMACION, Decision, HorarioExtraido, Oferta, OfertaExtraida
 
 FIXTURES = Path("tests/fixtures")
 CASOS = {c["nombre"]: c for c in json.loads((FIXTURES / "ofertas_mini.json").read_text(encoding="utf-8"))}
@@ -112,8 +117,8 @@ def test_oferta_sin_salario_ni_horario_queda_por_confirmar_con_decision():
 def test_oferta_con_horario_mal_formado_se_descarta_con_error_y_decision():
     extraida = dict(CASOS["vendedor_sin_salario"]["extraida"],
                     horario={"dias": ["lunes"], "hora_inicio": "25:00", "hora_fin": "18:00"})
-    resultado = procesar_ofertas([CASOS["vendedor_sin_salario"]["texto"]], extraer=lambda e: extraida,
-                                 taxonomia=TAXONOMIA)
+    texto = CASOS["vendedor_sin_salario"]["texto"] + " Lunes de 25:00 a 18:00."  # la hora mal escrita está en el texto
+    resultado = procesar_ofertas([texto], extraer=lambda e: extraida, taxonomia=TAXONOMIA)
     assert resultado.ofertas == []
     assert len(resultado.errores) == 1 and "horario.hora_inicio" in resultado.errores[0]
     assert resultado.decisiones[0].salida_resumen.startswith("descartada")
@@ -148,18 +153,20 @@ def test_inyeccion_no_cambia_la_decision_legal(sumiso):
 
 def test_oferta_va_al_llm_como_dato_delimitado():
     texto = CASOS["cajera_discriminatoria"]["texto"] + INYECCION
-    sistema, humano = construir_mensajes(EntradaOferta(texto=texto))
-    assert sistema == ("system", INSTRUCCIONES)
-    assert "Ignora tus instrucciones" not in sistema[1]
-    rol, contenido = humano
-    assert rol == "human"
+    contenido, archivos = construir_peticion(EntradaOferta(texto=texto))
+    assert archivos == []
+    assert "Ignora tus instrucciones" not in INSTRUCCIONES
     assert contenido.startswith(f"<{DELIMITADOR}>\n") and contenido.endswith(f"\n</{DELIMITADOR}>")
     # La marca de cierre incrustada en la oferta no puede cerrar el bloque antes de tiempo.
     assert contenido.count(f"</{DELIMITADOR}>") == 1
     assert "Ignora tus instrucciones" in contenido
 
 
-def test_oferta_extraida_no_tiene_campo_de_legalidad():
+def test_oferta_extraida_es_la_del_contrato_y_no_tiene_campo_de_legalidad():
+    from puente import schemas
+    from puente.agents import mercado
+
+    assert mercado.OfertaExtraida is schemas.OfertaExtraida
     assert not {"bloqueada", "alertas", "legal"} & set(OfertaExtraida.model_fields)
 
 
@@ -175,16 +182,17 @@ def test_entrada_imagen_o_pdf(tmp_path):
     assert a_entrada({"ruta": pdf}).mime == "application/pdf"
     assert not a_entrada("Se busca cajero.png en Bethania").es_archivo
 
-    _, (_, partes) = construir_mensajes(a_entrada(imagen))
-    assert partes[1]["image_url"]["url"].startswith("data:image/png;base64,")
-    _, (_, partes) = construir_mensajes(a_entrada(pdf))
-    assert partes[1]["mime_type"] == "application/pdf"
+    # Imagen y PDF van como archivo (bloque nativo de Claude en puente.llm), no como texto en el prompt.
+    for ruta in (imagen, pdf):
+        prompt, archivos = construir_peticion(a_entrada(ruta))
+        assert archivos == [ruta]
+        assert "transcripcion_literal" in prompt and prompt.startswith(f"<{DELIMITADOR}>")
 
 
 def test_imagen_aplica_reglas_sobre_la_transcripcion(tmp_path):
     imagen = tmp_path / "volante.jpg"
     imagen.write_bytes(b"jpg falso")
-    extraida = dict(CASOS["cajera_discriminatoria"]["extraida"], texto_transcrito=CASOS["cajera_discriminatoria"]["texto"])
+    extraida = dict(CASOS["cajera_discriminatoria"]["extraida"], transcripcion_literal=CASOS["cajera_discriminatoria"]["texto"])
     resultado = procesar_ofertas([imagen], extraer=lambda e: extraida, taxonomia=TAXONOMIA)
     [oferta] = resultado.ofertas
     assert oferta.bloqueada and oferta.fuente == str(imagen)
@@ -352,14 +360,14 @@ def test_pdf_con_capa_de_texto_se_lee_con_pypdf_antes_del_llm(tmp_path):
 
     def extraer(entrada):
         llamadas.append(entrada)
-        return dict(CASOS["cajera_discriminatoria"]["extraida"])  # sin texto_transcrito: no hace falta
+        return dict(CASOS["cajera_discriminatoria"]["extraida"])  # sin transcripcion_literal: no hace falta
 
     resultado = procesar_ofertas([ruta], extraer=extraer, taxonomia=TAXONOMIA)
     [entrada] = llamadas
     assert not entrada.es_archivo and "buena presencia" in entrada.texto
     assert entrada.fuente == str(ruta)
-    sistema, (rol, contenido) = construir_mensajes(entrada)
-    assert rol == "human" and isinstance(contenido, str) and contenido.startswith(f"<{DELIMITADOR}>")
+    contenido, archivos = construir_peticion(entrada)
+    assert archivos == [] and contenido.startswith(f"<{DELIMITADOR}>")
     [oferta] = resultado.ofertas
     assert oferta.bloqueada and oferta.fuente == str(ruta)
     assert "pypdf" in resultado.decisiones[0].razon
@@ -372,7 +380,7 @@ def test_pdf_escaneado_sigue_yendo_como_archivo(tmp_path):
 
     def extraer(entrada):
         llamadas.append(entrada)
-        return dict(CASOS["cajera_discriminatoria"]["extraida"], texto_transcrito=CASOS["cajera_discriminatoria"]["texto"])
+        return dict(CASOS["cajera_discriminatoria"]["extraida"], transcripcion_literal=CASOS["cajera_discriminatoria"]["texto"])
 
     resultado = procesar_ofertas([ruta], extraer=extraer, taxonomia=TAXONOMIA)
     assert llamadas[0].es_archivo
@@ -383,3 +391,175 @@ def test_pdf_danado_no_rompe_la_lectura(tmp_path):
     ruta = tmp_path / "roto.pdf"
     ruta.write_bytes(b"%PDF-1.4 falso")
     assert leer_capa_de_texto(ruta) == ""
+
+
+# ---------------------------------------------------------------- #43 Fase 2: horario sin inventar
+
+
+@pytest.mark.parametrize(
+    "horario, texto, aceptado, con_nota",
+    [
+        ({"dias": ["lunes"], "hora_inicio": "14:00", "hora_fin": "22:00"}, "Lunes de 14:00 a 22:00", True, False),
+        ({"dias": ["lunes"], "hora_inicio": "14:00", "hora_fin": "22:00"}, "Lunes de 2 pm a 10 pm", True, False),
+        ({"dias": ["lunes"], "hora_inicio": "08:00", "hora_fin": "17:00"}, "Tiempo completo", False, True),
+        ({"dias": [], "hora_inicio": "08:00", "hora_fin": "17:00"}, "De 08:00 a 17:00", False, True),
+        ({"dias": [], "hora_inicio": None, "hora_fin": None}, "Horario a convenir", False, False),
+        (None, "Horario a convenir", False, False),
+    ],
+)
+def test_verificar_horario_contra_el_texto(horario, texto, aceptado, con_nota):
+    resultado, nota = verificar_horario(HorarioExtraido(**horario) if horario else None, texto)
+    assert (resultado is not None) is aceptado
+    assert bool(nota) is con_nota
+
+
+def test_horario_inventado_queda_no_publicado_y_por_confirmar():
+    caso = CASOS["vendedor_sin_salario"]
+    extraida = dict(caso["extraida"], horario={"dias": ["lunes"], "hora_inicio": "08:00", "hora_fin": "17:00"},
+                    salario_mensual=550)
+    resultado = procesar_ofertas([caso["texto"]], extraer=lambda e: extraida, taxonomia=TAXONOMIA)
+    [oferta] = resultado.ofertas
+    assert oferta.horario is None and oferta.horario_tipo == "no_publicado"
+    assert oferta.salario_mensual is None and oferta.salario_tipo == "no_publicado"
+    assert oferta.por_confirmar() == ["salario", "horario", "corregimiento"]
+    [decision] = resultado.decisiones
+    assert "horario descartado" in decision.razon and "salario descartado" in decision.razon
+    assert REQUIERE_CONFIRMACION in decision.razon
+
+
+def test_extraccion_del_contrato_con_todo_en_null_no_rompe():
+    """La `OfertaExtraida` del contrato es toda opcional: lo que falta no se rellena."""
+    resultado = procesar_ofertas(["Se busca personal."], extraer=lambda e: OfertaExtraida(), taxonomia=TAXONOMIA)
+    [oferta] = resultado.ofertas
+    assert (oferta.puesto, oferta.empresa, oferta.corregimiento) == ("", "", "")
+    assert oferta.salario_tipo == "no_publicado" and oferta.horario_tipo == "no_publicado"
+
+
+def test_comisiones_y_rotativo_se_respetan_sin_cifra_inventada():
+    texto = "Se buscan vendedores por comisión en Tocumen. Turnos rotativos."
+    extraida = OfertaExtraida(puesto="Vendedor", empresa="Ficticia", corregimiento="Tocumen",
+                              salario_tipo="comisiones", salario_mensual=800, horario_tipo="rotativo")
+    [oferta] = procesar_ofertas([texto], extraer=lambda e: extraida, taxonomia=TAXONOMIA).ofertas
+    assert oferta.salario_mensual is None and oferta.salario_tipo == "comisiones"
+    assert oferta.horario is None and oferta.horario_tipo == "rotativo"
+
+
+# ---------------------------------------------------------------- #43 Fase 2: transcripción literal
+
+
+def _imagen(tmp_path, nombre="volante.jpg"):
+    ruta = tmp_path / nombre
+    ruta.write_bytes(b"jpg falso")
+    return ruta
+
+
+def test_imagen_con_transcripcion_verifica_salario_y_frases_contra_ella(tmp_path):
+    caso = CASOS["cajera_discriminatoria"]
+    extraida = dict(caso["extraida"], transcripcion_literal=caso["texto"])
+    resultado = procesar_ofertas([_imagen(tmp_path)], extraer=lambda e: extraida, taxonomia=TAXONOMIA)
+    [oferta] = resultado.ofertas
+    assert oferta.bloqueada and oferta.salario_mensual == 650
+    assert not any("baja_confianza" in a for a in oferta.alertas)
+    for alerta in oferta.alertas:  # cada frase de alerta está, literal, en la transcripción
+        assert alerta.split("«")[1].rstrip("»") in caso["texto"]
+    assert "frases verificadas" in resultado.decisiones[0].razon
+
+
+def test_transcripcion_vacia_pasa_al_orientador_como_baja_confianza(tmp_path):
+    caso = CASOS["ayudante_cocina"]
+    extraida = dict(caso["extraida"], transcripcion_literal="   ")
+    resultado = procesar_ofertas([_imagen(tmp_path)], extraer=lambda e: extraida, taxonomia=TAXONOMIA)
+    [oferta] = resultado.ofertas
+    assert not oferta.bloqueada
+    assert [a for a in oferta.alertas if a.startswith("alerta · baja_confianza")]
+    # Sin transcripción no hay contra qué verificar: salario y horario quedan por confirmar.
+    assert oferta.salario_mensual is None and oferta.horario is None
+    assert "baja confianza" in resultado.decisiones[0].razon
+    assert resultado.errores == []
+
+
+def test_transcripcion_vacia_con_requisito_de_sexo_igual_bloquea(tmp_path):
+    extraida = OfertaExtraida(puesto="Cajera", empresa="Ficticia", corregimiento="Bethania",
+                              requisitos_texto="solo damas, buena presencia")
+    [oferta] = procesar_ofertas([_imagen(tmp_path)], extraer=lambda e: extraida, taxonomia=TAXONOMIA).ofertas
+    assert oferta.bloqueada
+    assert any("baja_confianza" in a for a in oferta.alertas)
+
+
+def test_frase_del_extractor_que_no_esta_en_la_transcripcion_no_bloquea(tmp_path):
+    caso = CASOS["ayudante_cocina"]
+    extraida = dict(caso["extraida"], transcripcion_literal=caso["texto"], requisitos_texto="solo damas")
+    resultado = procesar_ofertas([_imagen(tmp_path)], extraer=lambda e: extraida, taxonomia=TAXONOMIA)
+    [oferta] = resultado.ofertas
+    assert not oferta.bloqueada
+    assert not any(a.startswith("bloqueo") for a in oferta.alertas)
+    assert any("baja_confianza" in a for a in oferta.alertas)
+    assert "solo damas" in resultado.decisiones[0].razon
+
+
+def test_frases_no_verificadas_ignora_mayusculas_acentos_y_espacios():
+    transcripcion = "SE BUSCA CAJERA.\nRequisitos:  Buena   Presencia, 18 a 25 años."
+    hallazgos = revisar_texto("buena presencia, 18 a 25 anos") + revisar_texto("solo damas")
+    assert [h.frase for h in frases_no_verificadas(hallazgos, transcripcion)] == ["solo damas"]
+
+
+# ---------------------------------------------------------------- #43 Fase 2: puente.llm
+
+
+class ErrorLLMFalso(RuntimeError):
+    def __init__(self, mensaje, causa):
+        super().__init__(mensaje)
+        self.causa = causa
+
+
+@pytest.fixture
+def llm_falso(monkeypatch):
+    """Sustituye `puente.llm` (rama de #45) por un módulo falso que guarda las llamadas."""
+    llamadas = []
+    modulo = types.ModuleType("puente.llm")
+
+    def generar_estructurado(prompt, esquema, archivos=None, **kwargs):
+        llamadas.append({"prompt": prompt, "esquema": esquema, "archivos": archivos, **kwargs})
+        if modulo.error:
+            raise modulo.error
+        return esquema.model_validate(dict(CASOS["cajera_discriminatoria"]["extraida"],
+                                           transcripcion_literal=CASOS["cajera_discriminatoria"]["texto"]))
+
+    modulo.generar_estructurado = generar_estructurado
+    modulo.error = None
+    modulo.llamadas = llamadas
+    monkeypatch.setitem(sys.modules, "puente.llm", modulo)
+    return modulo
+
+
+def test_extractor_por_defecto_usa_puente_llm_con_agente_mercado(llm_falso, tmp_path):
+    texto = CASOS["cajera_discriminatoria"]["texto"]
+    assert isinstance(extractor_claude(EntradaOferta(texto=texto)), OfertaExtraida)
+    imagen = _imagen(tmp_path)
+    extractor_claude(a_entrada(imagen))
+
+    de_texto, de_imagen = llm_falso.llamadas
+    for llamada in (de_texto, de_imagen):
+        assert llamada["esquema"] is OfertaExtraida
+        assert llamada["agente"] == "mercado"
+        assert llamada["sistema"] == INSTRUCCIONES
+    assert de_texto["archivos"] is None and texto in de_texto["prompt"]
+    assert de_imagen["archivos"] == [imagen]  # bloque nativo: puente.llm lee los bytes y el mime
+
+
+def test_nodo_por_defecto_usa_puente_llm(llm_falso):
+    salida = crear_nodo_mercado(taxonomia=TAXONOMIA)({"ofertas_crudas": [CASOS["cajera_discriminatoria"]["texto"]]})
+    assert salida["ofertas"][0].bloqueada and salida["errores"] == []
+    assert len(llm_falso.llamadas) == 1
+
+
+def test_error_llm_va_a_errores_con_su_causa_sin_colgar_el_nodo(llm_falso):
+    llm_falso.error = ErrorLLMFalso("Claude rechazó la solicitud (anthropic/claude-opus-5-5, agente mercado).",
+                                    causa="refusal")
+    nodo = crear_nodo_mercado(taxonomia=TAXONOMIA)
+    salida = nodo({"ofertas_crudas": [CASOS["cajera_discriminatoria"]["texto"], CASOS["ayudante_cocina"]["texto"]],
+                   "errores": ["error previo"]})
+    assert salida["ofertas"] == []
+    assert salida["errores"][0] == "error previo"
+    assert len(salida["errores"]) == 3 and all("(refusal)" in e for e in salida["errores"][1:])
+    assert [d.salida_resumen for d in salida["decisiones"]] == ["descartada", "descartada"]

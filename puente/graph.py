@@ -20,7 +20,7 @@ usan respuestas grabadas, nunca la red.
 Contrato con el tablero (#11):
     grafo = construir_grafo(checkpointer=checkpointer_sqlite())
     config = config_caso(perfil_id)
-    grafo.invoke(estado, config)                      # corre hasta el interrupt
+    grafo.invoke(limpiar_entrada(estado), config)     # corre hasta el interrupt; sin PII en el checkpoint
     aprobacion_pendiente(grafo, config)              # o grafo.get_state(config)
     grafo.invoke(Command(resume={...}), config)       # ver RESPUESTA_APROBACION
 
@@ -50,7 +50,7 @@ from pydantic import BaseModel
 from puente.agents.auditor import nodo_auditor, ruta_post_auditor
 from puente.agents.formacion import nodo_formacion
 from puente.agents.matching import nodo_matching
-from puente.agents.mercado import crear_nodo_mercado, extractor_gemini
+from puente.agents.mercado import crear_nodo_mercado, extractor_claude
 from puente.agents.perfil import llm_gemini, nodo_perfil
 from puente.guardrails import (
     RESPUESTA_FUERA_DE_ALCANCE,
@@ -66,6 +66,7 @@ from puente.schemas import (
     EstadoPuente,
     Match,
     Oferta,
+    OfertaExtraida,
     Perfil,
     agregar_decision,
 )
@@ -469,7 +470,8 @@ def cargar_taxonomia_grafo() -> dict[str, dict]:
 
 
 def _extractor_grabado(estado: dict) -> Callable[[Any], Any]:
-    """Modo sin conexión de Mercado: la `respuesta_llm` guardada en cada oferta cruda, buscada por su texto."""
+    """Modo sin conexión de Mercado: la `respuesta_llm` guardada en cada oferta cruda, buscada por su texto,
+    validada como la `OfertaExtraida` del contrato que devuelve `extractor_claude`."""
     grabadas = {
         str(c.get("texto", "")).strip(): c["respuesta_llm"]
         for c in estado.get("ofertas_crudas") or []
@@ -478,7 +480,7 @@ def _extractor_grabado(estado: dict) -> Callable[[Any], Any]:
 
     def extraer(entrada: Any) -> Any:
         try:
-            return grabadas[entrada.texto.strip()]
+            return OfertaExtraida.model_validate(grabadas[entrada.texto.strip()])
         except KeyError:
             raise ValueError("sin respuesta grabada para esta oferta (modo sin conexión)") from None
 
@@ -501,7 +503,7 @@ def crear_nodo_mercado_grafo(
 
     def mercado(estado: dict) -> dict:
         previas = {_campo(o, "id") for o in estado.get("ofertas") or []}
-        extractor = _extractor_grabado(estado) if grabado else (extraer or extractor_gemini)
+        extractor = _extractor_grabado(estado) if grabado else (extraer or extractor_claude)
         nodo = crear_nodo_mercado(extractor, taxonomia if taxonomia is not None else cargar_taxonomia_grafo())
         cambios = nodo(estado)
         return {**cambios, "ofertas_nuevas": [o.id for o in cambios["ofertas"] if o.id not in previas]}
@@ -955,6 +957,9 @@ def main(argv: list[str] | None = None, leer: Callable[[str], str] = input, escr
         help="grabado: respuestas guardadas en el caso, sin red (por defecto); gemini: GOOGLE_API_KEY en .env",
     )
     args = parser.parse_args(argv)
+    # Con la salida redirigida en Windows (cp1252) no existen ⏸, ⚠ ni →: se reemplazan en vez de cortar la demo.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")
 
     try:
         from dotenv import load_dotenv
