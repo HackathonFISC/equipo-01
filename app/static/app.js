@@ -335,7 +335,7 @@ function renderizarMetricasImpacto() {
     const numero = Number(valor);
     return valor == null || !Number.isFinite(numero)
       ? "—"
-      : `${numero.toLocaleString("es-PA", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} %`;
+      : `${numero.toLocaleString("es-ES", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} %`;
   };
   const descTraslado = m.total_ofertas_descartadas_traslado_pasaje ?? op.pares_descartados_con_motivo ?? 0;
   const habsEvidencia = m.total_habilidades_informales_con_evidencia ?? 0;
