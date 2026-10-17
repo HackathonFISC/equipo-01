@@ -1444,3 +1444,58 @@ def test_respuesta_de_cada_accion_es_igual_al_estado_siguiente(tmp_path: Path, m
             assert (await client.get("/api/estado")).text == siguiente.text  # dos GET seguidos, iguales
 
     asyncio.run(_ejecutar())
+
+
+def test_joven_sin_opciones_por_cupo_no_se_explica_como_restricciones(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Con cupo de 1 candidato por vacante, Daniela cumple las restricciones de 2 vacantes y las llenan otros (#245)."""
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path / "outbox")
+
+    async def _ejecutar() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            assert (await client.post("/api/reset")).status_code == 200
+            base = (await client.get("/api/estado")).json()
+            assert base["sin_opcion"] == {}  # la demo de siempre (k=3): todos tienen opciones
+            viables_daniela = {
+                m["oferta_id"] for m in base["matches"] if m["perfil_id"] == "PERFIL-DANIELA"
+            }
+            assert viables_daniela == {"OF-VISTAALEGRE-02", "OF-CHORRERA-01"}
+
+            r = await client.post("/api/orientador/umbrales", json={"k": 1, "max_vacantes_por_perfil": 3})
+            assert r.status_code == 200
+            estado = r.json()
+            assert not [m for m in estado["matches"] if m["perfil_id"] == "PERFIL-DANIELA"]
+            sin = estado["sin_opcion"]["PERFIL-DANIELA"]
+            assert sin["causa"] == "cupo"
+            assert "cupo está lleno" in sin["titulo"] and "restricciones" in sin["titulo"]
+            assert "1 candidato por plaza" in sin["texto"]
+            assert {o["oferta_id"] for o in sin["ofertas"]} == viables_daniela
+            # Los que sí tienen opción no llevan explicación.
+            assert set(estado["sin_opcion"]) == {"PERFIL-DANIELA"}
+
+    asyncio.run(_ejecutar())
+
+
+def test_joven_que_no_cumple_ninguna_oferta_sigue_diciendo_restricciones() -> None:
+    estado = obtener_datos_iniciales_demo()
+    # Presupuesto de pasaje y salario imposibles: ninguna vacante es viable para Daniela.
+    for p in estado["perfiles"]:
+        if p["id"] == "PERFIL-DANIELA":
+            p["presupuesto_pasaje_diario"] = 0.0
+            p["salario_minimo"] = 50000.0
+    from app.server import recalcular_pipeline_tablero
+
+    estado = recalcular_pipeline_tablero(estado, registrar_trazas=False)
+    sin = estado["sin_opcion"]["PERFIL-DANIELA"]
+    assert sin["causa"] == "restricciones" and sin["ofertas"] == []
+    assert sin["titulo"] == "Ninguna oferta cumple sus restricciones"
+    assert "Ley 11" in sin["texto"] and "salario" in sin["texto"]
+
+
+def test_tarjeta_usa_la_explicacion_que_manda_el_servidor() -> None:
+    js = (Path(__file__).resolve().parents[1] / "app" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "estadoActual.sin_opcion?.[perfil.id]" in js and "sin?.titulo" in js and "sin?.texto" in js

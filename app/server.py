@@ -824,6 +824,78 @@ def _compilar_grafo_tablero(
     return grafo, cfg_grafo
 
 
+def _explicar_jovenes_sin_opcion(
+    estado: dict[str, Any],
+    modelos_ofertas: list[Oferta],
+    matches_ui: list[dict[str, Any]],
+    descartados_map: dict[tuple[str, str], dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Por qué cada joven sin opciones en la lista corta no tiene ninguna (#245).
+
+    El tablero decía siempre «Ninguna oferta cumple sus restricciones», también cuando las vacantes que sí las
+    cumplen ya llenaron su cupo. Aquí se distingue con lo que el tablero ya tiene, sin tocar el solver: una
+    oferta es viable para el joven si no está entre sus descartes (traslado, pasaje, salario, horario, habilidades
+    o Ley 11) ni excluida por el orientador o la empresa. Si hay vacantes viables y todas tienen ya su cupo (k por
+    plaza) lleno, la causa es el cupo; si no hay ninguna viable, son las restricciones.
+    """
+    k = ConfigSolver(**dict(estado.get("config_solver") or {})).max_candidatos_por_vacante
+    plazas = {o.id: o.plazas for o in modelos_ofertas}
+    asignados: dict[str, int] = {}
+    for m in matches_ui:
+        asignados[m["oferta_id"]] = asignados.get(m["oferta_id"], 0) + 1
+    con_opcion = {m["perfil_id"] for m in matches_ui}
+    excluidos = {(e.get("perfil_id"), e.get("oferta_id")) for e in estado.get("excluidos") or []}
+    ofertas = estado.get("ofertas") or []
+
+    explicaciones: dict[str, dict[str, Any]] = {}
+    for perfil in estado.get("perfiles") or []:
+        pid = perfil["id"]
+        if pid in con_opcion:
+            continue
+        if not ofertas:
+            explicaciones[pid] = {
+                "causa": "sin_ofertas",
+                "titulo": "No hay ofertas cargadas",
+                "texto": "Carga una oferta para calcular su lista corta.",
+                "ofertas": [],
+            }
+            continue
+        viables = [
+            o for o in ofertas
+            if not o.get("bloqueada") and (pid, o["id"]) not in descartados_map and (pid, o["id"]) not in excluidos
+        ]
+        if not viables:
+            explicaciones[pid] = {
+                "causa": "restricciones",
+                "titulo": "Ninguna oferta cumple sus restricciones",
+                "texto": "Traslado, pasaje, salario, horario, habilidades o la Ley 11 dejan fuera todas las vacantes.",
+                "ofertas": [],
+            }
+            continue
+        llenas = [o for o in viables if asignados.get(o["id"], 0) >= k * plazas.get(o["id"], 1)]
+        resumen = [{"oferta_id": o["id"], "puesto": o.get("puesto", o["id"]), "empresa": o.get("empresa", "")} for o in viables]
+        nombres = "; ".join(f"{o['puesto']} ({o['empresa']})" if o["empresa"] else o["puesto"] for o in resumen)
+        cuantas = f"{len(viables)} vacante{'s' if len(viables) != 1 else ''}"
+        if len(llenas) == len(viables):
+            explicaciones[pid] = {
+                "causa": "cupo",
+                "titulo": f"Cumple las restricciones de {cuantas}, pero su cupo está lleno",
+                "texto": (
+                    f"Cada vacante admite {k} candidato{'s' if k != 1 else ''} por plaza y ya los ocupan otros "
+                    f"jóvenes: {nombres}."
+                ),
+                "ofertas": resumen,
+            }
+        else:
+            explicaciones[pid] = {
+                "causa": "sin_asignar",
+                "titulo": f"Cumple las restricciones de {cuantas}, pero el solver no le asignó ninguna",
+                "texto": f"Vacantes que cumple: {nombres}. El desglose del solver tiene el detalle.",
+                "ofertas": resumen,
+            }
+    return explicaciones
+
+
 def recalcular_pipeline_tablero(
     estado: dict[str, Any],
     *,
@@ -958,6 +1030,7 @@ def recalcular_pipeline_tablero(
 
     estado["matches"] = matches_ui
     estado["descartados"] = list(descartados_map.values())
+    estado["sin_opcion"] = _explicar_jovenes_sin_opcion(estado, modelos_ofertas, matches_ui, descartados_map)
     estado["auditoria"] = salida_grafo.get("auditoria") or {}
 
     # Cobertura por turnos (#165): solo para ofertas activas sin candidato individual de turno completo
