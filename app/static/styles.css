@@ -2219,6 +2219,51 @@ mark.m-alerta {
   color: var(--text);
 }
 
+.banner--info {
+  background: var(--info-soft);
+  color: var(--info);
+  border: 1px solid color-mix(in srgb, var(--info) 30%, transparent);
+}
+
+.banner--info strong {
+  display: block;
+}
+
+.banner--info div {
+  color: var(--text);
+}
+
+.consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s, 6px);
+  font-size: 0.84rem;
+  cursor: pointer;
+}
+
+.consent input {
+  margin-top: 0.2rem;
+}
+
+.hitl__botones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.avisos__lista {
+  margin: 0.25rem 0 0;
+  padding-left: 1.1rem;
+}
+
+.avisos:empty {
+  display: none;
+}
+
 .persona:focus {
   outline: none;
   box-shadow: var(--ring);
