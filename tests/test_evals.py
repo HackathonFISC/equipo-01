@@ -33,7 +33,8 @@ CONTEO_ESPERADO = {
 
 @pytest.fixture(autouse=True)
 def _entorno_sin_claves(monkeypatch):
-    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    for nombre in ("GOOGLE_API_KEY", "ANTHROPIC_API_KEY", "LLM_MODO", "LLM_DIR_GRABACIONES", "LLM_PROVEEDOR"):
+        monkeypatch.delenv(nombre, raising=False)
     monkeypatch.setenv("LANGSMITH_TRACING", "false")
 
 
@@ -301,17 +302,86 @@ def test_llm_tres_corridas_y_tasa(casos):
 
     sin_llm = run.correr(chico, ejecutores={"extraccion_ofertas": extractor}, usar_llm=False)
     assert [r.estado for r in sin_llm] == ["omitido"]
-    assert "GOOGLE_API_KEY" in sin_llm[0].detalle
+    assert "--sin-llm" in sin_llm[0].detalle
     assert len(llamadas) == 3  # omitido no llama al ejecutor
     assert ext01["esperado"]["salario_mensual"] == 520
 
 
-def test_usar_llm_por_defecto_depende_de_la_clave(casos, monkeypatch):
+def test_por_defecto_los_casos_con_llm_se_ejecutan_sin_mirar_claves(casos):
     chico = _solo(casos, "EXT-01")
-    ejecutores = {"extraccion_ofertas": _devuelve_esperado}
-    assert run.correr(chico, ejecutores=ejecutores)[0].estado == "omitido"
-    monkeypatch.setenv("GOOGLE_API_KEY", "clave-falsa-de-prueba")
-    assert run.correr(chico, ejecutores=ejecutores)[0].estado == "ok"
+    resultado = run.correr(chico, ejecutores={"extraccion_ofertas": _devuelve_esperado})[0]
+    assert (resultado.estado, resultado.corridas) == ("ok", 3)
+
+
+@pytest.mark.parametrize(("causa", "motivo"), [("grabacion_faltante", "sin grabación"), ("sin_clave", "sin clave del LLM")])
+def test_sin_respuesta_del_llm_el_caso_queda_omitido_y_no_fallido(casos, causa, motivo):
+    from puente.llm import ErrorLLM
+
+    llamadas = []
+
+    def sin_respuesta(caso):
+        llamadas.append(caso["id"])
+        raise ErrorLLM("no hubo respuesta del modelo", causa=causa)
+
+    resultado = run.correr(_solo(casos, "PER-01"), ejecutores={"perfil_sin_cv": sin_respuesta})[0]
+    assert (resultado.estado, resultado.corridas, resultado.aciertos) == ("omitido", 0, 0)
+    assert resultado.detalle == f"omitido ({motivo})"
+    assert llamadas == ["PER-01"]  # no insiste: las otras corridas tampoco tendrían respuesta
+
+
+def test_otro_error_del_llm_sigue_siendo_fallo(casos):
+    from puente.llm import ErrorLLM
+
+    def rechazo(caso):
+        raise ErrorLLM("el modelo se negó", causa="refusal")
+
+    resultado = run.correr(_solo(casos, "PER-01"), ejecutores={"perfil_sin_cv": rechazo}, repeticiones=1)[0]
+    assert resultado.estado == "fallo" and "ErrorLLM" in resultado.detalle
+
+
+def test_sin_respuesta_en_categoria_sin_llm_es_fallo(casos):
+    from puente.llm import ErrorLLM
+
+    def raro(caso):
+        raise ErrorLLM("no debería llamar al LLM", causa="grabacion_faltante")
+
+    resultado = run.correr(_solo(casos, "DIS-01"), ejecutores={"requisitos_discriminatorios": raro})[0]
+    assert resultado.estado == "fallo"  # discriminación no usa LLM: si lo pide, es un error del agente
+
+
+def test_extraccion_sin_grabacion_queda_omitida(casos):
+    from puente.llm import ErrorLLM
+
+    def sin_grabacion(entrada):
+        raise ErrorLLM("falta la grabación", causa="grabacion_faltante")
+
+    ejecutor = run.ejecutores_por_defecto(casos["taxonomia"], extraer=sin_grabacion)["extraccion_ofertas"]
+    resultado = run.correr(_solo(casos, "EXT-01"), ejecutores={"extraccion_ofertas": ejecutor})[0]
+    assert (resultado.estado, resultado.detalle) == ("omitido", "omitido (sin grabación)")
+
+
+def test_main_reproduce_grabaciones_y_omite_las_que_faltan(casos, tmp_path, monkeypatch, capsys):
+    vacio = tmp_path / "grabaciones"
+    vacio.mkdir()
+    monkeypatch.setenv("LLM_DIR_GRABACIONES", str(vacio))
+    salida = tmp_path / "r.md"
+    assert run.main(["--salida", str(salida), "--repeticiones", "1"]) == 0
+    texto = salida.read_text(encoding="utf-8")
+    con_llm = [c["id"] for c in casos["casos"] if casos["categorias"][c["categoria"]]["usa_llm"]]
+    for caso_id in con_llm:
+        assert re.search(rf"\| {caso_id} \| \w+ \| omitido \| 0/0 \| omitido \(sin grabación\) \|", texto), caso_id
+    assert "modo reproducir" in texto
+    assert f"{len(con_llm)} casos con LLM omitidos (sin grabación)" in capsys.readouterr().out
+    assert "LLM_MODO" not in os.environ  # el valor por defecto solo vale durante la corrida
+    assert os.environ["LLM_DIR_GRABACIONES"] == str(vacio)
+
+
+def test_entorno_llm_respeta_lo_que_ya_esta_definido(monkeypatch):
+    monkeypatch.setenv("LLM_MODO", "grabar")
+    with run._entorno_llm():
+        assert os.environ["LLM_MODO"] == "grabar"
+        assert os.environ["LLM_DIR_GRABACIONES"] == str(run.DIR_GRABACIONES)
+    assert os.environ["LLM_MODO"] == "grabar" and "LLM_DIR_GRABACIONES" not in os.environ
 
 
 def test_categorias_sin_llm_corren_una_sola_vez(casos):
@@ -541,7 +611,7 @@ def test_escribir_resultados_con_fecha_de_panama(tmp_path, casos):
 def test_aviso_dice_que_no_se_midio_todo(casos):
     resultados = run.correr(casos, ejecutores={}, usar_llm=False)
     aviso = run._aviso_de_cobertura(resultados)
-    assert "no mide todo el sistema" in aviso and "GOOGLE_API_KEY" in aviso
+    assert "no mide todo el sistema" in aviso and "LLM_MODO=grabar" in aviso and "--sin-llm" in aviso
 
 
 # ---------------------------------------------------------------------------- ejecutores por defecto (con dependencias dobles)
@@ -697,7 +767,9 @@ def test_extraccion_acepta_la_salida_en_dict_y_detecta_un_campo_mal_extraido(cas
 
 
 def test_extraccion_sin_oferta_valida_es_fallo_con_el_motivo(casos):
-    extraer = lambda entrada: _oferta_extraida(salario_mensual=None)  # noqa: E731
+    # Con el contrato v2 (#42) casi todo es opcional (salario_mensual=None ya es válido); una lista de
+    # habilidades que no es lista sigue siendo una salida inválida del extractor.
+    extraer = lambda entrada: {**_oferta_extraida().model_dump(), "habilidades": "no es una lista"}  # noqa: E731
     ejecutor = run.ejecutores_por_defecto(casos["taxonomia"], extraer=extraer)["extraccion_ofertas"]
     resultados = run.correr(_solo(casos, "EXT-01"), ejecutores={"extraccion_ofertas": ejecutor}, usar_llm=True, repeticiones=1)
     assert resultados[0].estado == "fallo"

@@ -5,7 +5,9 @@ esperado (escrito antes de correr), imprime una tabla por categoría con su mét
 evals/resultados.md junto con el registro de fallos.
 
 - Los casos de categorías con LLM (extracción de ofertas y perfil sin CV) se corren 3 veces y se reporta la
-  tasa de acierto. Sin GOOGLE_API_KEY esos casos quedan "omitido".
+  tasa de acierto. El LLM es el de `puente.llm` (#45). Por defecto el runner usa LLM_MODO=reproducir con las
+  grabaciones de evals/grabaciones, así que corre sin red ni clave. Si falta la grabación de un caso (o la
+  clave, en modo vivo o grabar), el caso queda "omitido" con el motivo, no "fallo".
 - Cada categoría se mide con un adaptador `_ejecutar_*` escrito contra la API real del agente (#4, #5, #6, #8
   y #9). Si el módulo o la función todavía no está fusionado, el caso queda "pendiente (#N sin fusionar)" y
   no rompe el runner. Una salida con forma inesperada es un error de contrato (TypeError), no un fallo del caso.
@@ -49,7 +51,7 @@ DISCRIMINACION_BLOQUEADA = ("puente.rules.discriminacion", "esta_bloqueada", 5) 
 TAXONOMIA_CARGAR = ("puente.rules.taxonomia", "cargar_taxonomia", 5)  # () -> {skill_id: {...}}
 TAXONOMIA_NORMALIZAR = ("puente.rules.taxonomia", "normalizar_habilidad", 5)  # (texto, taxonomia) -> skill_id | None
 PERFIL_CONSTRUIR = ("puente.agents.perfil", "construir_perfil", 6)  # (entrada, *, taxonomia, normalizar, llm) -> (Perfil, Decision)
-PERFIL_LLM = ("puente.agents.perfil", "llm_gemini", 6)  # (prompt) -> str: el LLM real cuando no se inyecta uno
+PERFIL_LLM = ("puente.agents.perfil", "llm_puente", 6)  # (prompt) -> PerfilExtraido: el LLM real (puente.llm)
 GUARDRAILS_EVALUAR = ("puente.guardrails", "evaluar_entrada", 9)  # (entrada) -> list[ResultadoGuardrail]
 SOLVER_ASIGNAR = ("puente.solver.asignacion", "asignar", 4)
 AUDITOR_AUDITAR = ("puente.agents.auditor", "auditar_lista_corta", 8)
@@ -59,6 +61,12 @@ ARTICULO_POR_REGLA = {"edad": "art. 2", "sexo": "art. 1"}
 ALERTA_POR_REGLA = {"buena_presencia": "presencia", "foto": "foto", "estado_civil": "estado_civil"}
 
 ESTADOS = ("ok", "fallo", "pendiente", "omitido")
+
+# LLM de los evals: puente.llm en modo reproducir, con las grabaciones versionadas junto a los casos (no en data/).
+DIR_GRABACIONES = Path(__file__).with_name("grabaciones")
+MODO_LLM_POR_DEFECTO = "reproducir"
+# Causas de puente.llm.ErrorLLM que significan "no se pudo consultar al LLM", no "el agente se equivocó".
+MOTIVO_SIN_LLM = {"grabacion_faltante": "sin grabación", "sin_clave": "sin clave del LLM"}
 CAMPOS_EXTRACCION = ("puesto", "empresa", "corregimiento", "salario_mensual", "habilidades")
 MINUTOS_MAXIMOS_TRASLADO = 60
 PORCENTAJE_MAXIMO_PASAJE = 0.15
@@ -74,6 +82,28 @@ class DependenciaPendiente(Exception):
     def __init__(self, issue: int, mensaje: str = "") -> None:
         self.issue = issue
         super().__init__(mensaje or f"#{issue} sin fusionar")
+
+
+class SinLLM(Exception):
+    """El caso necesita al LLM y no hubo respuesta: falta la grabación o la clave. El caso queda omitido."""
+
+    def __init__(self, motivo: str) -> None:
+        self.motivo = motivo
+        super().__init__(motivo)
+
+
+def _motivo_sin_llm(error: BaseException | None) -> str | None:
+    """Si en la cadena de causas hay un ErrorLLM por grabación o clave faltante, devuelve el motivo."""
+    vistos: set[int] = set()
+    while error is not None and id(error) not in vistos:
+        vistos.add(id(error))
+        if isinstance(error, SinLLM):
+            return error.motivo
+        motivo = MOTIVO_SIN_LLM.get(str(getattr(error, "causa", "") or ""))
+        if motivo:
+            return motivo
+        error = error.__cause__ or error.__context__
+    return None
 
 
 @dataclass
@@ -529,7 +559,9 @@ def _lista(valor: Any) -> list:
 def _ejecutar_extraccion(caso: dict, *, taxonomia: dict | None = None, extraer: Callable[..., Any] | None = None) -> dict:
     """#5: procesar_ofertas([texto]) -> Resultado con .ofertas; se mide la primera Oferta.
 
-    Sin `extraer` usa el extractor real (Gemini); sin `taxonomia`, la de data/taxonomia.csv.
+    Sin `extraer` usa el extractor real (puente.llm); sin `taxonomia`, la de data/taxonomia.csv. Mercado atrapa
+    los errores del extractor y los deja como texto en `errores` con la causa entre paréntesis; si la causa es una
+    grabación o una clave faltante, el caso no se pudo medir (SinLLM), no falló.
     """
     procesar = _resolver(MERCADO_PROCESAR)
     argumentos: dict[str, Any] = {}
@@ -540,8 +572,11 @@ def _ejecutar_extraccion(caso: dict, *, taxonomia: dict | None = None, extraer: 
     resultado = _a_dict(procesar([caso["entrada"]["texto"]], **argumentos))
     ofertas = _lista(resultado.get("ofertas"))
     if not ofertas:
-        errores = "; ".join(str(e) for e in _planos(resultado.get("errores"))) or "sin detalle"
-        raise ValueError(f"mercado no devolvió ninguna oferta ({errores})")
+        errores = [str(e) for e in _planos(resultado.get("errores"))]
+        for causa, motivo in MOTIVO_SIN_LLM.items():
+            if any(f"({causa})" in error for error in errores):
+                raise SinLLM(motivo)
+        raise ValueError(f"mercado no devolvió ninguna oferta ({'; '.join(errores) or 'sin detalle'})")
     oferta = _a_dict(ofertas[0])
     return {campo: oferta.get(campo) for campo in CAMPOS_EXTRACCION}
 
@@ -570,7 +605,8 @@ def _ejecutar_perfil(caso: dict, *, taxonomia: dict | None = None, llm: Callable
 
     La entrevista entra como `respuestas` (hasta 5, en el orden de PREGUNTAS_ENTREVISTA) para que el agente corra
     en modo entrevista y no en modo CV; `entrada.formulario` aporta los datos que el agente exige y que no salen
-    del texto (edad, corregimiento). Sin `llm` usa Gemini; sin `taxonomia`, la de data/taxonomia.csv.
+    del texto (edad, corregimiento). Sin `llm` usa puente.llm; sin `taxonomia`, la de data/taxonomia.csv.
+    Un ErrorLLM por grabación o clave faltante sube tal cual y `correr` lo marca como omitido.
 
     Devuelve además `prompt_llm`: lo que recibió el LLM (ya sin PII), para medir que no se filtren datos personales.
     """
@@ -664,7 +700,7 @@ def ejecutores_por_defecto(
 ) -> dict[str, Ejecutor]:
     """Un ejecutor por categoría. Resuelven sus dependencias al ejecutarse, no al importar este módulo.
 
-    `taxonomia` es la de casos.yaml (en línea); `extraer` y `llm` sustituyen al Gemini real (pruebas).
+    `taxonomia` es la de casos.yaml (en línea); `extraer` y `llm` sustituyen al LLM real de puente.llm (pruebas).
     """
     return {
         "extraccion_ofertas": functools.partial(_ejecutar_extraccion, taxonomia=taxonomia, extraer=extraer),
@@ -689,9 +725,12 @@ def correr(
     repeticiones: int = 3,
     usar_llm: bool | None = None,
 ) -> list[ResultadoCaso]:
-    """Ejecuta todos los casos. Las categorías con LLM se corren `repeticiones` veces; el resto, una."""
-    if usar_llm is None:
-        usar_llm = bool(os.getenv("GOOGLE_API_KEY"))
+    """Ejecuta todos los casos. Las categorías con LLM se corren `repeticiones` veces; el resto, una.
+
+    `usar_llm=False` (--sin-llm) omite las categorías con LLM sin llamar a su ejecutor. Si no, se ejecutan con
+    puente.llm, y un caso que no obtiene respuesta del LLM (grabación o clave faltante) queda "omitido".
+    """
+    usar_llm = True if usar_llm is None else usar_llm
     ejecutores = ejecutores_por_defecto(casos.get("taxonomia")) if ejecutores is None else ejecutores
     categorias = casos["categorias"]
     resultados: list[ResultadoCaso] = []
@@ -699,7 +738,7 @@ def correr(
         categoria = caso["categoria"]
         con_llm = bool(categorias[categoria]["usa_llm"])
         if con_llm and not usar_llm:
-            resultados.append(ResultadoCaso(caso["id"], categoria, "omitido", 0, 0, None, "omitido: sin GOOGLE_API_KEY"))
+            resultados.append(ResultadoCaso(caso["id"], categoria, "omitido", 0, 0, None, "omitido (--sin-llm)"))
             continue
         ejecutor = ejecutores.get(categoria)
         if ejecutor is None:
@@ -709,6 +748,7 @@ def correr(
         corridas = max(1, repeticiones) if con_llm else 1
         aciertos, ejecutadas, ultimo, errores = 0, 0, None, []
         pendiente: DependenciaPendiente | None = None
+        sin_llm: str | None = None
         for _ in range(corridas):
             try:
                 observado = ejecutor(caso)
@@ -718,6 +758,9 @@ def correr(
                 pendiente = error
                 break
             except Exception as error:  # cualquier otro error al ejecutar cuenta como fallo
+                sin_llm = _motivo_sin_llm(error) if con_llm else None
+                if sin_llm:
+                    break
                 ejecutadas += 1
                 errores.append(f"{type(error).__name__}: {error}")
                 continue
@@ -734,6 +777,8 @@ def correr(
         if pendiente is not None:
             detalle = f"pendiente ({pendiente})"
             resultados.append(ResultadoCaso(caso["id"], categoria, "pendiente", 0, 0, None, detalle))
+        elif sin_llm is not None:
+            resultados.append(ResultadoCaso(caso["id"], categoria, "omitido", 0, 0, None, f"omitido ({sin_llm})"))
         elif aciertos == ejecutadas:
             resultados.append(ResultadoCaso(caso["id"], categoria, "ok", aciertos, ejecutadas, ultimo, "cumple lo esperado"))
         else:
@@ -789,9 +834,10 @@ def _aviso_de_cobertura(resultados: list[ResultadoCaso]) -> str:
             f"({', '.join(issues) or 'sin ejecutor'})"
         )
     if conteo["omitido"]:
+        motivos = sorted({r.detalle.removeprefix("omitido").strip(" ()") for r in resultados if r.estado == "omitido"})
         partes.append(
-            f"{conteo['omitido']} casos con LLM omitidos por falta de GOOGLE_API_KEY "
-            "(no se miden hasta correr con la clave real)"
+            f"{conteo['omitido']} casos con LLM omitidos ({'; '.join(motivos)}); no se miden hasta grabar sus "
+            "respuestas con `LLM_MODO=grabar` y la clave del LLM (ver evals/grabaciones/README.md)"
         )
     return (
         "**Esta corrida no mide todo el sistema:** " + "; ".join(partes) + ". Una categoría sin medir no es una categoría aprobada."
@@ -842,6 +888,37 @@ def _nota_taxonomia(casos: dict) -> str:
     return "Taxonomía usada en esta corrida: `data/taxonomia.csv`."
 
 
+def _nota_llm() -> str:
+    """Qué LLM respondió en esta corrida, leído del entorno que usa puente.llm (sin leer ni mostrar claves)."""
+    modo = (os.getenv("LLM_MODO") or "vivo").strip().lower()
+    directorio = (os.getenv("LLM_DIR_GRABACIONES") or "").strip() or "data/grabaciones (por defecto de puente.llm)"
+    with contextlib.suppress(ValueError):
+        directorio = Path(directorio).resolve().relative_to(Path(__file__).resolve().parent.parent).as_posix()
+    if modo == "reproducir":
+        return f"LLM de esta corrida: `puente.llm` en modo reproducir, con las grabaciones de `{directorio}`."
+    return f"LLM de esta corrida: `puente.llm` en modo {modo} (llamadas reales al modelo)."
+
+
+@contextlib.contextmanager
+def _entorno_llm() -> Iterator[None]:
+    """Por defecto los evals reproducen grabaciones de evals/grabaciones; el entorno (o el .env) de quien corre manda."""
+    with contextlib.suppress(Exception):  # igual que puente.llm: .env sin pisar el entorno; si falta o es ilegible, se sigue
+        from dotenv import load_dotenv
+
+        load_dotenv(override=False)
+    previos = {nombre: os.environ.get(nombre) for nombre in ("LLM_MODO", "LLM_DIR_GRABACIONES")}
+    os.environ.setdefault("LLM_MODO", MODO_LLM_POR_DEFECTO)
+    os.environ.setdefault("LLM_DIR_GRABACIONES", str(DIR_GRABACIONES))
+    try:
+        yield
+    finally:
+        for nombre, valor in previos.items():
+            if valor is None:
+                os.environ.pop(nombre, None)
+            else:
+                os.environ[nombre] = valor
+
+
 def escribir_resultados(
     resultados: list[ResultadoCaso],
     casos: dict,
@@ -868,6 +945,8 @@ def escribir_resultados(
         "provisionales hasta que el equipo las confirme con el plan. Todos los datos de los casos son sintéticos.",
         "",
         _nota_taxonomia(casos),
+        "",
+        _nota_llm(),
         "",
         "## Tabla por categoría",
         "",
@@ -951,11 +1030,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Error en los casos: {error}", file=sys.stderr)
         return 2
 
-    resultados = correr(casos, repeticiones=argumentos.repeticiones, usar_llm=False if argumentos.sin_llm else None)
-    print(tabla(resultados, casos))
-    print()
-    print(_aviso_de_cobertura(resultados))
-    ruta = escribir_resultados(resultados, casos, argumentos.salida)
+    with _entorno_llm():
+        resultados = correr(casos, repeticiones=argumentos.repeticiones, usar_llm=not argumentos.sin_llm)
+        print(tabla(resultados, casos))
+        print()
+        print(_aviso_de_cobertura(resultados))
+        ruta = escribir_resultados(resultados, casos, argumentos.salida)
     print(f"\nResultados guardados en {ruta}")
     if argumentos.abrir_issues:
         for url in abrir_issues_de_fallos(resultados, casos):
