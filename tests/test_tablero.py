@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+import time
 
 import httpx
 import pytest
@@ -188,7 +189,7 @@ def test_acciones_orientador_consentimiento_sqlite_editar_quitar_rechazar_y_desb
     assert post["estado"] == "enviado"
     assert len(estado["consentimientos"]) == 1
     assert estado["consentimientos"][0]["medio"] == "orientador"
-    assert len(post["archivos_generados"]) == 3
+    assert len(post["archivos_generados"]) == 4  # CV, carta (#212), .ics y mensaje
     for nombre_arch in post["archivos_generados"]:
         ruta_arch = (tmp_path / nombre_arch).resolve()
         assert ruta_arch.is_relative_to(tmp_path.resolve())
@@ -656,7 +657,6 @@ def test_issue_122_persistencia_entre_reinicios_y_reset_con_puente_db(
     finally:
         conn.close()
 
-
 def test_trazas_honestas_el_tablero_no_firma_por_agentes_que_no_corrieron(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -997,6 +997,165 @@ def test_issue_168_roles_umbrales_tocumen_y_panel_operacion(
     asyncio.run(_ejecutar())
 
 
+def test_issue_161_vercel_json_y_modo_demo_publica(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issue #161: configuración de despliegue en Vercel y aviso de demo pública de solo lectura."""
+    import json
+    import app.server as srv
+
+    ruta_vercel = Path(__file__).resolve().parents[1] / "vercel.json"
+    assert ruta_vercel.is_file()
+    cfg_vercel = json.loads(ruta_vercel.read_text(encoding="utf-8"))
+    assert cfg_vercel["env"]["PUENTE_DEMO_PUBLICA"] == "1"
+    assert cfg_vercel["env"]["LLM_MODO"] == "reproducir"
+    assert any(b.get("src") == "app/server.py" for b in cfg_vercel.get("builds", []))
+
+    monkeypatch.setenv("PUENTE_DEMO_PUBLICA", "1")
+    assert srv.es_modo_demo_publica() is True
+    estado_pub = srv.serializar_estado_publico(srv.ESTADO_GLOBAL)
+    # Verificar .vercelignore
+    ruta_ignore = Path(__file__).resolve().parents[1] / ".vercelignore"
+    assert ruta_ignore.is_file()
+    txt_ignore = ruta_ignore.read_text(encoding="utf-8")
+    assert ".venv" in txt_ignore
+    assert "tests" in txt_ignore
+
+    # En modo demo pública, POST/mutaciones devuelven 403 (read-only)
+    from httpx import ASGITransport, AsyncClient
+    import asyncio
+
+    async def _test_readonly():
+        async with AsyncClient(transport=ASGITransport(app=srv.app), base_url="http://test") as client:
+            # GET responde 200
+            res_get = await client.get("/api/estado")
+            assert res_get.status_code == 200
+
+            # POST devuelve 403
+            res_post = await client.post("/api/reset", json={})
+            assert res_post.status_code == 403
+            assert res_post.json().get("modo_demo_publica") is True
+
+    asyncio.run(_test_readonly())
+
+
+def test_issue_170_ingesta_multicanal_archivos_guardrails_y_pii(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #170: subida de ofertas y CV por archivo (PDF y foto) con validación de guardrails y sin PII."""
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path / "outbox")
+
+    ruta_volante = Path(__file__).resolve().parent / "fixtures" / "volante_sintetico.jpg"
+    ruta_cv = Path(__file__).resolve().parent / "fixtures" / "cv_sintetico.pdf"
+    assert ruta_volante.is_file(), "Debe existir tests/fixtures/volante_sintetico.jpg"
+    assert ruta_cv.is_file(), "Debe existir tests/fixtures/cv_sintetico.pdf"
+
+    async def _ejecutar() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            await client.post("/api/reset")
+
+            # 1. Subir oferta volante_sintetico.jpg -> llega bloqueada por Ley 11 con alerta de edad
+            datos_volante = ruta_volante.read_bytes()
+            r_of = await client.post(
+                "/api/ofertas/archivo",
+                files={"archivo": ("volante.jpg", datos_volante, "image/jpeg")},
+            )
+            assert r_of.status_code == 200, r_of.text
+            payload_of = r_of.json()
+            assert "subida" in payload_of
+            sub_of = payload_of["subida"]["oferta"]
+            assert sub_of["bloqueada"] is True
+            assert any("18 a 25" in str(a) for a in sub_of["alertas"])
+
+            # 2. Subir CV cv_sintetico.pdf -> produce perfil con evidencias y cero cédula en decisiones
+            datos_cv = ruta_cv.read_bytes()
+            r_cv = await client.post(
+                "/api/perfiles/archivo",
+                files={"archivo": ("mi_cv.pdf", datos_cv, "application/pdf")},
+                data={
+                    "nombre": "Daniela Pérez",
+                    "edad": "21",
+                    "corregimiento": "La Chorrera",
+                    "salario_minimo": "600",
+                    "presupuesto_pasaje_diario": "3.0",
+                },
+            )
+            assert r_cv.status_code == 200, r_cv.text
+            payload_cv = r_cv.json()
+            assert "subida" in payload_cv
+            sub_cv = payload_cv["subida"]["perfil"]
+            assert sub_cv["edad"] == 21
+            assert sub_cv["corregimiento"] == "La Chorrera"
+            habilidades_ids = {h["skill_id"] for h in sub_cv["habilidades"]}
+            assert {"atencion_cliente", "manejo_caja", "inventario"} <= habilidades_ids
+            # Verificar ausencia de cédula y teléfono en decisiones y checkpoint
+            decisiones_db = payload_cv.get("decisiones_db", [])
+            for d in decisiones_db:
+                assert "8-999-1111" not in str(d)
+                assert "6999-1111" not in str(d)
+
+            # 3. Rechazo de .exe renombrado a .pdf (firma falsa) -> 422 y Decision de guardrails
+            exe_falso = b"MZ\x90\x00\x03\x00\x00\x00" + b"\x00" * 100
+            r_exe = await client.post(
+                "/api/ofertas/archivo",
+                files={"archivo": ("malware.pdf", exe_falso, "application/pdf")},
+            )
+            assert r_exe.status_code == 422
+            assert "no corresponde a un pdf" in r_exe.text
+
+            # 4. Rechazo de archivo de audio .ogg -> mensaje de MENSAJE_AUDIO
+            audio_falso = b"OggS\x00\x02\x00\x00" + b"\x00" * 50
+            r_audio = await client.post(
+                "/api/perfiles/archivo",
+                files={"archivo": ("nota_voz.ogg", audio_falso, "audio/ogg")},
+                data={"edad": "20", "corregimiento": "La Chorrera"},
+            )
+            assert r_audio.status_code == 422
+            assert "notas de voz" in r_audio.text
+
+            # 5. Rechazo de archivo > 5 MB declarado -> 413
+            r_grande = await client.post(
+                "/api/ofertas/archivo",
+                files={"archivo": ("enorme.pdf", b"%PDF-1.4" + b"A" * 10, "application/pdf")},
+                headers={"Content-Length": str(50 * 1024 * 1024)},
+            )
+            assert r_grande.status_code == 413
+
+            # 6. Rechazo de PDF dañado o no legible -> 422
+            pdf_corrupto = b"%PDF-1.4\n" + b"contenido completamente corrupto sin xref ni trailer" * 10
+            r_corrupto = await client.post(
+                "/api/perfiles/archivo",
+                files={"archivo": ("corrupto.pdf", pdf_corrupto, "application/pdf")},
+                data={"edad": "21", "corregimiento": "La Chorrera"},
+            )
+            assert r_corrupto.status_code == 422
+            assert "dañado" in r_corrupto.text
+
+            # 7. Falta de encabezado Content-Length -> 411
+            r_sin_cl = await client.post(
+                "/api/perfiles/archivo",
+                content=b"--boundary\r\nContent-Disposition: form-data; name=\"archivo\"; filename=\"test.pdf\"\r\nContent-Type: application/pdf\r\n\r\n%PDF-1.4\r\n--boundary--\r\n",
+                headers={
+                    "Content-Type": "multipart/form-data; boundary=boundary",
+                    "Content-Length": "",
+                },
+            )
+            assert r_sin_cl.status_code == 411
+            assert "Content-Length" in r_sin_cl.text
+
+            # 8. Límite de subidas por minuto antes de parsear cuerpo -> 429
+            monkeypatch.setattr(srv, "LIMITE_PERFILES_POR_MINUTO", 0)
+            r_limite = await client.post(
+                "/api/ofertas/archivo",
+                files={"archivo": ("volante2.jpg", datos_volante, "image/jpeg")},
+            )
+            assert r_limite.status_code == 429
+            assert "Muchas subidas seguidas" in r_limite.text
+
+    asyncio.run(_ejecutar())
+
+
 def test_cargar_desde_data_lee_el_archivo_y_rotula_lo_sintetico(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """«Cargar desde data/» lee el archivo elegido; lo escrito en el código se rotula como ejemplo sintético (#188)."""
     import app.server as srv
@@ -1093,5 +1252,74 @@ def test_editar_no_guarda_pii_de_la_nota_ni_del_mensaje(tmp_path: Path, monkeypa
         assert "Buena actitud" in guardado
         for dato in crudos:
             assert dato not in guardado, dato
+
+    asyncio.run(_ejecutar())
+
+
+def test_cargar_desde_data_no_deja_pasar_pii_de_los_archivos(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Un perfil o un anuncio de data/ con cédula y teléfono entra limpio al tablero y a la base (#188)."""
+    import json as _json
+
+    import app.server as srv
+    from puente.agents import mercado
+    from puente.schemas import Oferta
+
+    datos = tmp_path / "data"
+    (datos / "perfiles").mkdir(parents=True)
+    (datos / "ofertas").mkdir()
+    perfil = {
+        "id": "P99", "nombre": "Ana Ficticia", "edad": 22, "corregimiento": "Arraiján",
+        "horario_libre": [{"dias": ["lunes", "martes"], "hora_inicio": "08:00", "hora_fin": "17:00"}],
+        "salario_minimo": 500, "presupuesto_pasaje_diario": 3.0,
+        "experiencia_texto": "Mi cédula es 8-123-4567; vivo en Calle 5ta casa 12, Arraiján.",
+        # Lo que Perfil guarda son las evidencias (experiencia_texto se descarta al validar): ahí va la PII.
+        "habilidades": [{"skill_id": "atencion_cliente", "evidencia": (
+            "atiendo clientes; cédula 8-123-4567, llamen al 6123-4567; vivo en Calle 5ta casa 12, Arraiján"
+        )}],
+    }
+    (datos / "perfiles" / "con_pii.json").write_text(_json.dumps(perfil, ensure_ascii=False), encoding="utf-8")
+    (datos / "ofertas" / "ZZ01.txt").write_text(
+        "Puesto: Cajera. Interesados llamar al 6123-4567 (cédula del contacto 8-123-4567). "
+        "Entrevistas en Edificio Ficticio, piso 2.", encoding="utf-8"
+    )
+    monkeypatch.setattr(srv, "RUTA_DATA", datos)
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path / "outbox")
+
+    vistos: list[str] = []
+
+    def mercado_falso(entradas, **_):  # sin grabación para este texto: se mira qué le llega a Mercado
+        texto = entradas[0]["texto"]
+        vistos.append(texto)
+        oferta = Oferta(id="of-zz01", puesto="Cajera", empresa="Empresa de prueba", corregimiento="Arraiján",
+                        requisitos_texto=texto, fuente=entradas[0]["fuente"])
+        return mercado.Resultado(ofertas=[oferta], decisiones=[], errores=[])
+
+    monkeypatch.setattr(srv.mercado, "procesar_ofertas", mercado_falso)
+    crudos = ("8-123-4567", "6123-4567", "Calle 5ta")
+
+    async def _ejecutar() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            assert (await client.post("/api/reset")).status_code == 200
+            r = await client.post("/api/cargar-data", json={"tipo": "perfil", "item_id": "data/perfiles/con_pii.json"})
+            assert r.status_code == 200, r.text
+            r = await client.post("/api/cargar-data", json={"tipo": "oferta", "item_id": "data/ofertas/ZZ01.txt"})
+            assert r.status_code == 200, r.text
+            estado = (await client.get("/api/estado")).json()
+
+        publico = _json.dumps(estado, ensure_ascii=False)
+        assert [d for d in crudos if d in publico] == []
+        assert [d for d in crudos if any(d in t for t in vistos)] == []  # tampoco le llega a Mercado (ni al LLM)
+        cargado = next(p for p in estado["perfiles"] if p["id"] == "PERFIL-DATA-P99")
+        assert cargado["corregimiento"] == "Arraiján"
+        assert "[TELEFONO]" in cargado["habilidades"][0]["evidencia"]
+        assert "Edificio Ficticio" in vistos[0]  # la dirección de la empresa se queda
+
+        conn = db.conectar(srv.ESTADO_GLOBAL["_db_path"])
+        try:
+            guardado = " ".join(" ".join(str(c) for c in tuple(f)) for f in conn.execute("SELECT * FROM decisiones"))
+        finally:
+            conn.close()
+        assert [d for d in crudos if d in guardado] == []
 
     asyncio.run(_ejecutar())

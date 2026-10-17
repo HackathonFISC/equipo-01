@@ -23,6 +23,8 @@ from typing import Any, Literal
 from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Mount, Route
@@ -96,13 +98,44 @@ from puente.guardrails import EDAD_MAX, EDAD_MIN, evaluar_entrada, limpiar_entra
 from puente.rules.taxonomia import normalizar_habilidad
 from puente.schemas import DIAS_VALIDOS, EntradaPerfil
 
+def es_modo_demo_publica() -> bool:
+    """True cuando el servidor corre en Vercel (`VERCEL=1`) o con `PUENTE_DEMO_PUBLICA=1` (#161)."""
+    return bool(
+        os.getenv("VERCEL", "").strip() in ("1", "true", "True")
+        or os.getenv("PUENTE_DEMO_PUBLICA", "").strip() in ("1", "true", "True")
+    )
+
+
+if es_modo_demo_publica():
+    os.environ["LLM_MODO"] = "reproducir"
+
+
+class MiddlewareDemoPublicaReadOnly(BaseHTTPMiddleware):
+    """En modo demo pública (Vercel / PUENTE_DEMO_PUBLICA=1), bloquea mutaciones (POST, PUT, DELETE, PATCH) con 403 (#161)."""
+
+    async def dispatch(self, request: Request, call_next):
+        if es_modo_demo_publica() and request.method not in ("GET", "HEAD", "OPTIONS"):
+            return JSONResponse(
+                {
+                    "detail": "Modo demostración pública en Vercel: el servidor opera en solo lectura para preservar la demo del hackathon (#161).",
+                    "modo_demo_publica": True,
+                },
+                status_code=403,
+            )
+        return await call_next(request)
+
 from app import joven_fase2  # Vista del joven, fase 2 (#166): la lógica vive en app/joven_fase2.py
 
 RUTA_APP = Path(__file__).resolve().parent
 RUTA_STATIC = RUTA_APP / "static"
 RUTA_RAIZ = RUTA_APP.parent
 RUTA_DATA = RUTA_RAIZ / "data"
-RUTA_OUTBOX = RUTA_RAIZ / "outbox"
+RUTA_OUTBOX = (
+    Path(tempfile.gettempdir()) / "puente_outbox"
+    if es_modo_demo_publica()
+    else RUTA_RAIZ / "outbox"
+)
+# Después del condicional del #178: así, también en la demo pública, PUENTE_OUTBOX manda.
 _RUTA_OUTBOX_POR_DEFECTO = RUTA_OUTBOX
 
 
@@ -110,7 +143,7 @@ def _ruta_outbox() -> Path:
     """Carpeta del CV, el .ics y los mensajes: PUENTE_OUTBOX si está definida, como PUENTE_DB.
 
     Se lee en cada llamada. Si alguien fijó ``RUTA_OUTBOX`` a mano (las pruebas), manda esa;
-    sin ninguna de las dos, ``outbox/`` del repo.
+    sin ninguna de las dos, la de siempre (``outbox/`` del repo, o la temporal en la demo pública).
     """
     if RUTA_OUTBOX != _RUTA_OUTBOX_POR_DEFECTO:
         return RUTA_OUTBOX
@@ -255,6 +288,8 @@ class EventoEmpresaTableroRequest(BaseModel):
         if not PATRON_ID_SEGURO.fullmatch(limpio):
             raise ValueError(f"ID inválido '{valor}': solo se permiten caracteres [A-Za-z0-9_-]")
         return limpio
+
+
 def _slug_seguro(texto: str, prefijo: str = "ITEM") -> str:
     """Convierte un texto en un slug seguro [A-Z0-9-] sin caracteres especiales."""
     sin_tildes = texto.strip().upper().translate(str.maketrans("ÁÉÍÓÚÑ", "AEIOUN"))
@@ -2229,7 +2264,7 @@ def aprobar_cobertura_turnos(
         previos,
         ahora,
     )
-    RUTA_OUTBOX.mkdir(parents=True, exist_ok=True)
+    _ruta_outbox().mkdir(parents=True, exist_ok=True)
     conn = _conectar_db_estado(estado)
     try:
         res_post = postular(
@@ -2238,7 +2273,7 @@ def aprobar_cobertura_turnos(
             ofertas_map,
             aprobacion=aprobacion,
             conn=conn,
-            outbox=RUTA_OUTBOX,
+            outbox=_ruta_outbox(),
             consentimientos=consentimientos,
             mensaje_orientador=f"Propuesta de cobertura compartida por turnos ({seg_m['inicio']}-{seg_m['fin']} y {seg_t['inicio']}-{seg_t['fin']}) aprobada por {req.orientador}.",
         )
@@ -2556,7 +2591,8 @@ def _rechazo_guardrails(estado: dict[str, Any], datos: dict[str, Any]) -> str | 
 def _cargar_oferta_desde_archivo(estado: dict[str, Any], ruta: Path) -> dict[str, Any]:
     """Lee un anuncio de data/ofertas con el agente Mercado (puente.llm; en reproducir, las grabaciones de #139)."""
     rel = f"data/ofertas/{ruta.name}"
-    texto = ruta.read_text(encoding="utf-8")
+    # Sin cédula ni teléfono antes de Mercado y del tablero; la dirección de la empresa se queda (#95, #188).
+    texto = limpiar_entrada({"ofertas": ruta.read_text(encoding="utf-8")})["ofertas"]
     rechazo = _rechazo_guardrails(estado, {"texto": texto})
     if rechazo:
         raise ErrorValidacionTablero(rechazo)
@@ -2593,7 +2629,9 @@ def _cargar_perfil_desde_archivo(estado: dict[str, Any], ruta: Path) -> dict[str
     """Suma al tablero un perfil sintético de data/perfiles tal como está en el archivo (#188)."""
     rel = f"data/perfiles/{ruta.name}"
     try:
-        perfil = Perfil.model_validate(json.loads(ruta.read_text(encoding="utf-8")))
+        # Todo texto del archivo (nombre, evidencias) sin cédula, teléfono ni dirección exacta, como cualquier
+        # otra entrada; el corregimiento se conserva (#188).
+        perfil = Perfil.model_validate(limpiar_entrada(json.loads(ruta.read_text(encoding="utf-8"))))
     except ValueError as exc:
         raise ErrorValidacionTablero(f"{rel} no es un perfil válido: {exc}") from exc
     perfil = perfil.model_copy(update={"id": f"PERFIL-DATA-{perfil.id}"})
@@ -2616,7 +2654,6 @@ def _cargar_perfil_desde_archivo(estado: dict[str, Any], ruta: Path) -> dict[str
     )
     return recalcular_pipeline_tablero(estado, registrar_trazas=True)
 
-
 def serializar_estado_publico(estado: dict[str, Any]) -> dict[str, Any]:
     """Construye el JSON serializable del estado (excluyendo objetos internos de LangGraph)."""
     conteo_embudo = {est: 0 for est in ESTADOS_POSTULACION}
@@ -2632,11 +2669,18 @@ def serializar_estado_publico(estado: dict[str, Any]) -> dict[str, Any]:
         # `entradas_perfil` (#52) trae las respuestas en texto libre de cada joven: no sale.
         if not k.startswith("_") and k != "entradas_perfil"
     }
+    es_publica = es_modo_demo_publica()
     payload["conteo_embudo"] = conteo_embudo
     payload["catalogo_data"] = listar_catalogo_data()
     payload["decisiones_db"] = _leer_decisiones_db(estado)
     payload["metricas"] = _calcular_metricas_impacto(estado)
     payload["operacion"] = obtener_panel_operacion(estado)
+    payload["modo_demo_publica"] = es_publica
+    payload["aviso_demo_publica"] = (
+        "Demo pública de solo lectura (estado efímero): corre con LLM_MODO=reproducir sin claves y el estado se reinicia entre invocaciones."
+        if es_publica
+        else None
+    )
     return payload
 
 
@@ -3541,6 +3585,361 @@ async def endpoint_joven_ics(request: Request) -> FileResponse | JSONResponse:
     return FileResponse(ruta, media_type="text/calendar", filename=nombre)
 
 
+# --- Ingesta multicanal en el tablero (#170): oferta y CV por PDF o foto ---------------------
+# Un solo flujo para los dos: tamaño declarado antes de leer, `validar_archivo` (5 MB, tipo y firma
+# de bytes; audio con su mensaje), nombre de archivo generado por el servidor, carpeta temporal que
+# se borra al terminar y agentes reales (no los stubs del tablero). Cada rechazo deja su Decision.
+from starlette.datastructures import UploadFile
+
+from puente.agents.mercado import Resultado as ResultadoMercado
+from puente.agents.mercado import procesar_ofertas
+from puente.agents.perfil import extraer_texto_cv
+from puente.guardrails import EXTENSIONES_PERMITIDAS, MAX_BYTES_ARCHIVO, ResultadoGuardrail, validar_archivo
+
+try:
+    from pypdf.errors import PyPdfError
+except ImportError:  # pragma: no cover
+    class PyPdfError(Exception):
+        pass
+
+# El nombre entra en el prompt de Mercado y por tanto en la clave de la grabación (#45): fijo por
+# tipo, para que el mismo archivo dé la misma clave venga de donde venga (cámara, PDF, otro equipo).
+NOMBRE_SUBIDA_OFERTA = "oferta_subida"
+FUENTE_SUBIDA_OFERTA = "Subida en el tablero del orientador (foto o PDF)"
+MARGEN_MULTIPART = 64 * 1024  # campos y cabeceras del formulario además del archivo
+MIN_CARACTERES_CV = 20
+_envios_subida: dict[str, list[float]] = {}
+
+
+class ErrorSubida(Exception):
+    """Rechazo de una subida con su código HTTP y el mensaje que ve el orientador."""
+
+    def __init__(self, mensaje: str, status: int = 422) -> None:
+        super().__init__(mensaje)
+        self.status = status
+
+
+def _extension_declarada(nombre: str | None) -> str:
+    """Solo la extensión del nombre que manda el cliente; el resto (que puede traer PII) se descarta."""
+    sufijo = Path(str(nombre or "")).suffix.lower()
+    return sufijo if re.fullmatch(r"\.[a-z0-9]{1,5}", sufijo) else ""
+
+
+def _mensaje_rechazo(resultado: ResultadoGuardrail) -> str:
+    return resultado.respuesta or f"Archivo rechazado: {resultado.motivo}."
+
+
+def _subida_de_otro_sitio(request: Request) -> bool:
+    """Un multipart no dispara el preflight del navegador: misma defensa CSRF que `_leer_json_validado`."""
+    sitio = request.headers.get("sec-fetch-site")
+    origen = request.headers.get("origin")
+    return (sitio is not None and sitio == "cross-site") or (
+        sitio is None and bool(origen) and urlsplit(origen).netloc != request.headers.get("host", "")
+    )
+
+
+def _subida_dentro_del_limite(request: Request) -> bool:
+    ip = request.client.host if request.client else "desconocida"
+    ahora = time.monotonic()
+    recientes = [t for t in _envios_subida.get(ip, []) if ahora - t < 60]
+    dentro = len(recientes) < LIMITE_PERFILES_POR_MINUTO
+    if dentro:
+        recientes.append(ahora)
+    _envios_subida[ip] = recientes
+    return dentro
+
+
+async def leer_archivo_subido(request: Request, estado: dict[str, Any]) -> tuple[str, bytes, dict[str, str]]:
+    """(tipo `pdf|jpg|png`, bytes, campos de texto) de un multipart con el campo `archivo`.
+
+    El tamaño declarado se mira antes de leer el cuerpo: un archivo de 50 MB se rechaza sin cargarlo.
+    Lanza `ErrorSubida`; los rechazos de guardrails quedan como Decision en SQLite.
+    """
+    if _subida_de_otro_sitio(request):
+        raise ErrorSubida("Solicitud desde otro sitio rechazada", 403)
+    if not _subida_dentro_del_limite(request):
+        raise ErrorSubida("Muchas subidas seguidas. Espera un minuto y vuelve a intentarlo.", 429)
+    ctype = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if ctype != "multipart/form-data":
+        raise ErrorSubida("Sube el archivo como multipart/form-data en el campo «archivo».", 415)
+    declarado = request.headers.get("content-length", "")
+    if not declarado or not declarado.isdigit():
+        raise ErrorSubida("Falta el encabezado Content-Length.", 411)
+    if int(declarado) > MAX_BYTES_ARCHIVO + MARGEN_MULTIPART:
+        rechazo = validar_archivo("subida", int(declarado))
+        _registrar_decision_db(estado, rechazo.decision)
+        raise ErrorSubida(_mensaje_rechazo(rechazo), 413)
+    try:
+        formulario = await request.form(max_files=1, max_fields=12)
+    except Exception as exc:  # multipart mal formado o con más archivos de la cuenta
+        raise ErrorSubida("El formulario de subida no es válido.", 422) from exc
+    try:
+        archivo = formulario.get("archivo")
+        if not isinstance(archivo, UploadFile):
+            raise ErrorSubida("Falta el archivo en el campo «archivo».", 422)
+        contenido = await archivo.read(MAX_BYTES_ARCHIVO + 1)
+        extension = _extension_declarada(archivo.filename)
+        campos = {
+            k: str(v)[:200] for k, v in formulario.multi_items() if k != "archivo" and isinstance(v, str)
+        }
+    finally:
+        await formulario.close()
+    # El nombre que ve guardrails lo pone el servidor: el del cliente podría traer una cédula.
+    resultado = validar_archivo(f"subida{extension}", len(contenido), contenido)
+    _registrar_decision_db(estado, resultado.decision)
+    if not resultado.ok:
+        raise ErrorSubida(_mensaje_rechazo(resultado), 413 if len(contenido) > MAX_BYTES_ARCHIVO else 422)
+    return EXTENSIONES_PERMITIDAS[extension], contenido, campos
+
+
+def extraer_oferta_de_archivo(tipo: str, contenido: bytes) -> ResultadoMercado:
+    """Agente Mercado real sobre el archivo, en una carpeta temporal que se borra al salir.
+
+    PDF con capa de texto: Mercado lo lee con pypdf. Foto o PDF escaneado: va al LLM como bloque nativo
+    (una oferta no trae datos de personas) y las reglas corren sobre la transcripción literal.
+    """
+    with tempfile.TemporaryDirectory(prefix="puente_oferta_") as carpeta:
+        ruta = Path(carpeta) / f"{NOMBRE_SUBIDA_OFERTA}.{tipo}"
+        ruta.write_bytes(contenido)
+        return procesar_ofertas([{"ruta": str(ruta), "fuente": FUENTE_SUBIDA_OFERTA}])
+
+
+def leer_texto_de_cv(tipo: str, contenido: bytes) -> str:
+    """Texto del CV con pypdf o OCR local. El archivo (con la cédula) nunca va al LLM y se borra al salir."""
+    with tempfile.TemporaryDirectory(prefix="puente_cv_") as carpeta:
+        ruta = Path(carpeta) / f"cv_subido.{tipo}"
+        ruta.write_bytes(contenido)
+        try:
+            return extraer_texto_cv(ruta)
+        except (PyPdfError, ValueError) as exc:
+            raise ErrorSubida("El archivo PDF no se pudo leer o está dañado.", 422) from exc
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            if tipo == "pdf":
+                raise ErrorSubida("El archivo PDF no se pudo leer o está dañado.", 422) from exc
+            raise
+
+
+def _alerta_para_tablero(alerta: str) -> dict[str, str]:
+    """`bloqueo · edad · límite de edad, Ley 11 de 2005 art. 2 · «frase»` -> {frase, regla, tipo}."""
+    partes = alerta.split(" · ")
+    frase = re.search(r"«(.+?)»", alerta)
+    return {
+        "frase": frase.group(1) if frase else alerta,
+        "regla": " · ".join(partes[1:-1]) if len(partes) >= 3 else alerta,
+        "tipo": "bloqueo" if partes[0] == "bloqueo" else "alerta",
+    }
+
+
+def registrar_oferta_subida(estado: dict[str, Any], resultado: ResultadoMercado) -> dict[str, Any]:
+    """Suma al tablero la oferta que extrajo Mercado de una foto o PDF y recalcula el grafo."""
+    for decision in resultado.decisiones:
+        _registrar_decision_db(estado, decision)
+    if not resultado.ofertas:
+        sin_grabacion = any("grabacion_faltante" in e for e in resultado.errores)
+        if sin_grabacion:
+            raise ErrorSubida(
+                "No hay respuesta grabada del modelo para este archivo (LLM_MODO=reproducir). "
+                "En la demo sin red usa tests/fixtures/volante_sintetico.jpg; con clave, LLM_MODO=vivo.",
+                503,
+            )
+        raise ErrorSubida("El agente Mercado no pudo extraer una oferta de este archivo; revisa la traza.", 422)
+
+    oferta = resultado.ofertas[0]
+    limpio = limpiar_entrada(
+        {"puesto": oferta.puesto, "empresa": oferta.empresa, "requisitos_texto": oferta.requisitos_texto}
+    )
+    resultados_gr = evaluar_entrada(
+        {"texto": f"{limpio['puesto']}\n{limpio['requisitos_texto']}", "salario": oferta.salario_mensual}
+    )
+    for r_gr in resultados_gr:
+        _registrar_decision_db(estado, r_gr.decision)
+    rechazo = next((r for r in resultados_gr if not r.ok), None)
+    if rechazo is not None:
+        raise ErrorSubida(rechazo.respuesta or rechazo.motivo, 422)
+
+    oferta_id = oferta.id.upper()
+    if any(o.get("id") == oferta_id for o in estado.get("ofertas", [])):
+        raise ErrorSubida(f"Esta oferta ya está en el tablero ({oferta_id}).", 409)
+    alertas = [_alerta_para_tablero(a) for a in oferta.alertas]
+    nueva = {
+        "id": oferta_id,
+        "puesto": str(limpio["puesto"]),
+        "empresa": str(limpio["empresa"]),
+        "corregimiento": oferta.corregimiento,
+        "salario_mensual": oferta.salario_mensual,
+        "horario": _texto_horarios([oferta.horario]) if oferta.horario else None,
+        "habilidades": list(oferta.habilidades),
+        "requisitos_texto": str(limpio["requisitos_texto"]),
+        "alertas": alertas,
+        "bloqueada": oferta.bloqueada,
+        "fuente": FUENTE_SUBIDA_OFERTA,
+    }
+    estado["ofertas"].append(nueva)
+    _registrar_decision_db(
+        estado,
+        Decision(
+            agente="orientador",
+            entrada_resumen=f"subida_oferta ({oferta_id})",
+            salida_resumen=f"{oferta_id} · {'bloqueada' if oferta.bloqueada else 'publicable'} · {len(alertas)} alertas",
+            razon="El orientador subió una foto o PDF de oferta; Mercado la extrajo y las reglas de la Ley 11 la revisaron.",
+            timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        ),
+    )
+    recalcular_pipeline_tablero(estado, registrar_trazas=True)
+    return {"tipo": "oferta", "oferta": nueva}
+
+
+def _numero(campos: dict[str, str], clave: str, por_defecto: float) -> float:
+    valor = (campos.get(clave) or "").strip()
+    try:
+        return float(valor) if valor else por_defecto
+    except ValueError as exc:
+        raise ErrorSubida(f"El campo «{clave}» debe ser un número.", 422) from exc
+
+
+def preparar_entrada_cv(estado: dict[str, Any], texto_cv: str, campos: dict[str, str]) -> dict[str, Any]:
+    """Entrada de `construir_perfil` desde el texto del CV y el formulario fijo; guardrails antes del LLM."""
+    if len("".join(texto_cv.split())) < MIN_CARACTERES_CV:
+        raise ErrorSubida(
+            "El archivo no tiene texto legible (PDF escaneado o foto borrosa). Sube un PDF con texto "
+            "o registra al joven con la entrevista.",
+            422,
+        )
+    try:
+        edad = int(_numero(campos, "edad", -1))
+    except (TypeError, ValueError) as exc:
+        raise ErrorSubida("La edad debe ser un número.", 422) from exc
+    corregimiento_form = (campos.get("corregimiento") or "").strip()
+    corregimiento = detectar_corregimiento(corregimiento_form or texto_cv, corregimientos_con_traslado())
+    if corregimiento is None:
+        raise ErrorSubida("Corregimiento sin datos de traslado: elige uno de la lista.", 422)
+    # Guardrails sobre el texto ya sin cédula ni teléfono: inyección, fuera de alcance y rango de edad.
+    resultados_gr = evaluar_entrada({"texto": str(limpiar_entrada(texto_cv)), "edad": edad})
+    for r_gr in resultados_gr:
+        _registrar_decision_db(estado, r_gr.decision)
+    rechazo = next((r for r in resultados_gr if not r.ok), None)
+    if rechazo is not None:
+        raise ErrorSubida(rechazo.respuesta or rechazo.motivo, 422)
+    clases = (
+        [{"dias": ["lunes", "martes", "miercoles", "jueves", "viernes"], "hora_inicio": "18:00", "hora_fin": "22:00"}]
+        if campos.get("estudia_noche") in ("1", "true", "on")
+        else []
+    )
+    return {
+        "id": f"PERFIL-CV-{uuid.uuid4().hex[:8].upper()}",
+        # El texto crudo solo vive en esta llamada: `construir_perfil` le quita la PII antes del LLM.
+        "cv_texto": texto_cv,
+        "nombre": str(limpiar_entrada((campos.get("nombre") or "").strip()))[:80] or "Joven",
+        "edad": edad,
+        "corregimiento": corregimiento,
+        "horario_libre": [
+            {"dias": ["lunes", "martes", "miercoles", "jueves", "viernes"], "hora_inicio": "07:00", "hora_fin": "17:30"}
+        ],
+        "horario_clases": clases,
+        "salario_minimo": _numero(campos, "salario_minimo", 600.0),
+        "presupuesto_pasaje_diario": _numero(campos, "presupuesto_pasaje_diario", 3.0),
+    }
+
+
+def registrar_perfil_desde_cv(
+    estado: dict[str, Any], perfil: Perfil, decision: Decision, taxonomia: dict[str, dict]
+) -> dict[str, Any]:
+    """Suma el perfil al tablero sin guardar el CV ni su texto (ni en `entradas_perfil`)."""
+    nuevo = {
+        "id": perfil.id,
+        "nombre": perfil.nombre,
+        "genero": perfil.genero or "no_especificado",
+        "edad": perfil.edad,
+        "corregimiento": perfil.corregimiento,
+        "modalidad_ingreso": "CV subido en el tablero (PDF o foto, #170)",
+        "horario_libre": _horario_para_tablero(perfil),
+        "horario_libre_bloques": [h.model_dump() for h in perfil.horario_libre],
+        "horario_clases_bloques": [h.model_dump() for h in perfil.horario_clases],
+        "salario_minimo": perfil.salario_minimo,
+        "presupuesto_pasaje_diario": perfil.presupuesto_pasaje_diario,
+        "habilidades": [
+            {
+                "skill_id": h.skill_id,
+                "nombre": taxonomia.get(h.skill_id, {}).get("nombre_es", h.skill_id),
+                "evidencia": h.evidencia,
+            }
+            for h in perfil.habilidades
+        ],
+    }
+    estado["perfiles"].append(nuevo)
+    _registrar_decision_db(estado, decision)
+    _registrar_decision_db(
+        estado,
+        Decision(
+            agente="orientador",
+            entrada_resumen=f"subida_cv ({perfil.id})",
+            salida_resumen=f"Perfil {perfil.id} desde CV ({len(perfil.habilidades)} habilidades con evidencia)",
+            razon="El orientador subió un CV; la PII se quitó antes del LLM y el archivo temporal se borró.",
+            timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        ),
+    )
+    recalcular_pipeline_tablero(estado, registrar_trazas=True)
+    return {"tipo": "perfil", "perfil": nuevo}
+
+
+def _respuesta_subida(exc: ErrorSubida) -> JSONResponse:
+    return JSONResponse({"detail": str(exc)}, status_code=exc.status)
+
+
+async def endpoint_oferta_archivo(request: Request) -> JSONResponse:
+    try:
+        tipo, contenido, _campos = await leer_archivo_subido(request, ESTADO_GLOBAL)
+        resultado = await run_in_threadpool(extraer_oferta_de_archivo, tipo, contenido)
+        subida = registrar_oferta_subida(ESTADO_GLOBAL, resultado)
+    except ErrorSubida as exc:
+        return _respuesta_subida(exc)
+    return JSONResponse({**serializar_estado_publico(ESTADO_GLOBAL), "subida": subida})
+
+
+async def endpoint_perfil_archivo(request: Request) -> JSONResponse:
+    try:
+        tipo, contenido, campos = await leer_archivo_subido(request, ESTADO_GLOBAL)
+        try:
+            texto_cv = await run_in_threadpool(leer_texto_de_cv, tipo, contenido)
+        except ErrorSubida:
+            raise
+        except RuntimeError as exc:  # foto sin OCR local instalado: nunca se manda la imagen al LLM
+            raise ErrorSubida(
+                "Este equipo no tiene OCR local para leer fotos de CV (la foto no se envía al modelo "
+                "porque trae la cédula). Sube el CV en PDF o registra al joven con la entrevista.",
+                422,
+            ) from exc
+        except Exception as exc:
+            if tipo == "pdf":
+                raise ErrorSubida("El archivo PDF no se pudo leer o está dañado.", 422) from exc
+            raise
+        entrada = preparar_entrada_cv(ESTADO_GLOBAL, texto_cv, campos)
+        taxonomia = cargar_taxonomia_grafo()
+        try:
+            perfil, decision = await run_in_threadpool(
+                construir_perfil, entrada, taxonomia=taxonomia, normalizar=normalizar_habilidad, llm=llm_perfil_joven
+            )
+        except ValueError as exc:
+            raise ErrorSubida(f"No se pudo armar el perfil: {limpiar_entrada(str(exc))}", 422) from exc
+        except (RuntimeError, OSError) as exc:  # ErrorLLM es un RuntimeError
+            _registro.exception("Subida de CV: el agente Perfil falló")
+            if getattr(exc, "causa", "") == "grabacion_faltante":
+                raise ErrorSubida(
+                    "No hay respuesta grabada del modelo para este CV (LLM_MODO=reproducir). En la demo sin "
+                    "red usa tests/fixtures/cv_sintetico.pdf; con clave, LLM_MODO=vivo.",
+                    503,
+                ) from exc
+            raise ErrorSubida("El agente Perfil no pudo leer el CV ahora; revisa la consola del servidor.", 503) from exc
+        finally:
+            entrada.pop("cv_texto", None)
+        subida = registrar_perfil_desde_cv(ESTADO_GLOBAL, perfil, decision, taxonomia)
+    except ErrorSubida as exc:
+        return _respuesta_subida(exc)
+    return JSONResponse({**serializar_estado_publico(ESTADO_GLOBAL), "subida": subida})
+
+
 RUTA_STATIC.mkdir(parents=True, exist_ok=True)
 
 
@@ -3554,13 +3953,16 @@ async def _ciclo_de_vida(_app: Starlette):
 app = Starlette(
     debug=False,
     lifespan=_ciclo_de_vida,
+    middleware=[Middleware(MiddlewareDemoPublicaReadOnly)],
     routes=[
         Route("/", endpoint_index, methods=["GET"]),
         Route("/api/estado", endpoint_estado, methods=["GET"]),
         Route("/api/orientador/accion", endpoint_accion_orientador, methods=["POST"]),
         Route("/api/ofertas/desbloquear", endpoint_desbloquear_oferta, methods=["POST"]),
         Route("/api/ofertas", endpoint_nueva_oferta, methods=["POST"]),
+        Route("/api/ofertas/archivo", endpoint_oferta_archivo, methods=["POST"]),
         Route("/api/perfiles", endpoint_nuevo_perfil, methods=["POST"]),
+        Route("/api/perfiles/archivo", endpoint_perfil_archivo, methods=["POST"]),
         Route("/api/cargar-data", endpoint_cargar_data, methods=["POST"]),
         Route("/api/auditor/simular-sesgo", endpoint_simular_sesgo, methods=["POST"]),
         Route("/api/reset", endpoint_reset, methods=["POST"]),
