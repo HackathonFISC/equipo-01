@@ -32,6 +32,10 @@ CONTEO_ESPERADO = {
     "horario_validacion": 1,
     "redactor_puente": 3,  # #157: edad con presencia, sexo y «vivir cerca de».
     "micromision": 4,  # #158: correcta, incorrecta, vacía y el contrafactual del Auditor
+    "postulacion": 2,  # #225: sin consentimiento no sale nada; con consentimiento, CV, carta, .ics y mensaje ciegos
+    "reacomodo": 1,  # #225: la empresa rechaza y el grafo recalcula con aprobación pendiente
+    "formacion": 2,  # #225: un curso válido entre cuatro; ninguno si chocan horario o pasaje
+    "punta_a_punta": 1,  # #225: perfil -> lista corta -> aprobación -> outbox
 }
 
 
@@ -116,6 +120,10 @@ def test_ids_siguen_el_formato_pedido(casos):
         "horario_validacion": "HOR",
         "redactor_puente": "RED",
         "micromision": "MIC",
+        "postulacion": "POS",
+        "reacomodo": "REA",
+        "formacion": "FOR",
+        "punta_a_punta": "E2E",
     }
     for caso in casos["casos"]:
         assert caso["id"].startswith(prefijos[caso["categoria"]] + "-")
@@ -1200,3 +1208,77 @@ def test_cargar_casos_valida_la_taxonomia_en_linea(tmp_path):
     for malo in ([], {}, {"a": "texto"}, {"a": {"sinonimos": []}}, {"a": {"nombre_es": "A", "sinonimos": "aa"}}):
         with pytest.raises(ValueError, match="taxonom"):
             run.cargar_casos(con(malo))
+
+
+# ---------------------------------------------------------------------------- #225: postulación, reacomodo, formación y punta a punta
+def test_diferencias_campos_respeta_el_orden_solo_donde_importa():
+    esperado = {"listas": {"o1": ["a", "b"]}, "enviadas": ["x", "y"], "postulaciones": {"a@o1": "enviado"}}
+    igual_sin_orden = {"listas": {"o1": ["a", "b"]}, "enviadas": ["y", "x"], "postulaciones": {"a@o1": "enviado", "b@o1": "x"}}
+    assert run._diferencias_campos(esperado, igual_sin_orden, en_orden=("listas",), subconjunto=("postulaciones",)) == []
+    otro_orden = {**igual_sin_orden, "listas": {"o1": ["b", "a"]}}
+    assert run._diferencias_campos(esperado, otro_orden, en_orden=("listas",), subconjunto=("postulaciones",)) == ["listas"]
+    assert run._diferencias_campos(esperado, igual_sin_orden) == ["postulaciones"]  # sin subconjunto, sobra b@o1
+
+
+def test_casos_del_225_corren_sin_llm_y_sin_tocar_la_raiz(casos, monkeypatch):
+    """Los 6 casos con los ejecutores reales, en carpetas temporales: sin LLM, sin red y sin outbox ni base en la raíz.
+    E2E-01 puede fallar solo por el orden de la lista corta (#238) hasta que se arregle."""
+    import puente.llm as capa
+
+    monkeypatch.setattr(capa, "_cliente_por_defecto", lambda *a, **k: pytest.fail("llamada real al modelo"))
+    antes = {p.name for p in RAIZ.iterdir()}
+    nuevos = {"postulacion", "reacomodo", "formacion", "punta_a_punta"}
+    sub = {**casos, "casos": [c for c in casos["casos"] if c["categoria"] in nuevos]}
+    resultados = {r.id: r for r in run.correr(sub, repeticiones=1)}
+    assert set(resultados) == {"POS-01", "POS-02", "REA-01", "FOR-01", "FOR-02", "E2E-01"}
+    for caso_id in ("POS-01", "POS-02", "REA-01", "FOR-01", "FOR-02"):
+        assert resultados[caso_id].estado == "ok", resultados[caso_id].detalle
+    e2e = resultados["E2E-01"]
+    assert e2e.estado == "ok" or e2e.detalle.startswith("0/1 corridas acertaron; difiere en listas_cortas;"), e2e.detalle
+    assert {p.name for p in RAIZ.iterdir()} == antes
+
+
+# ---------------------------------------------------------------------------- #231: no reescribir resultados.md si solo cambia la hora
+def _un_resultado(estado="ok"):
+    if estado == "ok":
+        return ResultadoCaso("GRD-01", "guardrails", "ok", 1, 1, {"veredicto": "rechazar"}, "cumple lo esperado")
+    return ResultadoCaso("GRD-01", "guardrails", "fallo", 0, 1, {"veredicto": "aceptar"}, "difiere en veredicto")
+
+
+def test_resultados_no_se_reescribe_si_solo_cambia_la_hora(tmp_path, casos):
+    ruta = tmp_path / "r.md"
+    run.escribir_resultados([_un_resultado()], casos, ruta, ahora=datetime.fromisoformat("2026-10-17T08:00:00+00:00"))
+    primero, marca = ruta.read_bytes(), ruta.stat().st_mtime_ns
+
+    run.escribir_resultados([_un_resultado()], casos, ruta, ahora=datetime.fromisoformat("2026-10-17T09:30:00+00:00"))
+    assert ruta.read_bytes() == primero and ruta.stat().st_mtime_ns == marca  # ni contenido ni marca de tiempo
+    assert "2026-10-17 03:00" in ruta.read_text(encoding="utf-8")  # queda la hora de la corrida que sí escribió
+
+
+def test_resultados_si_se_reescribe_si_cambia_algo_ademas_de_la_hora(tmp_path, casos):
+    ruta = tmp_path / "r.md"
+    run.escribir_resultados([_un_resultado()], casos, ruta, ahora=datetime.fromisoformat("2026-10-17T08:00:00+00:00"))
+
+    run.escribir_resultados([_un_resultado("fallo")], casos, ruta, ahora=datetime.fromisoformat("2026-10-17T09:30:00+00:00"))
+    texto = ruta.read_text(encoding="utf-8")
+    assert "2026-10-17 04:30" in texto and "difiere en veredicto" in texto
+    assert "Estados: 0 ok · 1 fallo" in texto
+
+
+def test_resultados_con_saltos_de_linea_de_windows_tampoco_se_reescriben(tmp_path, casos):
+    """Un clon con core.autocrlf trae el archivo con CRLF: sigue siendo el mismo contenido."""
+    ruta = tmp_path / "r.md"
+    run.escribir_resultados([_un_resultado()], casos, ruta, ahora=datetime.fromisoformat("2026-10-17T08:00:00+00:00"))
+    ruta.write_bytes(ruta.read_bytes().replace(b"\n", b"\r\n"))
+    con_crlf = ruta.read_bytes()
+    run.escribir_resultados([_un_resultado()], casos, ruta, ahora=datetime.fromisoformat("2026-10-17T09:30:00+00:00"))
+    assert ruta.read_bytes() == con_crlf
+
+
+def test_main_dos_veces_seguidas_deja_el_archivo_como_estaba(tmp_path):
+    """El caso del #231: dos corridas del runner sobre el mismo archivo y la segunda no lo toca."""
+    salida = tmp_path / "r.md"
+    assert run.main(["--salida", str(salida), "--sin-llm"]) == 0
+    primero, marca = salida.read_bytes(), salida.stat().st_mtime_ns
+    assert run.main(["--salida", str(salida), "--sin-llm"]) == 0
+    assert salida.read_bytes() == primero and salida.stat().st_mtime_ns == marca
