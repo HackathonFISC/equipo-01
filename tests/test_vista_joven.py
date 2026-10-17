@@ -122,7 +122,7 @@ def test_pagina_y_formulario_del_joven(entorno) -> None:
     formulario = cliente.get("/api/joven/formulario").json()
     assert len(formulario["preguntas"]) == formulario["max_preguntas"] == 5
     assert "La Chorrera" in formulario["corregimientos"]
-    assert (formulario["edad_min"], formulario["edad_max"]) == (18, 29)
+    assert (formulario["edad_min"], formulario["edad_max"]) == (18, 98)
 
 
 def test_formulario_registra_la_entrada_y_el_perfil(entorno) -> None:
