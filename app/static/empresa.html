@@ -75,25 +75,32 @@
 
   <script>
     "use strict";
+    function esc(texto) {
+      if (texto == null) return "";
+      const div = document.createElement("div");
+      div.textContent = String(texto);
+      return div.innerHTML;
+    }
+
     async function cargarPostulaciones() {
-      const resp = await fetch("/api/estado");
+      const resp = await fetch("/api/empresa/postulaciones");
       const data = await resp.json();
       const cont = document.getElementById("lista-postulaciones-empresa");
       const posts = data.postulaciones || [];
       if (!posts.length) {
-        cont.innerHTML = "<p>No hay postulaciones activas.</p>";
+        cont.innerHTML = "<p>No hay postulaciones activas enviadas a la empresa.</p>";
         return;
       }
       cont.innerHTML = posts.map((p) => `
         <div style="border-top:1px solid #d8d2c5;padding:0.75rem 0;display:flex;justify-content:space-between;align-items:center;gap:0.75rem;flex-wrap:wrap;">
           <div>
-            <strong>${p.nombre_joven}</strong> → <span>${p.puesto} (${p.empresa})</span>
-            <div><small>Estado actual: <code>${p.estado}</code></small></div>
+            <strong>${esc(p.nombre_perfil || "Candidato ciego")}</strong> → <span>${esc(p.puesto)} (${esc(p.empresa)})</span>
+            <div><small>Estado actual: <code>${esc(p.estado)}</code></small></div>
           </div>
           <div style="display:flex;gap:0.4rem;">
-            <button type="button" class="boton" data-perfil="${p.perfil_id}" data-oferta="${p.oferta_id}" data-empresa="${p.empresa}" data-tipo="acepta">Citar a entrevista</button>
-            <button type="button" class="boton" data-perfil="${p.perfil_id}" data-oferta="${p.oferta_id}" data-empresa="${p.empresa}" data-tipo="cubierta">Contratar (vacante cubierta)</button>
-            <button type="button" class="boton" data-perfil="${p.perfil_id}" data-oferta="${p.oferta_id}" data-empresa="${p.empresa}" data-tipo="rechaza">Rechazar</button>
+            <button type="button" class="boton" data-perfil="${esc(p.perfil_id)}" data-oferta="${esc(p.oferta_id)}" data-empresa="${esc(p.empresa)}" data-tipo="acepta">Citar a entrevista</button>
+            <button type="button" class="boton" data-perfil="${esc(p.perfil_id)}" data-oferta="${esc(p.oferta_id)}" data-empresa="${esc(p.empresa)}" data-tipo="cubierta">Contratar (vacante cubierta)</button>
+            <button type="button" class="boton" data-perfil="${esc(p.perfil_id)}" data-oferta="${esc(p.oferta_id)}" data-empresa="${esc(p.empresa)}" data-tipo="rechaza">Rechazar</button>
           </div>
         </div>
       `).join("");

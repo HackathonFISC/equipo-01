@@ -1428,22 +1428,22 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  const btnTocumen90 = document.getElementById("btn-umb-tocumen-90");
-  if (btnTocumen90) {
-    btnTocumen90.addEventListener("click", async () => {
+  const btnTocumen95 = document.getElementById("btn-umb-tocumen-95") || document.getElementById("btn-umb-tocumen-90");
+  if (btnTocumen95) {
+    btnTocumen95.addEventListener("click", async () => {
       const inpMin = document.getElementById("umb-minutos");
-      if (inpMin) inpMin.value = "90";
-      await conBoton(btnTocumen90, async () => {
+      if (inpMin) inpMin.value = "95";
+      await conBoton(btnTocumen95, async () => {
         if (
           aplicarEstado(
             await llamarApi("/api/orientador/umbrales", {
-              max_minutos_traslado: 90,
+              max_minutos_traslado: 95,
               max_porcentaje_salario_pasaje: 0.15,
               max_vacantes_por_perfil: 3,
             })
           )
         ) {
-          mostrarToast("Traslado máximo ajustado a 90 min: OF-TOCUMEN-03 ahora es viable para Yaritza y quedó trazado.");
+          mostrarToast("Traslado máximo ajustado a 95 min: OF-TOCUMEN-03 ahora es viable para Yaritza y quedó trazado.");
         }
       });
     });

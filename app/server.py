@@ -626,21 +626,8 @@ def _compilar_grafo_tablero(
         if not estado.get("umbrales_editados_orientador"):
             return estado_g
         cfg_dict = dict(estado.get("config_solver") or {})
-        explicitos = set(estado.get("umbrales_explicitos") or [])
-        max_min = int(cfg_dict.get("max_minutos_traslado", 60))
-        if max_min >= 90 and "max_vacantes_por_perfil" not in explicitos:
-            cfg_dict["max_vacantes_por_perfil"] = max(int(cfg_dict.get("max_vacantes_por_perfil") or 2), 3)
         cfg_obj = ConfigSolver(**cfg_dict)
-        vista_g = {**estado_g, "config_solver": cfg_obj}
-        if max_min >= 90:
-            matriz_custom = dict(_mod_traslados.cargar_traslados())
-            par_tocumen = ("la chorrera", "tocumen")
-            if par_tocumen in matriz_custom:
-                matriz_custom[par_tocumen] = matriz_custom[par_tocumen].model_copy(
-                    update={"minutos_hora_pico": min(90, max_min), "pasaje_ida_usd": 1.40}
-                )
-            vista_g["traslados"] = matriz_custom
-        return vista_g
+        return {**estado_g, "config_solver": cfg_obj}
 
     def _nodo_matching_tablero(estado_g: dict[str, Any]) -> dict[str, Any]:
         return nodo_matching_grafo(_inyectar_umbrales_grafo(estado_g))
@@ -1042,7 +1029,7 @@ def obtener_datos_iniciales_demo(
             "modalidad_ingreso": "datos de ejemplo (sintéticos) · entrevista sin CV",
             "horario_libre": "Lunes a Viernes 07:00-17:30 (estudia de noche 18:00-22:00)",
             "salario_minimo": 600.0,
-            "presupuesto_pasaje_diario": 3.00,
+            "presupuesto_pasaje_diario": 5.00,
             "habilidades": [
                 {
                     "skill_id": "atencion_cliente",
@@ -1142,7 +1129,7 @@ def obtener_datos_iniciales_demo(
             "puesto": "Cajero/a de Sucursal Este",
             "empresa": "Comercial Aeropuerto S.A. (Empresa de Prueba)",
             "corregimiento": "Tocumen",
-            "salario_mensual": 650.0,
+            "salario_mensual": 700.0,
             "horario": "Lunes a Viernes 08:00-17:00",
             "habilidades": ["atencion_cliente", "manejo_caja"],
             "requisitos_texto": "Manejo de caja registradora y atención a clientes en sucursal de Tocumen.",
@@ -2328,12 +2315,8 @@ def registrar_evento_empresa_tablero(
     def _actualizar_post_sql(conn_db: sqlite3.Connection, post_id: int, nuevo_est: str, motivo_txt: str) -> None:
         try:
             db.cambiar_estado(conn_db, post_id, nuevo_est, motivo_txt)
-        except Exception:
-            conn_db.execute(
-                "UPDATE postulaciones SET estado = ?, actualizado = ? WHERE id = ?",
-                (nuevo_est, ahora, post_id),
-            )
-            conn_db.commit()
+        except ValueError as exc:
+            raise ErrorValidacionTablero(f"Transición no permitida para la postulación: {exc}") from exc
 
     conn = _conectar_db_estado(estado)
     try:
@@ -2708,12 +2691,32 @@ async def endpoint_empresa_pagina(_request: Request) -> FileResponse:
     return FileResponse(RUTA_STATIC / "empresa.html")
 
 
+async def endpoint_empresa_postulaciones(_request: Request) -> JSONResponse:
+    """Devuelve las postulaciones enviadas a la empresa sin exponer datos internos del orientador (#168)."""
+    postulaciones_empresa = [
+        {
+            "id": p.get("id"),
+            "perfil_id": p.get("perfil_id"),
+            "nombre_perfil": p.get("nombre_perfil"),
+            "oferta_id": p.get("oferta_id"),
+            "puesto": p.get("puesto"),
+            "empresa": p.get("empresa"),
+            "estado": p.get("estado"),
+        }
+        for p in ESTADO_GLOBAL.get("postulaciones", [])
+        if p.get("estado") in (db.ENVIADO, db.ENTREVISTA, db.CONTRATADO, db.NO_SELECCIONADO)
+    ]
+    return JSONResponse({"postulaciones": postulaciones_empresa})
+
+
 async def endpoint_empresa_evento(request: Request) -> JSONResponse:
     datos, err_resp = await _leer_json_validado(request)
     if err_resp is not None or datos is None:
         return err_resp  # type: ignore[return-value]
     try:
         req = EventoEmpresaTableroRequest.model_validate(datos)
+        if req.perfil_id and not _buscar_perfil(ESTADO_GLOBAL, req.perfil_id):
+            return JSONResponse({"detail": f"Perfil '{req.perfil_id}' no encontrado."}, status_code=404)
         registrar_evento_empresa_tablero(
             ESTADO_GLOBAL,
             tipo=req.tipo,
@@ -2726,7 +2729,12 @@ async def endpoint_empresa_evento(request: Request) -> JSONResponse:
         return JSONResponse({"detail": exc.errors(include_context=False)}, status_code=422)
     except ErrorValidacionTablero as exc:
         return JSONResponse({"detail": str(exc)}, status_code=422)
-    return await endpoint_estado(request)
+    return JSONResponse({
+        "ok": True,
+        "tipo": req.tipo,
+        "oferta_id": req.oferta_id,
+        "perfil_id": req.perfil_id,
+    })
 
 
 # --- Vista del joven (#52, fase 1) ---
@@ -3379,6 +3387,7 @@ app = Starlette(
         Route("/api/orientador/umbrales", endpoint_umbrales_solver, methods=["POST"]),
         Route("/api/admin/operacion", endpoint_admin_operacion, methods=["GET"]),
         Route("/empresa", endpoint_empresa_pagina, methods=["GET"]),
+        Route("/api/empresa/postulaciones", endpoint_empresa_postulaciones, methods=["GET"]),
         Route("/api/empresa/evento", endpoint_empresa_evento, methods=["POST"]),
         # Vista del joven (#52)
         Route("/joven", endpoint_joven_pagina, methods=["GET"]),
