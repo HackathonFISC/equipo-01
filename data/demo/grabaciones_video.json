@@ -1,0 +1,10 @@
+{
+  "_nota": "Hashes de las grabaciones del video (#194), escritos por scripts/grabar_video.sh. tests/test_grabar_video.py falla si el prompt de alguna llamada ya no da este hash: vuelve a correr el script y sube lo que imprime.",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "llamadas": {
+    "chat": "7b0f85d7c2df19746d65fae6d4436d8d0a3d28114edc000198e692a98a90094e",
+    "redactor": "9f12f836e5d8cd08bf2ffa095d7513739ca31e63e486d2257dfcfe55c1d749a4",
+    "micromision": "d6be09b09fff5841076d0b5d4869f247467fc155162a8a393ee6a3bbdd5d6eb2"
+  }
+}
