@@ -1609,6 +1609,136 @@ def test_refresco_no_borra_lo_escrito_o_marcado_sin_enviar() -> None:
     assert "`nota-${m.perfil_id}-${m.oferta_id}`" in js and "`consent-${m.perfil_id}-${m.oferta_id}`" in js
 
 
+def _static(nombre: str) -> str:
+    return (Path(__file__).resolve().parents[1] / "app" / "static" / nombre).read_text(encoding="utf-8")
+
+
+def test_el_embudo_cuenta_solo_las_postulaciones_con_tarjeta(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Al desbloquear una oferta o cambiar un umbral, lo preseleccionado que sale de la lista corta se quita (#256)."""
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path / "outbox")
+
+    def sin_tarjeta(estado: dict) -> list:
+        pre = {(p["perfil_id"], p["oferta_id"]) for p in estado["postulaciones"] if p["estado"] == "preseleccionado"}
+        tarjetas = {(m["perfil_id"], m["oferta_id"]) for m in estado["matches"]}
+        assert estado["conteo_embudo"]["preseleccionado"] == len(tarjetas)
+        return sorted(pre ^ tarjetas)
+
+    async def _ejecutar() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            await client.post("/api/reset")
+            assert sin_tarjeta((await client.get("/api/estado")).json()) == []
+            r = await client.post(
+                "/api/ofertas/desbloquear",
+                json={"oferta_id": "OF-BLOQ-EDAD-04", "motivo": "El orientador revisó el anuncio con la empresa"},
+            )
+            assert r.status_code == 200
+            assert sin_tarjeta(r.json()) == []  # antes quedaban Yaritza y Kevin en OF-CHORRERA-01 sin tarjeta
+            for minutos in (95, 60):
+                r = await client.post(
+                    "/api/orientador/umbrales", json={"max_minutos_traslado": minutos, "max_vacantes_por_perfil": 3}
+                )
+                assert sin_tarjeta(r.json()) == [], minutos
+
+    asyncio.run(_ejecutar())
+
+
+def test_avisos_al_orientador_se_dibujan_arriba_del_tablero() -> None:
+    js, html, css = _static("app.js"), _static("index.html"), _static("styles.css")
+    assert 'id="avisos-orientador"' in html and html.index('id="avisos-orientador"') < html.index('id="flujo-pasos"')
+    assert "function renderizarAvisosOrientador()" in js and "renderizarAvisosOrientador();" in js.split("function renderizarTodo()")[1]
+    assert "estadoActual.avisos_orientador" in js and "escaparHtml(a.texto" in js  # el texto sale de la empresa: escapado
+    assert ".banner--info" in css  # la clase que usaban los banners y no tenía estilo
+
+
+def test_aviso_de_sesgo_dice_lo_que_pasa_y_no_el_identificador_interno() -> None:
+    js = _static("app.js")
+    assert "volvió a Matching" not in js and "devolvió el caso a Matching" not in js
+    assert 'accion_grafo = "' not in js  # el identificador interno no se muestra
+    assert "function textoAccionAuditor(accion)" in js and "no se puede aprobar mientras el Auditor detecte sesgo" in js
+
+
+def test_cv_solo_en_pdf_y_el_volante_sigue_con_camara() -> None:
+    """Esta máquina no tiene OCR para fotos de CV (decisión del 17 de octubre): el campo del CV es solo PDF (#256)."""
+    html = _static("index.html")
+    cv = next(l for l in html.splitlines() if 'id="scv-archivo"' in l)
+    assert 'accept="application/pdf"' in cv and "capture" not in cv and "image/" not in cv
+    volante = next(l for l in html.splitlines() if 'id="so-archivo"' in l)
+    assert 'capture="environment"' in volante  # el volante de la oferta sí puede seguir con cámara
+
+
+def test_trazas_trae_el_historial_completo_y_el_filtro_se_completa(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """La pestaña «Trazas» dibuja todas las corridas, no solo la última de Matching, Auditor y Formación (#256)."""
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path / "outbox")
+
+    async def _ejecutar() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            await client.post("/api/reset")
+            await client.post("/api/auditor/simular-sesgo", json={"activar": True})
+            await client.post("/api/auditor/simular-sesgo", json={"activar": False})
+            await client.post(
+                "/api/orientador/accion",
+                json={"accion": "aprobar", "perfil_id": "PERFIL-YARITZA", "oferta_id": "OF-VISTAALEGRE-02",
+                      "consentimiento_joven": True},
+            )
+            primera = await client.get("/api/estado")
+            assert primera.text == (await client.get("/api/estado")).text  # estable: el refresco no redibuja de más
+            estado = primera.json()
+
+            agentes = [d["agente"] for d in estado["trazas"]]
+            assert agentes.count("matching") > len(
+                [d for d in estado["decisiones"] if d["agente"] == "matching"]
+            )  # antes solo se veía la corrida actual
+            assert "aprobacion" in agentes  # la del nodo de aprobación solo vive en memoria: se suma
+            assert len(estado["trazas"]) >= len(estado["decisiones_db"])
+            marcas = [srv._marca_de_tiempo(d) for d in estado["trazas"]]  # unas traen «Z» y otras «+00:00»
+            assert marcas == sorted(marcas)  # en orden
+
+    asyncio.run(_ejecutar())
+
+    js = _static("app.js")
+    assert "estadoActual.trazas || estadoActual.decisiones" in js
+    assert "function completarFiltroDeTrazas(" in js and "evento_empresa:" in js and "avisos:" in js
+
+
+def test_cobertura_por_turnos_aprobada_se_conserva_al_recalcular(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path / "outbox")
+
+    async def _ejecutar() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            await client.post("/api/reset")
+            assert (await client.post("/api/orientador/cobertura-turnos/demo", json={})).status_code == 200
+            oferta = (await client.get("/api/estado")).json()["coberturas_turnos"][0]["oferta_id"]
+            r = await client.post(
+                "/api/orientador/cobertura-turnos/aprobar",
+                json={"oferta_id": oferta, "consentimiento_manana": True, "consentimiento_tarde": True},
+            )
+            assert r.status_code == 200
+            # Un recálculo cualquiera: la dupla aprobada sigue a la vista, con sus dos postulaciones enviadas.
+            estado = (await client.post("/api/auditor/simular-sesgo", json={"activar": False})).json()
+            assert [c["oferta_id"] for c in estado["coberturas_turnos"]] == [oferta]
+            enviadas = [p for p in estado["postulaciones"] if p["oferta_id"] == oferta and p["estado"] == "enviado"]
+            assert len(enviadas) == 2
+
+    asyncio.run(_ejecutar())
+
+
+def test_estilos_que_usaban_las_tarjetas_existen() -> None:
+    css = _static("styles.css")
+    for clase in (".consent {", ".hitl__botones {", ".banner--info {"):
+        assert clase in css, clase
+
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="hace falta node para ejecutar la función del navegador")
 def test_chips_de_la_tarjeta_nombran_cv_carta_cita_y_mensaje() -> None:
     """Los cuatro archivos de una postulación enviada salen con etiqueta y no con el nombre del archivo."""
