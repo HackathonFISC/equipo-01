@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+import time
 
 import httpx
 import pytest
@@ -188,7 +189,7 @@ def test_acciones_orientador_consentimiento_sqlite_editar_quitar_rechazar_y_desb
     assert post["estado"] == "enviado"
     assert len(estado["consentimientos"]) == 1
     assert estado["consentimientos"][0]["medio"] == "orientador"
-    assert len(post["archivos_generados"]) == 3
+    assert len(post["archivos_generados"]) == 4  # CV, carta (#212), .ics y mensaje
     for nombre_arch in post["archivos_generados"]:
         ruta_arch = (tmp_path / nombre_arch).resolve()
         assert ruta_arch.is_relative_to(tmp_path.resolve())
@@ -947,6 +948,125 @@ def test_issue_161_vercel_json_y_modo_demo_publica(monkeypatch: pytest.MonkeyPat
             assert res_post.json().get("modo_demo_publica") is True
 
     asyncio.run(_test_readonly())
+
+
+def test_issue_170_ingesta_multicanal_archivos_guardrails_y_pii(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #170: subida de ofertas y CV por archivo (PDF y foto) con validación de guardrails y sin PII."""
+    import app.server as srv
+
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path / "outbox")
+
+    ruta_volante = Path(__file__).resolve().parent / "fixtures" / "volante_sintetico.jpg"
+    ruta_cv = Path(__file__).resolve().parent / "fixtures" / "cv_sintetico.pdf"
+    assert ruta_volante.is_file(), "Debe existir tests/fixtures/volante_sintetico.jpg"
+    assert ruta_cv.is_file(), "Debe existir tests/fixtures/cv_sintetico.pdf"
+
+    async def _ejecutar() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            await client.post("/api/reset")
+
+            # 1. Subir oferta volante_sintetico.jpg -> llega bloqueada por Ley 11 con alerta de edad
+            datos_volante = ruta_volante.read_bytes()
+            r_of = await client.post(
+                "/api/ofertas/archivo",
+                files={"archivo": ("volante.jpg", datos_volante, "image/jpeg")},
+            )
+            assert r_of.status_code == 200, r_of.text
+            payload_of = r_of.json()
+            assert "subida" in payload_of
+            sub_of = payload_of["subida"]["oferta"]
+            assert sub_of["bloqueada"] is True
+            assert any("18 a 25" in str(a) for a in sub_of["alertas"])
+
+            # 2. Subir CV cv_sintetico.pdf -> produce perfil con evidencias y cero cédula en decisiones
+            datos_cv = ruta_cv.read_bytes()
+            r_cv = await client.post(
+                "/api/perfiles/archivo",
+                files={"archivo": ("mi_cv.pdf", datos_cv, "application/pdf")},
+                data={
+                    "nombre": "Daniela Pérez",
+                    "edad": "21",
+                    "corregimiento": "La Chorrera",
+                    "salario_minimo": "600",
+                    "presupuesto_pasaje_diario": "3.0",
+                },
+            )
+            assert r_cv.status_code == 200, r_cv.text
+            payload_cv = r_cv.json()
+            assert "subida" in payload_cv
+            sub_cv = payload_cv["subida"]["perfil"]
+            assert sub_cv["edad"] == 21
+            assert sub_cv["corregimiento"] == "La Chorrera"
+            habilidades_ids = {h["skill_id"] for h in sub_cv["habilidades"]}
+            assert {"atencion_cliente", "manejo_caja", "inventario"} <= habilidades_ids
+            # Verificar ausencia de cédula y teléfono en decisiones y checkpoint
+            decisiones_db = payload_cv.get("decisiones_db", [])
+            for d in decisiones_db:
+                assert "8-999-1111" not in str(d)
+                assert "6999-1111" not in str(d)
+
+            # 3. Rechazo de .exe renombrado a .pdf (firma falsa) -> 422 y Decision de guardrails
+            exe_falso = b"MZ\x90\x00\x03\x00\x00\x00" + b"\x00" * 100
+            r_exe = await client.post(
+                "/api/ofertas/archivo",
+                files={"archivo": ("malware.pdf", exe_falso, "application/pdf")},
+            )
+            assert r_exe.status_code == 422
+            assert "no corresponde a un pdf" in r_exe.text
+
+            # 4. Rechazo de archivo de audio .ogg -> mensaje de MENSAJE_AUDIO
+            audio_falso = b"OggS\x00\x02\x00\x00" + b"\x00" * 50
+            r_audio = await client.post(
+                "/api/perfiles/archivo",
+                files={"archivo": ("nota_voz.ogg", audio_falso, "audio/ogg")},
+                data={"edad": "20", "corregimiento": "La Chorrera"},
+            )
+            assert r_audio.status_code == 422
+            assert "notas de voz" in r_audio.text
+
+            # 5. Rechazo de archivo > 5 MB declarado -> 413
+            r_grande = await client.post(
+                "/api/ofertas/archivo",
+                files={"archivo": ("enorme.pdf", b"%PDF-1.4" + b"A" * 10, "application/pdf")},
+                headers={"Content-Length": str(50 * 1024 * 1024)},
+            )
+            assert r_grande.status_code == 413
+
+            # 6. Rechazo de PDF dañado o no legible -> 422
+            pdf_corrupto = b"%PDF-1.4\n" + b"contenido completamente corrupto sin xref ni trailer" * 10
+            r_corrupto = await client.post(
+                "/api/perfiles/archivo",
+                files={"archivo": ("corrupto.pdf", pdf_corrupto, "application/pdf")},
+                data={"edad": "21", "corregimiento": "La Chorrera"},
+            )
+            assert r_corrupto.status_code == 422
+            assert "dañado" in r_corrupto.text
+
+            # 7. Falta de encabezado Content-Length -> 411
+            r_sin_cl = await client.post(
+                "/api/perfiles/archivo",
+                content=b"--boundary\r\nContent-Disposition: form-data; name=\"archivo\"; filename=\"test.pdf\"\r\nContent-Type: application/pdf\r\n\r\n%PDF-1.4\r\n--boundary--\r\n",
+                headers={
+                    "Content-Type": "multipart/form-data; boundary=boundary",
+                    "Content-Length": "",
+                },
+            )
+            assert r_sin_cl.status_code == 411
+            assert "Content-Length" in r_sin_cl.text
+
+            # 8. Límite de subidas por minuto antes de parsear cuerpo -> 429
+            monkeypatch.setattr(srv, "LIMITE_PERFILES_POR_MINUTO", 0)
+            r_limite = await client.post(
+                "/api/ofertas/archivo",
+                files={"archivo": ("volante2.jpg", datos_volante, "image/jpeg")},
+            )
+            assert r_limite.status_code == 429
+            assert "Muchas subidas seguidas" in r_limite.text
+
+    asyncio.run(_ejecutar())
 
 
 def test_cargar_desde_data_lee_el_archivo_y_rotula_lo_sintetico(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

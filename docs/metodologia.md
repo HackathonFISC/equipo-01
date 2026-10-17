@@ -129,7 +129,7 @@ Cómo se lee cada arista condicional:
 | `puente/solver/asignacion.py`, `puente/rules/traslados.py`, `puente/agents/matching.py` | #4, #48, #127 | Asignación con OR-Tools CP-SAT, matriz de traslados y explicación con plantilla. |
 | `puente/agents/auditor.py` | #8, #50 | Variantes contrafactuales, línea base y tope de un recálculo. |
 | `puente/agents/formacion.py` | #14, #53 | Cursos del INADEH para cerrar brechas: cobertura voraz de conjuntos (*set cover*). |
-| `puente/agents/postulacion.py`, `puente/tools/` | #7, #12, #84 | SQLite, CV ciego en PDF, Telegram con respaldo en `outbox/`, `.ics` y agenda de la entrevista. |
+| `puente/agents/postulacion.py`, `puente/tools/` | #7, #12, #84, #212 | SQLite, CV ciego y carta de presentación en PDF, Telegram con respaldo en `outbox/`, `.ics` y agenda de la entrevista. |
 | `puente/cargar.py` | #46 | Carga inicial de `data/` en `puente.db`. |
 | `puente/metricas.py` | #47, #198 | Indicadores ilustrativos con datos de la demo, rotulados como tales, y tendencias del mercado sobre las ofertas de `puente.db`. |
 | `app/server.py`, `app/empresa.py`, `app/joven_fase2.py`, `app/static/` | #11, #33, #49, #52, #166, #167 | Starlette y Uvicorn, con HTML, CSS y JS sin framework. Sirve tres vistas: el tablero del orientador (`/`); la vista del joven (`/joven`), con formulario, entrevista de una vez o por chat, tirilla de matrícula y «Mis postulaciones»; y la lista corta ciega de la empresa (`/empresa/lista-corta`), con aceptar, rechazar o vacante cubierta. |
@@ -240,6 +240,7 @@ Cómo se lee cada arista condicional:
 9. **Postulación** (#7, #12, #84). Solo corre después de la aprobación:
    - guarda perfil, oferta y postulación en SQLite y la avanza por sus estados, cada paso con su `Decision` en la tabla `decisiones`;
    - genera el CV ciego en PDF, solo con las habilidades que tienen evidencia;
+   - genera la carta de presentación (#212, `puente/tools/carta.py`) por plantilla y sin LLM: saludo, puesto, de 2 a 3 habilidades que la oferta pide con su frase literal y la disponibilidad, todo pasado por `cegar()`;
    - elige una franja de entrevista sin choques y crea el `.ics` de 45 minutos;
    - envía la lista corta a la empresa por Telegram o, sin token, la escribe en `outbox/`.
 
@@ -302,7 +303,7 @@ uv run python -m puente.graph
 - **`--auto`** decide sin preguntar, por ejemplo `--auto "aprobar,aprobar,empresa_rechaza:yaritza@of-cajero-vista-alegre,aprobar"`. Sin esta opción, la demo pregunta en cada vacante.
 - **`--telegram`**: en la demo por terminal es la única forma de que algo salga por Telegram. Sin esta opción, todo se escribe en `outbox/`, aunque `.env` traiga token.
   - **El tablero no tiene esa opción y tiene dos caminos de salida:**
-    - **Postulación.** La lista corta a la empresa (CV ciego, `.ics` y mensaje) la arma `_nodo_postulacion_tablero` en `app/server.py`. Llama a `postular()` (`puente/agents/postulacion.py`) con `outbox/` de la raíz del repositorio, y `postular()` la manda con `enviar_lista_corta()` (`puente/tools/telegram.py`). Sale por Telegram si el entorno del proceso trae `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID_EMPRESA`; si no, queda en esa carpeta.
+    - **Postulación.** La lista corta a la empresa (CV ciego, carta, `.ics` y mensaje) la arma `_nodo_postulacion_tablero` en `app/server.py`. Llama a `postular()` (`puente/agents/postulacion.py`) con `outbox/` de la raíz del repositorio, y `postular()` la manda con `enviar_lista_corta()` (`puente/tools/telegram.py`). Sale por Telegram si el entorno del proceso trae `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID_EMPRESA`; si no, queda en esa carpeta.
     - **Avisos del reacomodo.** Los avisos al joven los escribe el nodo `avisos` del grafo, que el tablero no reemplaza: `crear_nodo_avisos()` de `nodos_fase_2()` (`puente/graph.py`), con el transporte `sin_telegram`. Nunca salen por Telegram y van a `PUENTE_OUTBOX` o, si falta, a `outbox/` del directorio desde donde se arrancó el servidor (`outbox_por_entorno()`).
 
 **Otras piezas:**
@@ -338,7 +339,7 @@ La vista de la empresa (`/empresa/lista-corta`) se abre con un código por empre
 |---|---|---|---|---|
 | Base de Puente | `puente.db` | `%TEMP%/puente_tablero.db` | `PUENTE_DB` | Perfiles, ofertas, postulaciones con su historial, `entrevistas`, `decisiones`, `descartes`, y las tablas de la carga `cargas` y `cargas_ofertas`; la del tablero guarda además su estado en `tablero_estado` (#122) |
 | Checkpoints del grafo | `checkpoints.db` | `<base>_checkpoints.db`, junto a la base | `PUENTE_CHECKPOINTS` | Cada caso por `thread_id`, para retomarlo después del `interrupt()` |
-| Salida de mensajes | `outbox/` | Lista corta: `outbox/` en la raíz del repositorio. Avisos del reacomodo: `PUENTE_OUTBOX` u `outbox/` del directorio de trabajo | `PUENTE_OUTBOX` (terminal y avisos del tablero) | CV ciego, `.ics` y mensajes a la empresa y al joven cuando no salen por Telegram |
+| Salida de mensajes | `outbox/` | Lista corta: `outbox/` en la raíz del repositorio. Avisos del reacomodo: `PUENTE_OUTBOX` u `outbox/` del directorio de trabajo | `PUENTE_OUTBOX` (terminal y avisos del tablero) | CV ciego, carta, `.ics` y mensajes a la empresa y al joven cuando no salen por Telegram |
 
 Hoy la lista corta del tablero va siempre a `outbox/` de la raíz, sin mirar `PUENTE_OUTBOX`, y los avisos del reacomodo sí la respetan. Si el servidor se arranca desde la raíz y sin `PUENTE_OUTBOX`, los dos caminos terminan en la misma carpeta. Eso cambia si se fusiona el #207, que hace que el tablero respete `PUENTE_OUTBOX`. Para repetir la demo desde cero se usa otra `PUENTE_DB` o se borran esos archivos.
 

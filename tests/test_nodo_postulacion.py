@@ -407,7 +407,9 @@ def test_sin_mensaje_del_orientador_la_empresa_no_ve_a_quien_no_consintio(tmp_pa
     assert texto.startswith("Buen día, Minisúper Ficticio El Ahorro: desde Puente les presentamos a Carlos Ficticio")
     assert caso.valores["aprobacion"]["sin_consentimiento"] == ["yaritza"]
     assert caso.valores["postulaciones"] == {f"carlos:{CAJERO}": EstadoPostulacion.ENVIADO}
-    assert {a.name for a in mensaje[3]} == {f"cv_carlos_{CAJERO}.pdf", f"entrevista_carlos_{CAJERO}.ics"}
+    assert {a.name for a in mensaje[3]} == {
+        f"cv_carlos_{CAJERO}.pdf", f"carta_carlos_{CAJERO}.pdf", f"entrevista_carlos_{CAJERO}.ics"
+    }
     conn = caso.conexion()
     try:
         assert any("rearmado" in t["salida_resumen"] for t in db.trazas(conn, agente="postulacion"))
@@ -626,8 +628,10 @@ def test_una_persona_sin_ninguna_hora_posible_no_frena_al_resto_de_la_oferta(tmp
     (mensaje,) = caso.empresa.mensajes
     _, _, texto, adjuntos = mensaje
     assert "Carlos Ficticio" in texto and "Yaritza" not in texto
-    assert {a.name for a in adjuntos} == {f"cv_carlos_{CAJERO}.pdf", f"entrevista_carlos_{CAJERO}.ics"}
-    assert not list(caso.outbox.glob("*yaritza*"))  # ni .ics ni CV para ella
+    assert {a.name for a in adjuntos} == {
+        f"cv_carlos_{CAJERO}.pdf", f"carta_carlos_{CAJERO}.pdf", f"entrevista_carlos_{CAJERO}.ics"
+    }
+    assert not list(caso.outbox.glob("*yaritza*"))  # ni .ics, ni CV, ni carta para ella
     valores = caso.valores
     # Yaritza consintió (nodo_aprobacion la deja en consentido, #54) pero no sale: no tiene hora.
     assert valores["postulaciones"] == {
