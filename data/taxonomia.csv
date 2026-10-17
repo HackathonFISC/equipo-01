@@ -41,12 +41,12 @@ ventas_activas,realizar ventas activas,ventas telefónicas|telemercadeo|venta pr
 preparar_bebidas_calientes,preparar bebidas calientes,preparar café|hacer café|bebidas calientes,http://data.europa.eu/esco/skill/e4fb4f26-1c0c-45e4-9250-5be32cee2a48
 uso_crm,utilizar software de gestión de relaciones con clientes,usar CRM|manejo de CRM|software CRM,http://data.europa.eu/esco/skill/9889b795-d755-41b2-8afd-2e3c87a65a38
 preparar_vegetales,preparar vegetales para usar en un plato,preparar verduras|cortar vegetales|preparar ingredientes,http://data.europa.eu/esco/skill/73b97efd-49fe-49d7-89dd-444f870cd210
-excel,Microsoft Excel,hojas de cálculo|excel|tablas dinámicas,http://data.europa.eu/esco/skill/1225b032-7ead-464c-9072-64097d9a4b62
-ventas,Ventas,vender|técnicas de venta|asesoría comercial,http://data.europa.eu/esco/skill/29a50780-f81b-429c-b410-7f23a492e19d
-cocina,Preparación de alimentos,cocinar|cocina|manipulación de alimentos,http://data.europa.eu/esco/skill/a2a6b6b0-7384-49d0-a7a0-13a9f66e22c5
-organizacion_eventos,Organización de eventos,organizar eventos|logística de eventos,http://data.europa.eu/esco/skill/8c1662b3-8635-4867-86a8-592616a29368
-ingles_basico,Inglés básico,inglés|ingles|inglés conversacional,http://data.europa.eu/esco/skill/00643980-467d-4799-a08f-a1019091314d
-ofimatica_basica,utilizar programas informáticos de oficina,ofimática básica|word|procesador de textos,http://data.europa.eu/esco/skill/f6322567-6950-4763-b59f-664a9a23794e
-facturacion,emitir facturas,facturación|emitir recibos|cobros y facturas,http://data.europa.eu/esco/skill/c5c00201-7646-4812-8b99-8267f17076a5
-control_calidad,inspeccionar la calidad de los productos,control de calidad|revisión de mercancía,http://data.europa.eu/esco/skill/5f62397e-569a-4919-8390-810e10a1a5f4
-comunicacion_efectiva,comunicarse con eficacia,comunicación efectiva|expresión oral,http://data.europa.eu/esco/skill/86a2f621-2447-4876-a6a8-02059379a7e4
+organizacion_eventos,coordinar eventos,organizar eventos|logística de eventos|organización de eventos,http://data.europa.eu/esco/skill/2111dff8-f830-46ad-80ce-7885893b3134
+ingles_basico,inglés,Inglés básico|inglés|ingles|inglés conversacional,http://data.europa.eu/esco/skill/6d3edede-8951-4621-a835-e04323300fa0
+ofimatica_basica,programas de ofimática,ofimática básica|word|procesador de textos|utilizar programas informáticos de oficina,http://data.europa.eu/esco/skill/cf310cff-0d28-4dbc-9dbb-cc500a3196c2
+facturacion,emitir facturas de venta,facturación|emitir facturas|emitir recibos|cobros y facturas,http://data.europa.eu/esco/skill/e3e42d54-78bd-4337-aa87-bb31a7670c9a
+control_calidad,inspeccionar la calidad de los productos,control de calidad|revisión de mercancía,http://data.europa.eu/esco/skill/1a3660c2-011c-4e96-9b1d-529afc305428
+excel,Microsoft Excel,hojas de cálculo|excel|tablas dinámicas,
+ventas,Ventas,vender|técnicas de venta|asesoría comercial,
+cocina,Preparación de alimentos,cocinar|cocina|manipulación de alimentos,
+comunicacion_efectiva,comunicarse con eficacia,comunicación efectiva|expresión oral,

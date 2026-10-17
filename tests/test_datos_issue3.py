@@ -12,7 +12,7 @@ DATA = Path(__file__).resolve().parents[1] / "data"
 
 def test_perfiles_sinteticos_validan_y_justifican_habilidades():
     with (DATA / "taxonomia.csv").open(encoding="utf-8", newline="") as archivo:
-        skill_ids = {fila["skill_id"] for fila in csv.DictReader(archivo)}
+        skill_ids = {fila["skill_id"].strip() for fila in csv.DictReader(archivo)}
     perfiles = [json.loads(ruta.read_text(encoding="utf-8")) for ruta in (DATA / "perfiles").glob("*.json")]
     assert len(perfiles) == 10
     assert len({p["id"] for p in perfiles}) == 10
