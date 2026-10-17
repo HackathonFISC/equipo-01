@@ -560,3 +560,54 @@ def test_nodo_matching_y_plantilla_deterministica():
     d0 = nuevo["decisiones"][0]
     agente_d0 = d0["agente"] if isinstance(d0, dict) else d0.agente
     assert agente_d0 == "matching"
+
+
+def test_cobertura_cero_descarta_en_lista_corta_salvo_oferta_sin_habilidades():
+    """Regresión #98: cobertura 0 descarta con motivo claro cuando la oferta exige habilidades, pero no si no pide ninguna."""
+    maria = {
+        "id": "maria",
+        "nombre": "María Ficticia",
+        "corregimiento": "La Chorrera",
+        "salario_minimo": 450.0,
+        "presupuesto_pasaje_diario": 4.00,
+        "habilidades": [{"skill_id": "cocina", "evidencia": "Fonda"}],
+    }
+    yaritza = _perfil_yaritza()
+
+    oferta_cajero = {
+        "id": "of-cajero-vista-alegre",
+        "puesto": "Cajero(a) de minisúper",
+        "empresa": "Minisúper Ficticio El Ahorro",
+        "corregimiento": "Vista Alegre",
+        "salario_mensual": 650.0,
+        "habilidades": ["manejo_caja", "atencion_cliente"],
+        "bloqueada": False,
+    }
+    oferta_sin_requisitos = {
+        "id": "of-sin-habilidades",
+        "puesto": "Ayudante general",
+        "empresa": "Bodega Oeste",
+        "corregimiento": "La Chorrera",
+        "salario_mensual": 620.0,
+        "habilidades": [],
+        "bloqueada": False,
+    }
+
+    traslados = construir_matriz_default()
+    matches = asignar([maria, yaritza], [oferta_cajero], traslados)
+    ids_corta = [m.perfil_id for m in matches if m.oferta_id != SIN_OFERTA and m.desglose.get("viable")]
+    assert "PERFIL-YARITZA" in ids_corta
+    assert "maria" not in ids_corta
+
+    descarte_maria = next(m for m in matches if m.perfil_id == "maria")
+    assert descarte_maria.oferta_id == SIN_OFERTA
+    assert descarte_maria.desglose.get("viable") is False
+    assert "ninguna habilidad requerida en común" in str(descarte_maria.desglose.get("motivo_descarte"))
+    assert set(descarte_maria.brechas) == {"manejo_caja", "atencion_cliente"}
+
+    # Si la vacante no exige habilidades, nadie se descarta por cobertura
+    matches_sin_req = asignar([maria], [oferta_sin_requisitos], traslados)
+    assert [m.perfil_id for m in matches_sin_req if m.oferta_id != SIN_OFERTA and m.desglose.get("viable")] == ["maria"]
+
+
+

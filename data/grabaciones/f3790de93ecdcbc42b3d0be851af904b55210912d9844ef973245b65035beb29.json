@@ -1,0 +1,40 @@
+{
+  "hash": "f3790de93ecdcbc42b3d0be851af904b55210912d9844ef973245b65035beb29",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "perfil",
+  "esquema": "PerfilExtraido",
+  "salida": {
+    "habilidades": [
+      {
+        "skill_id": "atencion_cliente",
+        "evidencia": "Atiendo a los clientes y les tomo el pedido, cobro y doy el vuelto."
+      },
+      {
+        "skill_id": "tomar_pedidos",
+        "evidencia": "Atiendo a los clientes y les tomo el pedido, cobro y doy el vuelto."
+      },
+      {
+        "skill_id": "manejo_caja",
+        "evidencia": "Atiendo a los clientes y les tomo el pedido, cobro y doy el vuelto."
+      },
+      {
+        "skill_id": "cocina",
+        "evidencia": "Sé usar el celular y ayudo a cocinar el almuerzo."
+      }
+    ],
+    "edad": null,
+    "corregimiento": null,
+    "ubicacion_texto": null,
+    "salario_minimo": null,
+    "horario_libre": [],
+    "horario_clases": [],
+    "transcripcion_literal": null
+  },
+  "uso": {
+    "entrada": 4419,
+    "salida": 287
+  },
+  "creado": "2026-10-17T01:29:38+00:00"
+}

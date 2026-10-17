@@ -77,3 +77,39 @@ def test_fuentes_md_distingue_dato_medido_dato_de_prueba_y_supuesto():
     assert "mibus" in texto
     assert "metro de panamá" in texto or "metro de panama" in texto
     assert "inadeh" in texto
+
+
+def test_taxonomia_uris_esco_unicas_y_validas_76():
+    """Issue #76: Sin URIs inventadas ni duplicadas en data/taxonomia.csv; unión de 51 filas lista."""
+    ruta_tax = RAIZ / "data" / "taxonomia.csv"
+    taxonomia = cargar_taxonomia(ruta_tax)
+    assert len(taxonomia) >= 51
+
+    uris_inexistentes_antiguas = {
+        "http://data.europa.eu/esco/skill/a2a6b6b0-7384-49d0-a7a0-13a9f66e22c5",
+        "http://data.europa.eu/esco/skill/8c1662b3-8635-4867-86a8-592616a29368",
+        "http://data.europa.eu/esco/skill/00643980-467d-4799-a08f-a1019091314d",
+        "http://data.europa.eu/esco/skill/f6322567-6950-4763-b59f-664a9a23794e",
+        "http://data.europa.eu/esco/skill/c5c00201-7646-4812-8b99-8267f17076a5",
+        "http://data.europa.eu/esco/skill/5f62397e-569a-4919-8390-810e10a1a5f4",
+        "http://data.europa.eu/esco/skill/86a2f621-2447-4876-a6a8-02059379a7e4",
+    }
+
+    uris_vistas: set[str] = set()
+    for sid, datos in taxonomia.items():
+        uri = datos["uri_esco"]
+        assert uri not in uris_inexistentes_antiguas, f"{sid} conserva URI inexistente {uri}"
+        if uri:
+            assert uri not in uris_vistas, f"URI duplicada en data/taxonomia.csv: {uri} ({sid})"
+            uris_vistas.add(uri)
+
+    assert taxonomia["facturacion"]["uri_esco"] == "http://data.europa.eu/esco/skill/e3e42d54-78bd-4337-aa87-bb31a7670c9a"
+    assert taxonomia["facturacion"]["nombre_es"] == "emitir facturas de venta"
+    assert taxonomia["organizacion_eventos"]["uri_esco"] == "http://data.europa.eu/esco/skill/2111dff8-f830-46ad-80ce-7885893b3134"
+    assert taxonomia["ingles_basico"]["uri_esco"] == "http://data.europa.eu/esco/skill/6d3edede-8951-4621-a835-e04323300fa0"
+    assert taxonomia["ofimatica_basica"]["uri_esco"] == "http://data.europa.eu/esco/skill/cf310cff-0d28-4dbc-9dbb-cc500a3196c2"
+    assert taxonomia["control_calidad"]["uri_esco"] == "http://data.europa.eu/esco/skill/1a3660c2-011c-4e96-9b1d-529afc305428"
+
+    for supuesto_id in ("cocina", "comunicacion_efectiva", "excel", "ventas"):
+        assert taxonomia[supuesto_id]["uri_esco"] == ""
+
