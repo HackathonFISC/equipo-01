@@ -131,7 +131,7 @@ Cómo se lee cada arista condicional:
 | `puente/agents/formacion.py` | #14, #53 | Cursos del INADEH para cerrar brechas: cobertura voraz de conjuntos (*set cover*). |
 | `puente/agents/postulacion.py`, `puente/tools/` | #7, #12, #84 | SQLite, CV ciego en PDF, Telegram con respaldo en `outbox/`, `.ics` y agenda de la entrevista. |
 | `puente/cargar.py` | #46 | Carga inicial de `data/` en `puente.db`. |
-| `puente/metricas.py` | #47 | Indicadores ilustrativos con datos de la demo, rotulados como tales. |
+| `puente/metricas.py` | #47, #198 | Indicadores ilustrativos con datos de la demo, rotulados como tales, y tendencias del mercado sobre las ofertas de `puente.db`. |
 | `app/server.py`, `app/empresa.py`, `app/joven_fase2.py`, `app/static/` | #11, #33, #49, #52, #166, #167 | Starlette y Uvicorn, con HTML, CSS y JS sin framework. Sirve tres vistas: el tablero del orientador (`/`); la vista del joven (`/joven`), con formulario, entrevista de una vez o por chat, tirilla de matrícula y «Mis postulaciones»; y la lista corta ciega de la empresa (`/empresa/lista-corta`), con aceptar, rechazar o vacante cubierta. |
 | `evals/run.py`, `evals/casos.yaml` | #13, #129 | Evals propios, con el resultado esperado escrito antes de correr. |
 | `puente/agents/horario.py`, `redactor.py`, `micromision.py` | #164, #157, #158 | Fase 1 de tres extensiones. Horario ya lee la tirilla desde `/joven`. Redactor y Micromisión se usan desde su propia CLI y desde los evals, sin conexión al grafo ni al tablero (ver [Límites](#5-límites)). |
@@ -202,7 +202,7 @@ Cómo se lee cada arista condicional:
      - horario sin cruce con las clases y dentro del horario libre;
      - salario igual o mayor al mínimo que pide el joven;
      - al menos una habilidad en común, si la oferta pide habilidades;
-     - hasta 3 candidatos por vacante y hasta 2 vacantes por joven.
+     - hasta 3 candidatos por plaza (una vacante con 2 plazas admite 6) y hasta 2 vacantes por joven.
    - **Si falta un dato** de la oferta, como el salario, el horario o las habilidades, no se descarta por ese dato. El par baja 10 puntos por cada dato que falta y queda «por confirmar». La excepción es el traslado: un par sin fila en la matriz de traslados no es viable.
    - **El puntaje** es la cobertura de habilidades. Los minutos de traslado no restan puntaje: filtran por el máximo y desempatan entre las vacantes de un mismo joven.
    - **La explicación** de cada match es una plantilla determinística, sin LLM.
@@ -306,6 +306,7 @@ uv run python -m puente.graph
 
 ```bash
 uv run python -m puente.cargar                 # carga data/ en puente.db (#46)
+uv run python -m puente.metricas --tendencias  # tendencias del mercado sobre puente.db (#198)
 uv run python -m puente.agents.perfil --entrevista   # entrevista de Perfil por terminal
 uv run python -m app.server                    # tablero en http://127.0.0.1:8000 (vista del joven en /joven)
 uv run python -m evals.run                     # evals (escribe evals/resultados.md)
@@ -398,9 +399,14 @@ El registro completo está en [`decisiones.md`](decisiones.md). El horario y las
 ## 5. Límites
 
 - **Entrevista simulada: fuera de alcance.** Puente no ensaya entrevistas de trabajo con el joven. La entrevista de Perfil solo sirve para conocer sus habilidades.
-- **Tendencias del mercado: no implementadas.** No hay análisis de demanda por ocupación ni series en el tiempo; Mercado procesa ofertas una por una.
+- **Tendencias del mercado: solo por terminal y sin series en el tiempo.** `uv run python -m puente.metricas --tendencias` (#198) resume las ofertas que dejó `puente.cargar` en `puente.db`: habilidades más pedidas, mediana del salario publicado por corregimiento (las ofertas sin cifra se cuentan aparte) y ofertas bloqueadas por la Ley 11 con su regla. Es código sin LLM y cuenta también las bloqueadas. El tablero no lo muestra, y con 20 ofertas de un solo día no hay evolución que medir.
 - **El determinismo vale a la escala de la demo.** El solver usa 1 hilo, semilla fija (42) y orden por id, así que con la misma entrada da el mismo resultado. Pero la búsqueda se corta a los 1.8 segundos (`max_time_in_seconds`). Con los datos de la demo llega al resultado antes de ese corte. Con muchos más jóvenes y vacantes, el corte podría dejar una asignación distinta según la máquina.
-- **El tablero usa stubs de Mercado y Perfil.** Construye el grafo con `stub_mercado` y `stub_perfil` (`app/server.py`, en la función que arma el grafo del tablero). Sus ofertas y perfiles vienen sembrados en el código o del formulario: pasan por las reglas de la Ley 11 y por los guardrails, pero sin extracción por LLM. El Matching, el Auditor, Formación y Postulación del tablero sí son reales. La vista `/joven` usa el agente Perfil real.
+- **El grafo del tablero usa stubs de Mercado y Perfil.** Lo construye con `stub_mercado` y `stub_perfil` (`app/server.py`, en la función que arma el grafo del tablero), así que lo que ya está en el tablero no se vuelve a extraer. Las ofertas y perfiles nuevos entran de tres formas:
+  - **«Cargar desde data/»** (#205) lee el archivo elegido. Un anuncio de `data/ofertas/` pasa por los guardrails y por el agente Mercado real (`puente.llm`; en modo reproducir, con las grabaciones de las 20 ofertas), y la Ley 11 se aplica sobre el texto del anuncio. El mismo archivo no se carga dos veces. Un perfil de `data/perfiles/` entra tal como está en el archivo, validado como `Perfil` y con guardrails sobre sus evidencias.
+  - **Los ejemplos escritos en el código** salen rotulados «ejemplo sintético (no es un archivo)» y no pasan por el LLM.
+  - **El formulario** tampoco usa el LLM, pero pasa por las reglas de la Ley 11 y por los guardrails.
+
+  El Matching, el Auditor, Formación y Postulación del tablero sí son reales. La vista `/joven` usa el agente Perfil real.
 - **La demo por terminal no pasa por Mercado.** El caso Yaritza entra como perfil, con las ofertas ya cargadas, y por defecto usa respuestas grabadas (`--llm grabado`). La extracción real de ofertas se ve con `puente.cargar`.
 - **El Auditor dentro del grafo** recalcula el Matching con las variantes, pero no vuelve a correr el LLM de Perfil. Por eso mide que el solver no dependa del nombre, el género o el corregimiento. Hoy nada mide si el nombre cambia lo que extrae el LLM de Perfil: los evals de sesgo tampoco usan LLM.
 - **Dos extensiones sin conectar.** El redactor de una versión legal de la oferta (#157) y la micro-misión con *scorecard* ciego (#158) existen como módulos con su CLI y sus evals, pero no están en el grafo ni en el tablero. Horario (#164) sí está conectado: `/joven` lee la tirilla, la confirma y recalcula.
