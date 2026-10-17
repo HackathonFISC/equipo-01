@@ -1,0 +1,39 @@
+{
+  "id": "P07",
+  "nombre": "Perfil G (ficticio)",
+  "edad": 24,
+  "corregimiento": "24 de Diciembre",
+  "horario_libre": [
+    {
+      "dias": [
+        "lunes",
+        "martes",
+        "miercoles",
+        "jueves",
+        "viernes",
+        "sabado"
+      ],
+      "hora_inicio": "06:00",
+      "hora_fin": "15:00"
+    }
+  ],
+  "horario_clases": [],
+  "salario_minimo": 600,
+  "presupuesto_pasaje_diario": 2.5,
+  "experiencia_texto": "En una colecta escolar cargué cajas, organicé productos por categoría y registré entregas en una lista.",
+  "habilidades": [
+    {
+      "skill_id": "carga_mercancia",
+      "evidencia": "cargué cajas"
+    },
+    {
+      "skill_id": "organizacion_almacen",
+      "evidencia": "organicé productos por categoría"
+    },
+    {
+      "skill_id": "registro_datos",
+      "evidencia": "registré entregas en una lista"
+    }
+  ],
+  "datos_sinteticos": true
+}
