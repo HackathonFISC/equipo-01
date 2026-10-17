@@ -482,6 +482,10 @@ def mis_postulaciones(estado: dict[str, Any], perfil_id: str) -> dict[str, Any]:
                 and any(str(a).endswith(".ics") for a in post.get("archivos_generados") or []),
             }
         )
+    # Las que el recálculo ya quitó del estado (#256) también cuentan: el aviso no depende de que sigan ahí (#270).
+    salieron_de_lista += srv.salieron_de_lista_corta(
+        estado, perfil_id, {p["oferta_id"] for p in postulaciones} | {s["oferta_id"] for s in salieron_de_lista}
+    )
     return {
         "perfil_id": perfil_id,
         "pasos_embudo": list(PASOS_EMBUDO),
