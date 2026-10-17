@@ -22,7 +22,9 @@ STATIC = RAIZ / "app" / "static"
 REFERENCIA = re.compile(r"/static/([\w.-]+\.(?:js|css))(?:\?v=([\w.-]+))?")
 
 PAGINAS = {  # ruta del servidor -> archivo que la sirve
-    "/": "index.html",
+    "/": "landing.html",
+    "/orientador": "index.html",
+    "/inicio": "landing.html",
     "/joven": "joven.html",
     "/empresa": "empresa.html",
     "/empresa/lista-corta": "empresa_lista.html",

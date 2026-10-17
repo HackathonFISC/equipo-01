@@ -189,7 +189,7 @@ function filaResumen(f, etiquetas) {
   if (f.viables_pool != null) {
     const texto =
       f.situacion === "bloqueada"
-        ? "Nadie la ve mientras esté bloqueada: revisa la versión legal que propone Puente abajo."
+        ? "Nadie la ve mientras esté bloqueada: revisa la versión legal que propone SkillMatch abajo."
         : f.viables_pool <= 1
           ? `Pocos candidatos cumplen estas condiciones (${f.viables_pool} en el grupo de la demo).`
           : `${f.viables_pool} candidatos del grupo de la demo cumplen traslado, pasaje, horario y salario.`;
@@ -234,6 +234,34 @@ function pintarResumen(r) {
     ),
     el("div", { class: "resumen-vacantes" }, r.vacantes.map((f) => filaResumen(f, r.etiquetas_embudo || {}))),
   );
+}
+
+// ---------- Mensajes de los candidatos (#289) ----------
+
+// «Nuevo mensaje de Candidato N»: el mismo alias de la lista corta, con el texto que el servidor ya limpió y cegó.
+function pintarMensajes(datos) {
+  const mensajes = (datos && datos.mensajes) || [];
+  $("mensajes").hidden = mensajes.length === 0;
+  vaciar(
+    $("lista-mensajes"),
+    mensajes.map((m) =>
+      el(
+        "article",
+        { class: "candidato mensaje", "data-ref": m.ref },
+        el("header", { class: "candidato-cabecera" }, el("h4", { text: `Nuevo mensaje de ${m.alias}` }), etiqueta(m.puesto, "info")),
+        el("p", { class: "mensaje-texto", text: m.texto }),
+      ),
+    ),
+  );
+}
+
+async function cargarMensajes() {
+  try {
+    pintarMensajes(await api(rutaEmpresa("mensajes")));
+  } catch (err) {
+    if (err.status === 401) fallo(err);
+    else $("mensajes").hidden = true;
+  }
 }
 
 async function descargarIcs(v, c) {
@@ -507,6 +535,7 @@ function fallo(err) {
 async function responder(cuerpo, exito) {
   try {
     pintar(await api(rutaEmpresa("responder"), cuerpo));
+    await cargarMensajes();
     mostrarAviso(exito);
   } catch (err) {
     fallo(err);
@@ -517,6 +546,7 @@ async function cargar(boton) {
   const tarea = async () => {
     try {
       pintar(await api(rutaEmpresa("lista-corta")));
+      await cargarMensajes();
     } catch (err) {
       fallo(err);
     }

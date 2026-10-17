@@ -1,0 +1,60 @@
+{
+  "id": "P18",
+  "nombre": "Carlos (ficticio)",
+  "edad": 29,
+  "corregimiento": "Juan Díaz",
+  "horario_libre": [
+    {
+      "dias": [
+        "lunes",
+        "martes",
+        "miercoles",
+        "jueves",
+        "viernes"
+      ],
+      "hora_inicio": "07:00",
+      "hora_fin": "17:00"
+    },
+    {
+      "dias": [
+        "sabado"
+      ],
+      "hora_inicio": "08:00",
+      "hora_fin": "13:00"
+    }
+  ],
+  "salario_minimo": 800,
+  "presupuesto_pasaje_diario": 2.0,
+  "experiencia_texto": "Manejaba caja con cierre diario de hasta B/. 3,000 sin faltantes. Emitía facturas fiscales y notas de crédito. Llamaba a clientes con cuotas atrasadas y acordaba fechas de pago. Registraba los pagos de facturas de proveedores en el sistema.",
+  "habilidades": [
+    {
+      "skill_id": "manejo_caja",
+      "evidencia": "Manejaba caja con cierre diario"
+    },
+    {
+      "skill_id": "facturacion",
+      "evidencia": "Emitía facturas fiscales"
+    },
+    {
+      "skill_id": "seguimiento_cobros",
+      "evidencia": "Llamaba a clientes con cuotas atrasadas y acordaba fechas de pago"
+    },
+    {
+      "skill_id": "pago_facturas",
+      "evidencia": "Registraba los pagos de facturas de proveedores"
+    }
+  ],
+  "datos_sinteticos": true,
+  "horario_clases": [
+    {
+      "dias": [
+        "lunes",
+        "martes",
+        "miercoles",
+        "jueves"
+      ],
+      "hora_inicio": "18:00",
+      "hora_fin": "21:30"
+    }
+  ]
+}

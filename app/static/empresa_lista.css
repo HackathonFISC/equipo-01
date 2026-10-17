@@ -639,4 +639,14 @@ textarea:focus-visible {
 .etiqueta-bloqueada {
   background: var(--bad-soft);
   border-color: var(--bad);
+
+/* Mensajes de los candidatos (#289) */
+.mensajes {
+  margin-bottom: 1rem;
+}
+
+.mensaje-texto {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
