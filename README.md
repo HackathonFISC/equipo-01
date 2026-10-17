@@ -266,7 +266,7 @@ cp .env.example .env
 uv run pytest -q
 ```
 
-**Modo sin red.** Con `LLM_MODO=reproducir` (el valor de `.env.example`) ningún agente llama a la red; si falta una grabación, el agente falla con un mensaje que dice cuál es, en vez de llamar al modelo. La excepción es Micromisión: sin grabación usa su respaldo con expresiones regulares (`"metodo": "respaldo"`). En Windows, si la salida va a un archivo o a otra consola, antepón `PYTHONUTF8=1` para que los acentos y los símbolos no corten la salida. Sin `.env`, exporta `LLM_MODO=reproducir` antes de cada comando, porque el valor por defecto de `puente/llm.py` es `vivo`.
+**Modo sin red.** Con `LLM_MODO=reproducir` (el valor de `.env.example`) ningún agente llama a la red; si falta una grabación, el agente falla con un mensaje que dice cuál es, en vez de llamar al modelo. Hay dos excepciones: Micromisión usa su respaldo con expresiones regulares (`"metodo": "respaldo"`) y el Redactor cae a su plantilla. En Windows, si la salida va a un archivo o a otra consola, antepón `PYTHONUTF8=1` para que los acentos y los símbolos no corten la salida. Sin `.env`, exporta `LLM_MODO=reproducir` antes de cada comando, porque el valor por defecto de `puente/llm.py` es `vivo`.
 
 **1. El caso de Yaritza en la terminal.** Recorre todo el grafo con los agentes reales y sus respuestas grabadas, y se detiene en cada vacante para preguntar qué hace el orientador.
 
@@ -358,7 +358,7 @@ Solo existe [`.env.example`](.env.example), sin claves reales: se copia a `.env`
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID_EMPRESA` | Bot y chat de la empresa de demo. Sin ellos, los mensajes van a `outbox/` |
 | `TELEGRAM_CHATS_JOVENES` | Un chat por joven (`perfil_id=chat_id`); quien no esté recibe su aviso en `outbox/` |
 | `PUENTE_DB` | Base SQLite; por defecto `puente.db`. El tablero, sin esta variable, usa `%TEMP%/puente_tablero.db` |
-| `PUENTE_OUTBOX` | Carpeta del CV ciego, el `.ics` y los mensajes; por defecto `outbox/`. Vale para la terminal; el tablero escribe en `outbox/` de la raíz hasta que entre el #207 |
+| `PUENTE_OUTBOX` | Carpeta del CV ciego, el `.ics` y los mensajes; por defecto `outbox/`. Vale para la terminal y para los avisos del reacomodo del tablero; el resto del tablero escribe en `outbox/` de la raíz hasta que entre el #207 |
 | `PUENTE_ENTREVISTA_INICIO` | Fecha ISO 8601 de la entrevista; vacía, mañana a las 10:00, marcada como provisional |
 | `PUENTE_SAL_ANONIMO` | Clave del código anónimo del scorecard (#158); vacía, una al azar por proceso |
 
