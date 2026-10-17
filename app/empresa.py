@@ -127,7 +127,7 @@ def verificar_token_empresa(estado: dict[str, Any], empresa_id: str, token: str 
     esperado = (estado.get("_tokens_empresa") or {}).get(empresa_id)
     if not token or esperado is None or not hmac.compare_digest(token.encode(), esperado.encode()):
         raise CredencialEmpresaInvalida(
-            "Falta el código de la empresa o no es correcto. Usa el enlace que te dio Puente."
+            "Falta el código de la empresa o no es correcto. Usa el enlace que te dio SkillMatch."
         )
 
 
@@ -451,7 +451,7 @@ def aceptar_candidato(estado: dict[str, Any], empresa_id: str, oferta_id: str, r
             duracion_min=DURACION_ENTREVISTA_MIN,
             lugar=oferta.empresa,
             descripcion=(
-                f"{oferta.empresa} confirmó en Puente la entrevista para {oferta.puesto} "
+                f"{oferta.empresa} confirmó en SkillMatch la entrevista para {oferta.puesto} "
                 f"(lista corta ciega, referencia {ref[:8]}). Hora de Panamá."
             ),
             destino=destino,

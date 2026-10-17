@@ -1072,7 +1072,7 @@ def recalcular_pipeline_tablero(
         desglose["evidencias"] = {s: evidencias_p.get(s, "") for s in cubiertas}
 
         mensaje_sugerido = (
-            f"Buen día, {o_info.get('empresa', 'equipo')}: desde Puente les presentamos a "
+            f"Buen día, {o_info.get('empresa', 'equipo')}: desde SkillMatch les presentamos a "
             f"{p_info.get('nombre', pid)} para la vacante de {o_info.get('puesto', oid)}. "
             "Quedamos atentos para coordinar entrevista."
         )
@@ -3153,7 +3153,7 @@ async def endpoint_empresa_postulaciones(request: Request) -> JSONResponse:
     empresa_id = empresa.empresa_del_token(estado, empresa._token_de(request))
     if empresa_id is None:
         return JSONResponse(
-            {"detail": "Falta el código de la empresa o no es correcto. Usa el enlace que te dio Puente."},
+            {"detail": "Falta el código de la empresa o no es correcto. Usa el enlace que te dio SkillMatch."},
             status_code=401,
         )
     return JSONResponse({"postulaciones": empresa.postulaciones_ciegas(estado, empresa_id)})
@@ -3297,7 +3297,7 @@ def verificar_token_joven(estado: dict[str, Any], perfil_id: str, token: str | N
     esperado = (estado.get("_tokens_joven") or {}).get(perfil_id)
     if not token or esperado is None or not hmac.compare_digest(token.encode(), esperado.encode()):
         raise CredencialJovenInvalida(
-            "Falta tu código completo o no es correcto. Escribe el código que te dio Puente al terminar la entrevista."
+            "Falta tu código completo o no es correcto. Escribe el código que te dio SkillMatch al terminar la entrevista."
         )
 
 

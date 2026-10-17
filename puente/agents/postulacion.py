@@ -256,7 +256,7 @@ def _nombra_a(texto: str, alias: set[str]) -> bool:
 def _saludo_a_la_empresa(oferta: Oferta, perfiles_enviados: list[Perfil]) -> str:
     nombres = ", ".join(p.nombre for p in perfiles_enviados)
     return (
-        f"Buen día, {oferta.empresa}: desde Puente les presentamos a {nombres} "
+        f"Buen día, {oferta.empresa}: desde SkillMatch les presentamos a {nombres} "
         f"para la vacante de {oferta.puesto}. Quedamos atentos para coordinar entrevistas."
     )
 
@@ -340,7 +340,7 @@ def texto_para_joven(
     ``enviados`` son (oferta, fecha propuesta de entrevista); ``descartadas`` son
     (nombre de la oferta, motivo). Avisa que el .ics de la entrevista va adjunto.
     """
-    lineas = [f"Hola, {perfil.nombre}. Esto es lo que hizo Puente por ti, con tu orientador(a):", ""]
+    lineas = [f"Hola, {perfil.nombre}. Esto es lo que hizo SkillMatch por ti, con tu orientador(a):", ""]
     if enviados:
         lineas.append("Te postulamos a:")
         for oferta, inicio in enviados:

@@ -33,7 +33,7 @@ SALUDO = "Al equipo de selección de {empresa}:"
 CIERRE = "Quedo a disposición para una entrevista. Gracias por su tiempo."
 DESPEDIDA = "Atentamente,"
 PIE = (
-    "Carta generada por Puente a partir de lo que la persona contó; "
+    "Carta generada por SkillMatch a partir de lo que la persona contó; "
     "cada habilidad lleva su frase literal."
 )
 
