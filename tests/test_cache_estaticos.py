@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 from starlette.testclient import TestClient
 
-PAGINAS = ("/", "/inicio", "/joven", "/empresa", "/empresa/lista-corta")
+PAGINAS = ("/", "/inicio", "/orientador", "/joven", "/empresa", "/empresa/lista-corta")
 ESTATICOS = ("/static/app.js", "/static/styles.css", "/static/joven_fase2.js", "/static/joven_fase2.css")
 
 

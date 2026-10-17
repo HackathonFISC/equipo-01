@@ -126,7 +126,7 @@ class MiddlewareDemoPublicaReadOnly(BaseHTTPMiddleware):
 
 
 # Páginas HTML que cargan sus propios .js y .css con `?v=`: si el navegador las guarda, el número nuevo no se pide nunca.
-PAGINAS_SIN_CACHE = frozenset({"/", "/inicio", "/joven", "/empresa", "/empresa/lista-corta"})
+PAGINAS_SIN_CACHE = frozenset({"/", "/inicio", "/orientador", "/joven", "/empresa", "/empresa/lista-corta"})
 
 
 class MiddlewareSinCache(BaseHTTPMiddleware):
@@ -2752,7 +2752,7 @@ def obtener_panel_operacion(estado: dict[str, Any]) -> dict[str, Any]:
         "whatsapp_estado": "activo" if os.getenv("TWILIO_AUTH_TOKEN") else "sandbox_inactivo",
         "umbrales_solver": cfg_solver,
         "roles_sistema": [
-            {"rol": "admin", "nombre": "Admin (Orientador)", "ruta": "/", "agente": "orientador"},
+            {"rol": "admin", "nombre": "Admin (Orientador)", "ruta": "/orientador", "agente": "orientador"},
             {"rol": "aplicante", "nombre": "Aplicante (Joven)", "ruta": "/joven", "agente": "joven"},
             {"rol": "empresa", "nombre": "Empresa", "ruta": "/empresa/lista-corta", "agente": "empresa"},
         ],
@@ -2901,7 +2901,7 @@ async def endpoint_index(_request: Request) -> FileResponse:
 
 
 async def endpoint_landing(_request: Request) -> FileResponse:
-    """Página de entrada (#281): lleva al joven a /joven, a la empresa a /empresa y al orientador a /."""
+    """Página de entrada (#281): lleva al joven a /joven, a la empresa a /empresa y al orientador a /orientador (#293)."""
     return FileResponse(RUTA_STATIC / "landing.html")
 
 
@@ -4264,8 +4264,10 @@ app = Starlette(
     lifespan=_ciclo_de_vida,
     middleware=[Middleware(MiddlewareDemoPublicaReadOnly), Middleware(MiddlewareSinCache)],
     routes=[
-        Route("/", endpoint_index, methods=["GET"]),
+        # La landing es la entrada (#293); el tablero del orientador vive en /orientador.
+        Route("/", endpoint_landing, methods=["GET"]),
         Route("/inicio", endpoint_landing, methods=["GET"]),
+        Route("/orientador", endpoint_index, methods=["GET"]),
         Route("/api/estado", endpoint_estado, methods=["GET"]),
         Route("/api/orientador/accion", endpoint_accion_orientador, methods=["POST"]),
         Route("/api/ofertas/desbloquear", endpoint_desbloquear_oferta, methods=["POST"]),
