@@ -30,6 +30,7 @@ CONTEO_ESPERADO = {
     "guardrails": 7,
     "horario_tirilla": 1,
     "horario_validacion": 1,
+    "micromision": 4,  # correcta, incorrecta, vacía y el contrafactual del Auditor (#158)
 }
 
 
@@ -112,6 +113,7 @@ def test_ids_siguen_el_formato_pedido(casos):
         "guardrails": "GRD",
         "horario_tirilla": "HOR",
         "horario_validacion": "HOR",
+        "micromision": "MIC",
     }
     for caso in casos["casos"]:
         assert caso["id"].startswith(prefijos[caso["categoria"]] + "-")

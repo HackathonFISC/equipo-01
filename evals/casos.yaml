@@ -31,6 +31,10 @@
 #                               vigente_hasta?, excepciones[]? ({desde, hasta})}  (#164, Claude con visión)
 #   horario_validacion          entrada {bloques[] (como los leería el LLM)} -> esperado {problemas[] ({indice, campo}),
 #                               horario_clases[]}  (#164, solo código)
+#   micromision                 entrada {reto_id (de data/retos.csv), texto, perfil?, variantes?} -> esperado {resultado
+#                               (correcto | incorrecto | sin respuesta legible), puntaje, respuesta?, datos_personales?
+#                               (lo personal que quedó en el scorecard: []), mismo_puntaje? (con variantes)}
+#                               (#158, sin LLM: la respuesta sale del respaldo determinístico y la corrige el código)
 #
 # La taxonomía vigente se carga del CSV al ejecutar los casos.
 
@@ -76,6 +80,11 @@ categorias:
     issue: 164
     usa_llm: false
     metrica: "Los bloques inválidos se rechazan (índice y campo) y los válidos dan el horario_clases esperado"
+    meta: 1.0
+  micromision:
+    issue: 158
+    usa_llm: false
+    metrica: "Resultado y puntaje del reto calculados en código iguales a lo esperado; mismo puntaje con nombre y género cambiados; scorecard sin datos personales"
     meta: 1.0
 
 casos:
@@ -906,6 +915,80 @@ casos:
         - dias: [lunes, miercoles]
           hora_inicio: "18:30"
           hora_fin: "21:30"
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  # ------------------------------------------------------------------ Micro-misión (4), issue #158
+  # Esperados calculados a mano con el enunciado del reto, antes de correr: CAJA-01 es 10 − (3.75 + 0.80) = 5.45
+  # con tolerancia ±0.01; INV-01 es 48 − 17 + 24 = 55. Sin LLM: el ejecutor usa el respaldo determinístico.
+  - id: MIC-01
+    categoria: micromision
+    descripcion: "Yaritza responde por texto el reto de caja (vuelto de un billete de 10): correcto, y su scorecard no lleva nombre, edad, género ni corregimiento."
+    entrada:
+      reto_id: CAJA-01
+      texto: "Le doy 5.45 de vuelto."
+      perfil:
+        id: yaritza-eval
+        nombre: "Yaritza Ficticia"
+        genero: "F"
+        edad: 20
+        corregimiento: "Barrio Colón"
+        salario_minimo: 400
+        presupuesto_pasaje_diario: 3.0
+        habilidades:
+          - {skill_id: manejo_caja, evidencia: "Tengo 20 años y en la fonda de mi mamá cobro y doy el vuelto"}
+    esperado:
+      resultado: correcto
+      puntaje: 100
+      respuesta: "5.45"
+      datos_personales: []
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: MIC-02
+    categoria: micromision
+    descripcion: "Respuesta incorrecta al conteo de inventario (olvida la caja que llegó): el código la marca incorrecta aunque cite un número del enunciado."
+    entrada:
+      reto_id: INV-01
+      texto: "Deberían quedar 31 latas, porque se vendieron 17."
+    esperado:
+      resultado: incorrecto
+      puntaje: 0
+      respuesta: "31"
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: MIC-03
+    categoria: micromision
+    descripcion: "Respuesta vacía: «sin respuesta legible» con puntaje 0; no se inventa una respuesta."
+    entrada:
+      reto_id: CAJA-01
+      texto: "   "
+    esperado:
+      resultado: "sin respuesta legible"
+      puntaje: 0
+      correcto: false
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: MIC-04
+    categoria: micromision
+    descripcion: "Contrafactual del Auditor: el mismo reto de caja con nombre y género cambiados da el mismo puntaje."
+    entrada:
+      reto_id: CAJA-01
+      texto: "Soy {nombre} y estoy {seguro|segura}: le doy 5.45 de vuelto."
+      perfil: {nombre: "Yaritza Ficticia", genero: femenino}
+      variantes:
+        - ["Carlos Ficticio", masculino]
+        - ["Alex Ficticio", no_especificado]
+    esperado:
+      mismo_puntaje: true
+      resultado: correcto
+      puntaje: 100
     escrito_el: "2026-10-17"
     datos_sinteticos: true
     fallos: []
