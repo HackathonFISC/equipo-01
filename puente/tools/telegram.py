@@ -135,7 +135,6 @@ def enviar_al_joven(
 
     Lee solo TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID_JOVEN del entorno si no se pasan. Nunca
     recurre a TELEGRAM_CHAT_ID_EMPRESA: el mensaje del joven no debe llegar a la empresa.
-    Variable nueva (pendiente de agregar a .env.example): TELEGRAM_CHAT_ID_JOVEN.
     Nunca lanza excepción.
     """
     adjuntos = [Path(a) for a in adjuntos]
