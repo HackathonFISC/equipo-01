@@ -126,7 +126,7 @@ class MiddlewareDemoPublicaReadOnly(BaseHTTPMiddleware):
 
 
 # Páginas HTML que cargan sus propios .js y .css con `?v=`: si el navegador las guarda, el número nuevo no se pide nunca.
-PAGINAS_SIN_CACHE = frozenset({"/", "/joven", "/empresa", "/empresa/lista-corta"})
+PAGINAS_SIN_CACHE = frozenset({"/", "/inicio", "/joven", "/empresa", "/empresa/lista-corta"})
 
 
 class MiddlewareSinCache(BaseHTTPMiddleware):
@@ -2900,6 +2900,11 @@ async def endpoint_index(_request: Request) -> FileResponse:
     return FileResponse(RUTA_STATIC / "index.html")
 
 
+async def endpoint_landing(_request: Request) -> FileResponse:
+    """Página de entrada (#281): lleva al joven a /joven, a la empresa a /empresa y al orientador a /."""
+    return FileResponse(RUTA_STATIC / "landing.html")
+
+
 async def endpoint_estado(_request: Request) -> JSONResponse:
     return JSONResponse(serializar_estado_publico(ESTADO_GLOBAL))
 
@@ -4260,6 +4265,7 @@ app = Starlette(
     middleware=[Middleware(MiddlewareDemoPublicaReadOnly), Middleware(MiddlewareSinCache)],
     routes=[
         Route("/", endpoint_index, methods=["GET"]),
+        Route("/inicio", endpoint_landing, methods=["GET"]),
         Route("/api/estado", endpoint_estado, methods=["GET"]),
         Route("/api/orientador/accion", endpoint_accion_orientador, methods=["POST"]),
         Route("/api/ofertas/desbloquear", endpoint_desbloquear_oferta, methods=["POST"]),
