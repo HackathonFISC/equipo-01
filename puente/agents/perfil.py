@@ -405,11 +405,11 @@ def extraer_texto_cv(ruta: str | Path, ocr: Callable[[Path], str] | None = None)
 def _ocr_local(ruta: Path) -> str:  # pragma: no cover - depende del entorno
     # OCR local a propósito: mandar la foto al LLM expondría la cédula antes de poder borrarla.
     try:
-        import pytesseract
-        from PIL import Image
+        from rapidocr_onnxruntime import RapidOCR
     except ImportError as exc:
-        raise RuntimeError("leer CV en foto requiere OCR local: `pytesseract`, `pillow` y tesseract") from exc
-    return pytesseract.image_to_string(Image.open(ruta), lang="spa")
+        raise RuntimeError("leer CV en foto requiere OCR local: instala las dependencias con uv sync") from exc
+    resultado, _ = RapidOCR()(str(ruta))
+    return "\n".join(fila[1] for fila in resultado or [])
 
 
 def entrevistar(responder: Callable[[str], str], preguntas: Iterable[str] = PREGUNTAS_ENTREVISTA) -> list[str]:

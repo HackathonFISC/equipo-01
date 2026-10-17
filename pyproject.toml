@@ -18,6 +18,7 @@ dependencies = [
     "python-dotenv",
     "python-multipart>=0.0.32",
     "pyyaml",
+    "rapidocr-onnxruntime>=1.4.4",
     "starlette",
     "uvicorn",
 ]
