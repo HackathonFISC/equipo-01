@@ -269,9 +269,10 @@ def _texto_lista_corta(
     saludo = mensaje_orientador.strip()
     if saludo:
         # El texto libre del orientador también sale hacia la empresa: puede traer la edad,
-        # el género o el corregimiento de alguien ("mujer de 20 años de Barrio Colón").
+        # el género, el estado civil o el corregimiento de alguien ("mujer de 20 años de Barrio
+        # Colón", "madre soltera", "una chica").
         for _, perfil, _ in filas:
-            saludo = cegar(saludo, perfil)
+            saludo = cegar(saludo, perfil, del_orientador=True)
         lineas += [saludo, ""]
     lineas += [
         f"Lista corta para {oferta.puesto} en {oferta.empresa} ({oferta.corregimiento})",
@@ -590,27 +591,63 @@ def _ejecutar_nodo(
     perfiles = {p.id: p for p in (_como(Perfil, x) for x in estado.get("perfiles") or [])}
     ofertas = {o.id: o for o in (_como(Oferta, x) for x in estado.get("ofertas") or [])}
     inicios: dict[tuple[str, str], datetime] = {}
-
-    def elegir(match: Match) -> datetime:
+    # Entrevistas ya propuestas a cada empresa en esta llamada: cada candidato de una oferta
+    # recibe una hora distinta, la siguiente libre para la empresa.
+    agenda_empresa: dict[str, list[tuple[datetime, datetime]]] = {}
+    desde = reloj()
+    con_fecha: list[Match] = []
+    for match in matches:
         par = _par(match)
+        perfil, oferta = perfiles.get(par[0]), ofertas.get(par[1])
+        fila = conn.execute(
+            "SELECT estado FROM postulaciones WHERE perfil_id = ? AND oferta_id = ?", par
+        ).fetchone()
+        if perfil is None or oferta is None or (fila is not None and fila["estado"] in _YA_POSTULADA):
+            # postular() decide: rechaza el lote si falta el perfil o la oferta, y salta con su
+            # Decision "ya postulada" lo que ya salió. Ninguno de los dos necesita fecha.
+            con_fecha.append(match)
+            continue
         traslado = dict(match.desglose).get("minutos_traslado", 0)
-        inicio, aviso = elegir_franja_con_respaldo(ofertas[par[1]], perfiles[par[0]], traslado, desde=reloj())
+        inicio, aviso = elegir_franja_con_respaldo(
+            oferta, perfil, traslado, desde=desde, duracion_min=DURACION_ENTREVISTA_MIN,
+            ocupadas=agenda_empresa.get(oferta.id, []),
+        )
+        if inicio is None:
+            # Sin ninguna hora que no cruce sus clases ni el traslado, esta persona no sale (no se
+            # inventa una fecha), pero el resto de la lista corta sí.
+            errores.append(
+                f"postulacion: {par[0]} / {par[1]} sin franja compatible: fecha por confirmar "
+                f"({aviso}); no se envió"
+            )
+            anotar(f"{par[0]} -> {par[1]}", "no se envió nada",
+                   f"sin franja compatible: fecha por confirmar ({aviso}). Sin .ics ni CV para esta "
+                   "persona; los demás candidatos de la oferta siguen")
+            continue
         if aviso:
             # Sin franja que cumpla todo no se inventa una hora: la fecha queda por confirmar y
             # nunca se propone una que cruce las clases del joven.
             anotar(
                 f"{par[0]} -> {par[1]}",
                 "sin franja compatible: fecha por confirmar",
-                f"{aviso}" + (f". Fecha propuesta: {inicio.strftime('%Y-%m-%d %H:%M')}" if inicio else ""),
+                f"{aviso}. Fecha propuesta: {inicio.strftime('%Y-%m-%d %H:%M')}",
             )
-        if inicio is None:
-            raise ValueError(f"sin franja compatible: fecha por confirmar ({aviso})")
         inicios[par] = inicio
-        return inicio
+        agenda_empresa.setdefault(oferta.id, []).append(
+            (inicio, inicio + timedelta(minutes=DURACION_ENTREVISTA_MIN))
+        )
+        con_fecha.append(match)
+    if not con_fecha:
+        return cambios(consentimientos)
+
+    def elegir(match: Match) -> datetime:
+        par = _par(match)
+        if par not in inicios:
+            raise ValueError(f"sin franja calculada para {par[0]} / {par[1]}")
+        return inicios[par]
 
     try:
         resultado = postular(
-            matches, perfiles, ofertas,
+            con_fecha, perfiles, ofertas,
             aprobacion=aprobacion, conn=conn, outbox=outbox,
             consentimientos=consentimientos,
             mensaje_orientador=str(aprobacion.get("mensaje") or ""),
@@ -661,9 +698,11 @@ def crear_nodo_postulacion(
 
     Corre después del ``interrupt()`` del orientador. Lee ``estado["aprobacion"]`` (la forma
     de ``nodo_aprobacion``), arma los consentimientos, elige la franja de entrevista con
-    ``elegir_franja``, llama a ``postular`` (CV ciego, .ics, mensaje a la empresa), avisa al
-    joven (a dónde se le postuló, qué se descartó y por qué, el .ics) y vuelca decisiones y
-    descartes a SQLite con ``db.volcar_estado``.
+    ``elegir_franja`` (una hora distinta por candidato de la misma oferta; quien no tiene
+    ninguna hora posible queda fuera con su Decision y los demás siguen), llama a ``postular``
+    (CV ciego, .ics, mensaje a la empresa), avisa al joven (a dónde se le postuló, qué se
+    descartó y por qué, el .ics) y vuelca decisiones y descartes a SQLite con
+    ``db.volcar_estado``.
 
     ``ruta_db`` es la base (por defecto PUENTE_DB o puente.db) y ``outbox`` la carpeta de
     respaldo (por defecto ``outbox/``). ``enviar`` y ``enviar_joven`` son transportes de
