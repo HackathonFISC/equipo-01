@@ -28,6 +28,7 @@ from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from puente.agents import mercado
 from puente.agents.auditor import nodo_auditor
 from puente.agents.formacion import nodo_formacion
 from puente.agents.postulacion import consentimiento_otorgado, consentimientos_para, postular
@@ -1706,41 +1707,41 @@ def registrar_nuevo_perfil(
 
 
 def listar_catalogo_data() -> dict[str, list[dict[str, str]]]:
-    """Devuelve la lista de ofertas y perfiles disponibles en data/ (más muestras sintéticas)."""
+    """Ofertas y perfiles de data/ (se leen de verdad, #188) más ejemplos sintéticos rotulados como tales."""
     ofertas_cat = [
         {
             "id": "ejemplo_sintetico_chorrera",
-            "etiqueta": "datos de ejemplo (sintéticos) · Cajero/a Tiempo Completo (La Chorrera, $650)",
+            "etiqueta": "ejemplo sintético (no es un archivo) · Cajero/a Tiempo Completo (La Chorrera, $650)",
         },
         {
             "id": "ejemplo_sintetico_CT11_edad",
-            "etiqueta": "datos de ejemplo (sintéticos) · Vendedor '18 a 25 años y buena presencia' (Bella Vista)",
+            "etiqueta": "ejemplo sintético (no es un archivo) · Vendedor '18 a 25 años y buena presencia' (Bella Vista)",
         },
         {
             "id": "ejemplo_sintetico_K04_tocumen",
-            "etiqueta": "datos de ejemplo (sintéticos) · Auxiliar de Bodega (Tocumen, $640)",
+            "etiqueta": "ejemplo sintético (no es un archivo) · Auxiliar de Bodega (Tocumen, $640)",
         },
     ]
     perfiles_cat = [
         {
             "id": "ejemplo_sintetico_yaritza",
-            "etiqueta": "datos de ejemplo (sintéticos) · Yaritza (20 años, La Chorrera, fonda familiar)",
+            "etiqueta": "ejemplo sintético (no es un archivo) · Yaritza (20 años, La Chorrera, fonda familiar)",
         },
         {
             "id": "ejemplo_sintetico_perfil_b",
-            "etiqueta": "datos de ejemplo (sintéticos) · Joven voluntario en feria libre (Arraiján)",
+            "etiqueta": "ejemplo sintético (no es un archivo) · Joven voluntario en feria libre (Arraiján)",
         },
     ]
     dir_of = RUTA_DATA / "ofertas"
     if dir_of.exists():
         for arch in sorted(dir_of.glob("*.txt"))[:10]:
             rel = f"data/ofertas/{arch.name}"
-            ofertas_cat.append({"id": rel, "etiqueta": f"{rel} (archivo en data/)"})
+            ofertas_cat.append({"id": rel, "etiqueta": f"{rel} · anuncio real, lo lee Mercado"})
     dir_pf = RUTA_DATA / "perfiles"
     if dir_pf.exists():
         for arch in sorted(dir_pf.glob("*.json"))[:10]:
             rel = f"data/perfiles/{arch.name}"
-            perfiles_cat.append({"id": rel, "etiqueta": f"{rel} (archivo en data/)"})
+            perfiles_cat.append({"id": rel, "etiqueta": f"{rel} · perfil sintético del archivo"})
     return {"ofertas": ofertas_cat, "perfiles": perfiles_cat}
 
 
@@ -1760,6 +1761,12 @@ def cargar_desde_catalogo_data(
             f"El item_id '{req.item_id}' no existe en el catálogo permitido de '{req.tipo}'."
         )
 
+    if req.item_id.startswith("data/ofertas/"):
+        return _cargar_oferta_desde_archivo(estado, RUTA_DATA / "ofertas" / Path(req.item_id).name)
+    if req.item_id.startswith("data/perfiles/"):
+        return _cargar_perfil_desde_archivo(estado, RUTA_DATA / "perfiles" / Path(req.item_id).name)
+
+    # Ejemplos sintéticos escritos aquí (no son archivos de data/; el catálogo los rotula así).
     if req.tipo == "oferta":
         if "CT11" in req.item_id:
             return analizar_nueva_oferta_texto(
@@ -1817,6 +1824,79 @@ def cargar_desde_catalogo_data(
         habilidades_ids=["atencion_cliente", "manejo_caja", "inventario"],
         modalidad_ingreso="datos de ejemplo (sintéticos)",
     )
+
+
+def _rechazo_guardrails(estado: dict[str, Any], datos: dict[str, Any]) -> str | None:
+    """Guardrails (#9) sobre lo que llega de un archivo de data/; deja sus Decisiones y devuelve el rechazo, si hay."""
+    resultados = evaluar_entrada(datos)
+    for resultado in resultados:
+        _registrar_decision_db(estado, resultado.decision)
+    rechazo = next((r for r in resultados if not r.ok), None)
+    return (rechazo.respuesta or rechazo.motivo) if rechazo else None
+
+
+def _cargar_oferta_desde_archivo(estado: dict[str, Any], ruta: Path) -> dict[str, Any]:
+    """Lee un anuncio de data/ofertas con el agente Mercado (puente.llm; en reproducir, las grabaciones de #139)."""
+    rel = f"data/ofertas/{ruta.name}"
+    texto = ruta.read_text(encoding="utf-8")
+    rechazo = _rechazo_guardrails(estado, {"texto": texto})
+    if rechazo:
+        raise ErrorValidacionTablero(rechazo)
+    resultado = mercado.procesar_ofertas([{"texto": texto, "fuente": rel}])
+    for decision in resultado.decisiones:
+        _registrar_decision_db(estado, decision)
+    if not resultado.ofertas:
+        motivo = resultado.errores[0] if resultado.errores else "sin detalle"
+        raise ErrorValidacionTablero(f"Mercado no pudo leer {rel}: {motivo}")
+    oferta = resultado.ofertas[0]
+    nuevo_id = oferta.id.upper()  # el id de Mercado sale del texto: el mismo archivo da el mismo id
+    if any(o.get("id") == nuevo_id for o in estado.get("ofertas", [])):
+        raise ErrorValidacionTablero(f"{rel} ya está en el tablero como {nuevo_id}.")
+    bloqueada, alertas = _evaluar_reglas_discriminacion(texto)  # Ley 11 sobre el texto del anuncio, no un resumen
+    estado["ofertas"].append(
+        {
+            "id": nuevo_id,
+            "puesto": oferta.puesto,
+            "empresa": oferta.empresa,
+            "corregimiento": oferta.corregimiento,
+            "salario_mensual": oferta.salario_mensual,
+            "horario": _texto_horarios([oferta.horario]) if oferta.horario else None,
+            "habilidades": oferta.habilidades,
+            "requisitos_texto": oferta.requisitos_texto,
+            "alertas": alertas,
+            "bloqueada": bloqueada,
+            "fuente": rel,
+        }
+    )
+    return recalcular_pipeline_tablero(estado, registrar_trazas=True)
+
+
+def _cargar_perfil_desde_archivo(estado: dict[str, Any], ruta: Path) -> dict[str, Any]:
+    """Suma al tablero un perfil sintético de data/perfiles tal como está en el archivo (#188)."""
+    rel = f"data/perfiles/{ruta.name}"
+    try:
+        perfil = Perfil.model_validate(json.loads(ruta.read_text(encoding="utf-8")))
+    except ValueError as exc:
+        raise ErrorValidacionTablero(f"{rel} no es un perfil válido: {exc}") from exc
+    perfil = perfil.model_copy(update={"id": f"PERFIL-DATA-{perfil.id}"})
+    if _buscar_perfil(estado, perfil.id) is not None:
+        raise ErrorValidacionTablero(f"{rel} ya está en el tablero como {perfil.id}.")
+    evidencias = " ".join(h.evidencia for h in perfil.habilidades)
+    rechazo = _rechazo_guardrails(estado, {"texto": evidencias, "edad": perfil.edad})
+    if rechazo:
+        raise ErrorValidacionTablero(rechazo)
+    estado["perfiles"].append(_perfil_para_tablero(perfil, f"{rel} (sintético)", cargar_taxonomia_grafo()))
+    _registrar_decision_db(
+        estado,
+        {
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "agente": "perfil",
+            "entrada_resumen": f"Perfil {perfil.id} desde {rel}",
+            "salida_resumen": f"{len(perfil.habilidades)} habilidad(es) con su evidencia del archivo; Matching recalculado",
+            "razon": "Perfil sintético de data/ cargado tal cual, con sus horarios y evidencias.",
+        },
+    )
+    return recalcular_pipeline_tablero(estado, registrar_trazas=True)
 
 
 def serializar_estado_publico(estado: dict[str, Any]) -> dict[str, Any]:
@@ -2239,34 +2319,38 @@ def registrar_perfil_joven(
     No usa `registrar_nuevo_perfil` porque ese fija el horario y recibe los skill_id del
     orientador; aquí las habilidades vienen verificadas por el agente Perfil (#6).
     """
-    taxonomia = taxonomia or {}
     estado.setdefault("entradas_perfil", []).append(entrada)
     estado["perfiles"].append(
-        {
-            "id": perfil.id,
-            "nombre": perfil.nombre,
-            "genero": perfil.genero or "no_especificado",
-            "edad": perfil.edad,
-            "corregimiento": perfil.corregimiento,
-            "modalidad_ingreso": "Vista del joven: formulario fijo y entrevista (#52)",
-            "horario_libre": _horario_para_tablero(perfil),
-            # Lo que el Matching usa de verdad (#4): los bloques del formulario, no el texto de arriba.
-            "horario_libre_bloques": [h.model_dump() for h in perfil.horario_libre],
-            "horario_clases_bloques": [h.model_dump() for h in perfil.horario_clases],
-            "salario_minimo": perfil.salario_minimo,
-            "presupuesto_pasaje_diario": perfil.presupuesto_pasaje_diario,
-            "habilidades": [
-                {
-                    "skill_id": h.skill_id,
-                    "nombre": taxonomia.get(h.skill_id, {}).get("nombre_es", h.skill_id),
-                    "evidencia": h.evidencia,
-                }
-                for h in perfil.habilidades
-            ],
-        }
+        _perfil_para_tablero(perfil, "Vista del joven: formulario fijo y entrevista (#52)", taxonomia or {})
     )
     _registrar_decision_db(estado, decision)
     return recalcular_pipeline_tablero(estado, registrar_trazas=True)
+
+
+def _perfil_para_tablero(perfil: Perfil, modalidad_ingreso: str, taxonomia: dict[str, dict]) -> dict[str, Any]:
+    """El perfil como lo guarda el tablero, con sus horarios y evidencias reales (#52, #188)."""
+    return {
+        "id": perfil.id,
+        "nombre": perfil.nombre,
+        "genero": perfil.genero or "no_especificado",
+        "edad": perfil.edad,
+        "corregimiento": perfil.corregimiento,
+        "modalidad_ingreso": modalidad_ingreso,
+        "horario_libre": _horario_para_tablero(perfil),
+        # Lo que el Matching usa de verdad (#4): los bloques del perfil, no el texto de arriba.
+        "horario_libre_bloques": [h.model_dump() for h in perfil.horario_libre],
+        "horario_clases_bloques": [h.model_dump() for h in perfil.horario_clases],
+        "salario_minimo": perfil.salario_minimo,
+        "presupuesto_pasaje_diario": perfil.presupuesto_pasaje_diario,
+        "habilidades": [
+            {
+                "skill_id": h.skill_id,
+                "nombre": taxonomia.get(h.skill_id, {}).get("nombre_es", h.skill_id),
+                "evidencia": h.evidencia,
+            }
+            for h in perfil.habilidades
+        ],
+    }
 
 
 def _buscar_perfil(estado: dict[str, Any], perfil_id: str) -> dict[str, Any] | None:
