@@ -1,9 +1,9 @@
-"""Ruta de formación: cursos de data/cursos.csv para cerrar brechas (set cover voraz). Issue #14."""
+"""Ruta de formación: cursos de data/cursos.csv para cerrar brechas (heurística voraz). Issues #14, #53."""
 
 from __future__ import annotations
 
+import copy
 import csv
-import os
 import re
 import unicodedata
 from datetime import datetime, timezone
@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 import puente.schemas as _schemas_mod
 
 RUTA_CURSOS_DEFAULT = Path(__file__).resolve().parents[2] / "data" / "cursos.csv"
+NATURALEZA_CUPOS_HORARIO = "dato de prueba"
 
 
 class CursoFormacion(BaseModel):
@@ -31,10 +32,14 @@ class CursoFormacion(BaseModel):
     cupos: int = Field(default=15, ge=0)
     costo: float = Field(default=0.0, ge=0.0)
     skill_ids: list[str] = Field(default_factory=list)
+    naturaleza_cupos_horario: str = Field(
+        default=NATURALEZA_CUPOS_HORARIO,
+        description="Los cupos y horarios específicos son datos de prueba (#51, #53)",
+    )
 
 
 class RecomendacionFormacion(BaseModel):
-    """Resultado del algoritmo voraz (set cover) de ruta de formación para un candidato."""
+    """Resultado de la heurística voraz (set cover) de ruta de formación para un candidato."""
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
@@ -44,10 +49,15 @@ class RecomendacionFormacion(BaseModel):
     cursos_seleccionados: list[dict[str, Any]] = Field(default_factory=list)
     brechas_cubiertas: list[str] = Field(default_factory=list)
     brechas_pendientes: list[str] = Field(default_factory=list)
+    vacantes_abiertas: list[str] = Field(default_factory=list)
+    vacantes_mejoradas: list[str] = Field(default_factory=list)
+    naturaleza_cupos_horario: str = NATURALEZA_CUPOS_HORARIO
     total_horas: int = 0
     explicacion: str = ""
 
 
+# Catálogo conservado únicamente para pruebas unitarias explícitas (#53).
+# En producción se lee siempre data/cursos.csv (#51).
 CATALOGO_INADEH_DEFAULT: tuple[dict[str, Any], ...] = (
     {
         "id": "INADEH-CHO-01",
@@ -163,10 +173,16 @@ def _parsear_skill_ids(raw: Any) -> list[str]:
 
 
 def cargar_cursos(ruta: str | Path | None = None) -> list[CursoFormacion]:
-    """Carga el catálogo de cursos desde data/cursos.csv o devuelve el catálogo INADEH de respaldo."""
+    """Carga el catálogo de cursos desde data/cursos.csv (#51, #53).
+
+    Si el archivo no existe, lanza FileNotFoundError para no ocultar la falta de datos reales.
+    """
     archivo = Path(ruta) if ruta is not None else RUTA_CURSOS_DEFAULT
     if not archivo.exists():
-        return [CursoFormacion(**c) for c in CATALOGO_INADEH_DEFAULT]
+        raise FileNotFoundError(
+            f"No se encontró el catálogo de cursos en {archivo}. "
+            "Verifique que data/cursos.csv (#51) exista."
+        )
 
     cursos: list[CursoFormacion] = []
     with archivo.open("r", encoding="utf-8-sig", newline="") as f:
@@ -187,9 +203,12 @@ def cargar_cursos(ruta: str | Path | None = None) -> list[CursoFormacion]:
                     cupos=int(float(fila.get("cupos") or 0)),
                     costo=float(fila.get("costo") or 0.0),
                     skill_ids=_parsear_skill_ids(fila.get("skill_ids") or fila.get("habilidades") or ""),
+                    naturaleza_cupos_horario=NATURALEZA_CUPOS_HORARIO,
                 )
             )
-    return cursos or [CursoFormacion(**c) for c in CATALOGO_INADEH_DEFAULT]
+    if not cursos:
+        raise ValueError(f"El archivo de cursos {archivo} está vacío.")
+    return cursos
 
 
 def _calcular_minutos_y_pasaje(origen: str, destino: str, traslados: Any = None) -> tuple[int, float]:
@@ -213,32 +232,19 @@ def _calcular_minutos_y_pasaje(origen: str, destino: str, traslados: Any = None)
                     p_ida = float(val.get("pasaje_ida_usd", val.get("pasaje_ida", 0.75)))
                     return m, round(2.0 * p_ida, 2)
 
-    tabla_fallback: dict[tuple[str, str], tuple[int, float]] = {
-        ("la chorrera", "la chorrera"): (15, 1.00),
-        ("la chorrera", "vista alegre"): (20, 1.50),
-        ("la chorrera", "arraijan"): (30, 2.00),
-        ("la chorrera", "san miguelito"): (70, 3.70),
-        ("la chorrera", "tocumen"): (95, 4.70),
-        ("arraijan", "arraijan"): (12, 1.00),
-        ("arraijan", "la chorrera"): (30, 2.00),
-        ("arraijan", "tocumen"): (75, 3.70),
-        ("vista alegre", "la chorrera"): (20, 1.50),
-        ("vista alegre", "arraijan"): (18, 1.50),
-        ("vista alegre", "tocumen"): (85, 4.20),
-    }
-    if (ko, kd) in tabla_fallback:
-        return tabla_fallback[(ko, kd)]
     if ko == kd:
         return (15, 1.00)
     return (45, 2.00)
 
 
 def _extraer_rango_horas(texto_o_dict: Any) -> tuple[int, int]:
-    """Devuelve (inicio_min, fin_min) de una cadena o diccionario de horario."""
+    """Devuelve (inicio_min, fin_min) de una cadena, diccionario o modelo Horario."""
     if isinstance(texto_o_dict, dict):
         ini_str = str(texto_o_dict.get("hora_inicio", "08:00"))
         fin_str = str(texto_o_dict.get("hora_fin", "12:00"))
         texto = f"{ini_str}-{fin_str}"
+    elif hasattr(texto_o_dict, "hora_inicio") and hasattr(texto_o_dict, "hora_fin"):
+        texto = f"{texto_o_dict.hora_inicio}-{texto_o_dict.hora_fin}"
     else:
         texto = str(texto_o_dict or "08:00-12:00")
 
@@ -268,7 +274,16 @@ def _horario_curso_compatible(perfil: Any, horario_curso: str) -> bool:
                 return False
 
     libre_raw = _get_field(perfil, "horario_libre", "disponibilidad", default=None)
-    if isinstance(libre_raw, dict):
+    if isinstance(libre_raw, list) and libre_raw:
+        encaja = False
+        for bloque in libre_raw:
+            ini_l, fin_l = _extraer_rango_horas(bloque)
+            if ini_c >= ini_l and fin_c <= fin_l:
+                encaja = True
+                break
+        if not encaja:
+            return False
+    elif isinstance(libre_raw, dict):
         if "clases" in libre_raw and libre_raw["clases"]:
             ini_cl, fin_cl = _extraer_rango_horas(libre_raw["clases"])
             if max(ini_c, ini_cl) < min(fin_c, fin_cl):
@@ -286,15 +301,116 @@ def _horario_curso_compatible(perfil: Any, horario_curso: str) -> bool:
     return True
 
 
+def _clonar_perfil_con_habilidades(perfil: Any, nuevas_skills: list[str]) -> dict[str, Any]:
+    """Crea una copia en diccionario del perfil agregando nuevas_skills con evidencia formativa."""
+    if isinstance(perfil, BaseModel):
+        datos = perfil.model_dump()
+    elif isinstance(perfil, dict):
+        datos = copy.deepcopy(perfil)
+    else:
+        datos = {
+            "id": _get_field(perfil, "id", "perfil_id", default="PERFIL"),
+            "nombre": _get_field(perfil, "nombre", default="Joven"),
+            "corregimiento": _get_field(perfil, "corregimiento", default="La Chorrera"),
+            "salario_minimo": _get_field(perfil, "salario_minimo", default=600.0),
+            "presupuesto_pasaje_diario": _get_field(perfil, "presupuesto_pasaje_diario", default=3.0),
+            "horario_libre": _get_field(perfil, "horario_libre", default=None),
+            "horario_clases": _get_field(perfil, "horario_clases", default=None),
+            "habilidades": copy.deepcopy(_get_field(perfil, "habilidades", default=[]) or []),
+        }
+    if not datos.get("horario_libre"):
+        datos.pop("horario_libre", None)
+
+    habs = list(datos.get("habilidades") or [])
+    existentes: set[str] = set()
+    for h in habs:
+        if isinstance(h, dict):
+            existentes.add(str(h.get("skill_id", "")).strip())
+        elif hasattr(h, "skill_id"):
+            existentes.add(str(getattr(h, "skill_id", "")).strip())
+        else:
+            existentes.add(str(h).strip())
+
+    for s in nuevas_skills:
+        s_clean = str(s).strip()
+        if s_clean and s_clean not in existentes:
+            habs.append({"skill_id": s_clean, "evidencia": "Curso de formación INADEH recomendado"})
+            existentes.add(s_clean)
+    datos["habilidades"] = habs
+    return datos
+
+
+def evaluar_impacto_curso_en_vacantes(
+    perfil: Any,
+    habilidades_nuevas: list[str],
+    ofertas: list[Any] | None = None,
+    *,
+    traslados: Any = None,
+    config: Any = None,
+) -> dict[str, Any]:
+    """Re-evalúa las vacantes con el solver (`evaluar_factibilidad_par`) antes y después de sumar habilidades (#53).
+
+    Devuelve qué vacantes pasan de inviables a viables (`vacantes_abiertas`) y cuáles aumentan su
+    cobertura/puntaje (`vacantes_mejoradas`).
+    """
+    if not ofertas:
+        return {
+            "vacantes_abiertas": [],
+            "vacantes_mejoradas": [],
+            "puntajes_antes": {},
+            "puntajes_despues": {},
+        }
+
+    from puente.rules.traslados import indexar_traslados
+    from puente.solver.asignacion import ConfigSolver, evaluar_factibilidad_par
+
+    cfg = config if isinstance(config, ConfigSolver) else ConfigSolver(**(config or {}))
+    indice_tr = indexar_traslados(traslados)
+    perfil_antes = _clonar_perfil_con_habilidades(perfil, [])
+    perfil_despues = _clonar_perfil_con_habilidades(perfil, habilidades_nuevas)
+
+    vacantes_abiertas: list[str] = []
+    vacantes_mejoradas: list[str] = []
+    puntajes_antes: dict[str, int] = {}
+    puntajes_despues: dict[str, int] = {}
+
+    for of in ofertas:
+        oid = str(_get_field(of, "id", "oferta_id", default=""))
+        if not oid:
+            continue
+        f_antes = evaluar_factibilidad_par(perfil_antes, of, indice_tr, config=cfg)
+        f_despues = evaluar_factibilidad_par(perfil_despues, of, indice_tr, config=cfg)
+        viable_antes = bool(f_antes["viable"]) and float(f_antes.get("cobertura", 0.0)) > 0.0
+        viable_despues = bool(f_despues["viable"]) and float(f_despues.get("cobertura", 0.0)) > 0.0
+        puntajes_antes[oid] = int(f_antes["puntaje"]) if viable_antes else 0
+        puntajes_despues[oid] = int(f_despues["puntaje"]) if viable_despues else 0
+
+        if not viable_antes and viable_despues:
+            vacantes_abiertas.append(oid)
+            vacantes_mejoradas.append(oid)
+        elif viable_antes and viable_despues and int(f_despues["puntaje"]) > int(f_antes["puntaje"]):
+            vacantes_mejoradas.append(oid)
+
+    return {
+        "vacantes_abiertas": vacantes_abiertas,
+        "vacantes_mejoradas": vacantes_mejoradas,
+        "puntajes_antes": puntajes_antes,
+        "puntajes_despues": puntajes_despues,
+    }
+
+
 def redactar_explicacion_formacion(
     nombre_perfil: str,
     cursos_elegidos: list[dict[str, Any]],
     brechas_cubiertas: list[str],
     brechas_pendientes: list[str],
     *,
+    vacantes_abiertas: list[str] | None = None,
+    vacantes_mejoradas: list[str] | None = None,
     usar_llm: bool = False,
+    errores: list[str] | None = None,
 ) -> str:
-    """Redacta la explicación de la ruta de formación (solo explicación con LLM si se solicita; selección 100% en código)."""
+    """Redacta la explicación de la ruta de formación usando `puente/llm.py` (#45, #53) si `usar_llm=True`."""
     if not cursos_elegidos:
         if not brechas_cubiertas and not brechas_pendientes:
             return f"{nombre_perfil} ya cubre todas las habilidades requeridas por la vacante."
@@ -304,31 +420,44 @@ def redactar_explicacion_formacion(
         )
 
     resumen_cursos = "; ".join(
-        f"{c['curso']} ({c['corregimiento']}, {c['minutos_traslado']} min, {c['horas']} h, cupos={c['cupos']}, cubre: {', '.join(c['brechas_que_cubre'])})"
+        f"{c['curso']} ({c['corregimiento']}, {c['minutos_traslado']} min, pasaje ${c['pasaje_diario']:.2f}/día, "
+        f"{c['horas']} h, cupos={c['cupos']} [{NATURALEZA_CUPOS_HORARIO}], cubre: {', '.join(c['brechas_que_cubre'])})"
         for c in cursos_elegidos
     )
     explicacion_base = (
-        f"Ruta de formación recomendada para {nombre_perfil}: {resumen_cursos}. "
-        f"Cubre {len(brechas_cubiertas)} brecha(s) ({', '.join(brechas_cubiertas)}) con traslado <= 60 min y horario sin cruce con clases."
+        f"Heurística voraz de formación para {nombre_perfil}: {resumen_cursos}. "
+        f"Cubre {len(brechas_cubiertas)} brecha(s) ({', '.join(brechas_cubiertas)}) con traslado <= 60 min y horario sin cruce con clases "
+        f"(cupos y horario: {NATURALEZA_CUPOS_HORARIO})."
     )
+    if vacantes_abiertas:
+        explicacion_base += f" Abre {len(vacantes_abiertas)} vacante(s) nueva(s) viable(s): {', '.join(vacantes_abiertas)}."
+    elif vacantes_mejoradas:
+        explicacion_base += f" Mejora el puntaje en {len(vacantes_mejoradas)} vacante(s): {', '.join(vacantes_mejoradas)}."
     if brechas_pendientes:
         explicacion_base += f" Brechas aún sin curso factible: {', '.join(brechas_pendientes)}."
 
-    if usar_llm and os.getenv("GOOGLE_API_KEY"):
+    if usar_llm:
         try:
-            from langchain_google_genai import ChatGoogleGenerativeAI
+            from puente.llm import ErrorLLM, generar_texto
 
-            llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.0)
             prompt = (
                 "Redacta en español, en máximo 2 oraciones claras y sin inventar datos, "
-                f"por qué se recomiendan estos cursos gratuitos a {nombre_perfil}: {explicacion_base}"
+                f"por qué esta heurística voraz recomienda estos cursos gratuitos del INADEH a {nombre_perfil}: {explicacion_base}"
             )
-            resp = llm.invoke(prompt)
-            texto_llm = getattr(resp, "content", "")
+            texto_llm = generar_texto(
+                prompt,
+                sistema="Eres el agente de Formación de Puente. Explicas rutas de cursos INADEH sin inventar datos y aclarando que cupos y horarios son datos de prueba.",
+                agente="formacion",
+                effort="low",
+            )
             if isinstance(texto_llm, str) and texto_llm.strip():
                 return texto_llm.strip()
-        except Exception:
-            pass
+        except ErrorLLM as exc:
+            if errores is not None:
+                errores.append(f"formacion: {exc}")
+        except Exception as exc:
+            if errores is not None:
+                errores.append(f"formacion: {exc}")
 
     return explicacion_base
 
@@ -338,12 +467,14 @@ def recomendar_cursos_brechas(
     brechas: list[str],
     *,
     oferta_id: str = "",
+    ofertas: list[Any] | None = None,
     cursos: list[Any] | str | Path | None = None,
     traslados: Any = None,
     max_minutos_traslado: int = 60,
     usar_llm: bool = False,
+    errores: list[str] | None = None,
 ) -> RecomendacionFormacion:
-    """Selecciona el conjunto óptimo de cursos (Set Cover voraz determinístico) para cubrir las brechas del perfil."""
+    """Selecciona cursos mediante heurística voraz (Set Cover) puntuando vacantes viables que abre y pasaje a la sede como costo (#14, #53)."""
     pid = str(_get_field(perfil, "id", "perfil_id", default="PERFIL"))
     nombre_perfil = str(_get_field(perfil, "nombre", default=pid))
     origen = str(_get_field(perfil, "corregimiento", default="La Chorrera"))
@@ -371,8 +502,13 @@ def recomendar_cursos_brechas(
             cursos_seleccionados=[],
             brechas_cubiertas=[],
             brechas_pendientes=[],
+            vacantes_abiertas=[],
+            vacantes_mejoradas=[],
+            naturaleza_cupos_horario=NATURALEZA_CUPOS_HORARIO,
             total_horas=0,
-            explicacion=redactar_explicacion_formacion(nombre_perfil, [], [], [], usar_llm=usar_llm),
+            explicacion=redactar_explicacion_formacion(
+                nombre_perfil, [], [], [], usar_llm=usar_llm, errores=errores
+            ),
         )
 
     # 1. Filtrar cursos factibles (cupo > 0, traslado <= 60 min, pasaje <= presupuesto, horario compatible)
@@ -388,6 +524,9 @@ def recomendar_cursos_brechas(
         if not _horario_curso_compatible(perfil, c.horario):
             continue
 
+        impacto = evaluar_impacto_curso_en_vacantes(
+            perfil, list(c.skill_ids), ofertas, traslados=traslados
+        )
         cursos_factibles.append(
             {
                 "id": c.id or c.curso,
@@ -401,18 +540,24 @@ def recomendar_cursos_brechas(
                 "skill_ids": list(c.skill_ids),
                 "minutos_traslado": minutos,
                 "pasaje_diario": pasaje_diario,
+                "vacantes_que_abre": impacto["vacantes_abiertas"],
+                "vacantes_que_mejora": impacto["vacantes_mejoradas"],
+                "naturaleza_cupos_horario": NATURALEZA_CUPOS_HORARIO,
             }
         )
 
-    # 2. Set Cover voraz (greedy) determinístico
+    # 2. Heurística voraz (greedy set cover) determinística:
+    # Puntúa por: 1) brechas pendientes que cubre, 2) vacantes nuevas que abre en el solver,
+    # 3) vacantes cuyo puntaje mejora, 4) menor pasaje diario a la sede como costo, 5) menos minutos, 6) horas, 7) ID.
     pendientes = set(brechas_limpias)
     seleccionados: list[dict[str, Any]] = []
     usados_ids: set[str] = set()
+    skills_acumuladas: list[str] = []
 
     while pendientes:
         mejor_curso: dict[str, Any] | None = None
         mejor_cubiertas: list[str] = []
-        mejor_clave: tuple[int, int, int, float, str] | None = None
+        mejor_clave: tuple[int, int, int, float, int, int, float, str] | None = None
 
         for cf in cursos_factibles:
             if cf["id"] in usados_ids:
@@ -420,9 +565,11 @@ def recomendar_cursos_brechas(
             cubiertas_ahora = [b for b in brechas_limpias if b in pendientes and b in cf["skill_ids"]]
             if not cubiertas_ahora:
                 continue
-            # Priorizar: 1) más brechas cubiertas, 2) menos minutos de traslado, 3) menos horas, 4) menor costo, 5) ID
             clave = (
                 -len(cubiertas_ahora),
+                -len(cf["vacantes_que_abre"]),
+                -len(cf["vacantes_que_mejora"]),
+                float(cf["pasaje_diario"]),
                 int(cf["minutos_traslado"]),
                 int(cf["horas"]),
                 float(cf["costo"]),
@@ -440,6 +587,7 @@ def recomendar_cursos_brechas(
         copia_curso = dict(mejor_curso)
         copia_curso["brechas_que_cubre"] = mejor_cubiertas
         seleccionados.append(copia_curso)
+        skills_acumuladas.extend(mejor_curso["skill_ids"])
         for b in mejor_cubiertas:
             pendientes.discard(b)
 
@@ -447,12 +595,19 @@ def recomendar_cursos_brechas(
     pendientes_final = [b for b in brechas_limpias if b in pendientes]
     total_horas = sum(int(c["horas"]) for c in seleccionados)
 
+    impacto_total = evaluar_impacto_curso_en_vacantes(
+        perfil, skills_acumuladas, ofertas, traslados=traslados
+    )
+
     explicacion = redactar_explicacion_formacion(
         nombre_perfil,
         seleccionados,
         cubiertas_final,
         pendientes_final,
+        vacantes_abiertas=impacto_total["vacantes_abiertas"],
+        vacantes_mejoradas=impacto_total["vacantes_mejoradas"],
         usar_llm=usar_llm,
+        errores=errores,
     )
 
     return RecomendacionFormacion(
@@ -462,23 +617,31 @@ def recomendar_cursos_brechas(
         cursos_seleccionados=seleccionados,
         brechas_cubiertas=cubiertas_final,
         brechas_pendientes=pendientes_final,
+        vacantes_abiertas=impacto_total["vacantes_abiertas"],
+        vacantes_mejoradas=impacto_total["vacantes_mejoradas"],
+        naturaleza_cupos_horario=NATURALEZA_CUPOS_HORARIO,
         total_horas=total_horas,
         explicacion=explicacion,
     )
 
 
 def nodo_formacion(estado: dict[str, Any]) -> dict[str, Any]:
-    """Nodo del grafo LangGraph para el Agente de Ruta de Formación."""
+    """Nodo del grafo LangGraph para el Agente de Ruta de Formación (#14, #53)."""
     perfiles = list(estado.get("perfiles") or [])
+    ofertas = list(estado.get("ofertas") or [])
     matches = list(estado.get("lista_corta") or estado.get("matches") or [])
     traslados = estado.get("traslados")
     cursos = estado.get("cursos")
+    usar_llm = bool(estado.get("usar_llm_formacion", False))
+    errores = list(estado.get("errores") or [])
 
     mapa_perfiles = {
         str(_get_field(p, "id", "perfil_id", default="")): p for p in perfiles
     }
 
     recomendaciones: list[dict[str, Any]] = []
+    pares_procesados: set[tuple[str, str]] = set()
+
     for m in matches:
         pid = str(_get_field(m, "perfil_id", default=""))
         oid = str(_get_field(m, "oferta_id", default=""))
@@ -489,14 +652,55 @@ def nodo_formacion(estado: dict[str, Any]) -> dict[str, Any]:
                 perfil,
                 brechas,
                 oferta_id=oid,
+                ofertas=ofertas,
                 cursos=cursos,
                 traslados=traslados,
+                usar_llm=usar_llm,
+                errores=errores,
             )
             recomendaciones.append(rec.model_dump())
+            pares_procesados.add((pid, oid))
+
+    # También evaluar vacantes cercanas descartadas únicamente por falta de habilidades (cobertura == 0)
+    # para que el tercer lado del mercado desbloquee vacantes que pasan a viables tras formación (#53).
+    if ofertas and perfiles:
+        from puente.rules.traslados import indexar_traslados
+        from puente.solver.asignacion import ConfigSolver, evaluar_factibilidad_par
+
+        cfg_raw = estado.get("config_solver")
+        cfg = cfg_raw if isinstance(cfg_raw, ConfigSolver) else ConfigSolver(**(cfg_raw or {}))
+        indice_tr = indexar_traslados(traslados)
+
+        for p in perfiles:
+            pid = str(_get_field(p, "id", "perfil_id", default=""))
+            p_solver = _clonar_perfil_con_habilidades(p, [])
+            for of in ofertas:
+                oid = str(_get_field(of, "id", "oferta_id", default=""))
+                if not pid or not oid or (pid, oid) in pares_procesados:
+                    continue
+                eval_par = evaluar_factibilidad_par(p_solver, of, indice_tr, config=cfg)
+                if (
+                    eval_par["viable"]
+                    and float(eval_par.get("cobertura", 0.0)) == 0.0
+                    and eval_par.get("brechas")
+                ):
+                    rec = recomendar_cursos_brechas(
+                        p,
+                        list(eval_par["brechas"]),
+                        oferta_id=oid,
+                        ofertas=ofertas,
+                        cursos=cursos,
+                        traslados=traslados,
+                        usar_llm=usar_llm,
+                        errores=errores,
+                    )
+                    if rec.cursos_seleccionados and oid in rec.vacantes_abiertas:
+                        recomendaciones.append(rec.model_dump())
+                        pares_procesados.add((pid, oid))
 
     ts = datetime.now(timezone.utc).isoformat()
-    entrada_res = f"{len(matches)} match(es) revisados para brechas de habilidades"
-    salida_res = f"{len(recomendaciones)} ruta(s) de formación generadas con set cover voraz"
+    entrada_res = f"{len(matches)} match(es) y {len(ofertas)} oferta(s) revisadas para brechas de habilidades"
+    salida_res = f"{len(recomendaciones)} ruta(s) de formación generadas con heurística voraz (set cover voraz)"
     razon = (
         "; ".join(r["explicacion"] for r in recomendaciones)
         if recomendaciones
@@ -533,7 +737,10 @@ def nodo_formacion(estado: dict[str, Any]) -> dict[str, Any]:
     decisiones = list(estado.get("decisiones") or [])
     decisiones.append(decision)
 
-    return {
+    salida: dict[str, Any] = {
         "rutas_formacion": recomendaciones,
         "decisiones": decisiones,
     }
+    if errores != list(estado.get("errores") or []):
+        salida["errores"] = errores
+    return salida
