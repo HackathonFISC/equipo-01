@@ -625,7 +625,9 @@ def test_pagina_trae_la_fase_2(entorno) -> None:
     assert "innerHTML" not in js.text and "onclick=" not in js.text  # el DOM se arma con textContent
     assert '"image/*,application/pdf"' in js.text and '"environment"' in js.text  # cámara del celular
     assert "?token=" not in js.text  # el token no viaja en la URL: el .ics se baja con fetch
-    # El ejemplo del chat son las respuestas grabadas de Yaritza: así la demo sin conexión las reproduce.
-    for respuesta in RESPUESTAS_YARITZA:
-        assert json.dumps(respuesta, ensure_ascii=False) in js.text
+    # El ejemplo del chat son las respuestas del guion del video, con su lectura grabada (#194): así la demo sin
+    # conexión las reproduce. tests/test_vista_joven_reproducir.py lo revisa letra por letra y en orden.
+    guion = json.loads((RAIZ / "data/demo/yaritza_chat.json").read_text(encoding="utf-8"))
+    for paso in guion["entrevista"]:
+        assert json.dumps(paso["respuesta"], ensure_ascii=False) in js.text
     assert cliente.get("/static/joven_fase2.css").status_code == 200
