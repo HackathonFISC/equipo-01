@@ -11,6 +11,7 @@ por proceso y el cliente queda en caché: tras editar `.env`, reinicie el tabler
 - `LLM_MODO`: `vivo` (por defecto), `grabar` (llama y guarda la respuesta) o `reproducir` (solo lee grabaciones;
   sin red ni claves, es el modo del CI y de la demo congelada).
 - `LLM_DIR_GRABACIONES`: carpeta de grabaciones (por defecto `data/grabaciones`).
+- `ANTHROPIC_WORKSPACE_ID` (opcional): workspace al que se carga el gasto, para claves que no son de un workspace.
 - `LLM_PROVEEDOR_RESPALDO` y `LLM_MODELO_RESPALDO` (opcionales): un solo reintento si el modelo rechaza (refusal).
 - `PUENTE_LLM_FALLBACKS` (`false` por defecto): respaldo del servidor de Anthropic (beta). Sin verificar con clave.
 
@@ -415,9 +416,12 @@ def _cliente_por_defecto(proveedor: str, modelo: str, agente: str = "") -> Any:
             if "anthropic" not in _clientes:
                 import anthropic
 
+                # Una clave que no es de un workspace (sk-ant-usr-...) exige el encabezado del workspace al que se carga el gasto.
+                espacio = (os.getenv("ANTHROPIC_WORKSPACE_ID") or "").strip()
                 _clientes["anthropic"] = anthropic.Anthropic(
                     max_retries=MAX_REINTENTOS,
                     timeout=anthropic.Timeout(TIMEOUT_SEGUNDOS, connect=TIMEOUT_CONEXION_SEGUNDOS),
+                    default_headers={"anthropic-workspace-id": espacio} if espacio else None,
                 )
             return _clientes["anthropic"]
     from langchain_google_genai import ChatGoogleGenerativeAI
