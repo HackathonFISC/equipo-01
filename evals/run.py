@@ -26,6 +26,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import unicodedata
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -65,6 +66,9 @@ MICROMISION_RESOLVER = ("puente.agents.micromision", "resolver_reto", 158)  # (r
 MICROMISION_AUDITAR = ("puente.agents.micromision", "auditar_contrafactual", 158)  # (reto, texto, perfil, *, llm, variantes)
 MICROMISION_SCORECARD = ("puente.agents.micromision", "armar_scorecard", 158)  # (perfil, resultados) -> Scorecard
 MICROMISION_PII = ("puente.agents.micromision", "datos_personales_en", 158)  # (scorecard, perfil) -> list[str]
+POSTULACION_POSTULAR = ("puente.agents.postulacion", "postular", 12)  # (aprobados, perfiles, ofertas, *, aprobacion, conn, outbox, ...)
+FORMACION_RECOMENDAR = ("puente.agents.formacion", "recomendar_cursos_brechas", 53)  # (perfil, brechas, *, traslados, max_minutos_traslado)
+GRAFO_CARGAR_CASO = ("puente.graph", "cargar_caso", 10)  # (ruta) -> (thread_id, estado)
 RAIZ_REPO = Path(__file__).resolve().parent.parent
 
 # Reglas de discriminación -> artículo de la Ley 11 de 2005 (solo las que bloquean) o alerta (las que no).
@@ -483,6 +487,31 @@ def _diferencias_micromision(esperado: dict, observado: dict) -> list[str]:
     return [clave for clave, valor in esperado.items() if observado.get(clave) != valor]
 
 
+
+def _diferencias_campos(
+    esperado: dict, observado: dict, *, en_orden: tuple[str, ...] = (), subconjunto: tuple[str, ...] = ()
+) -> list[str]:
+    """#225: cada clave esperada igual a la observada. Las listas se comparan sin orden salvo las de `en_orden`
+    (el orden de una lista corta sí importa). En las claves de `subconjunto` (un mapa) solo se miran las entradas
+    que trae lo esperado."""
+
+    def normal(valor: Any, ordenado: bool) -> Any:
+        if isinstance(valor, dict):
+            return {str(k): normal(v, ordenado) for k, v in valor.items()}
+        if isinstance(valor, (list, tuple)):
+            elementos = [normal(v, ordenado) for v in valor]
+            return elementos if ordenado else sorted(elementos, key=lambda x: json.dumps(x, sort_keys=True, default=str))
+        return valor
+
+    malos = []
+    for clave, valor in esperado.items():
+        visto = observado.get(clave)
+        if clave in subconjunto and isinstance(valor, dict) and isinstance(visto, dict):
+            visto = {k: v for k, v in visto.items() if str(k) in {str(x) for x in valor}}
+        if normal(valor, clave in en_orden) != normal(visto, clave in en_orden):
+            malos.append(clave)
+    return malos
+
 _DIFERENCIAS: dict[str, Callable[[dict, dict], list[str]]] = {
     "extraccion_ofertas": _diferencias_extraccion,
     "requisitos_discriminatorios": _diferencias_discriminacion,
@@ -494,6 +523,10 @@ _DIFERENCIAS: dict[str, Callable[[dict, dict], list[str]]] = {
     "horario_validacion": _diferencias_horario,
     "redactor_puente": _diferencias_redactor,
     "micromision": _diferencias_micromision,
+    "postulacion": _diferencias_campos,
+    "reacomodo": functools.partial(_diferencias_campos, en_orden=("siguiente", "candidatos_nuevos"), subconjunto=("postulaciones",)),
+    "formacion": functools.partial(_diferencias_campos, en_orden=("cursos",)),
+    "punta_a_punta": functools.partial(_diferencias_campos, en_orden=("listas_cortas",)),
 }
 
 
@@ -869,6 +902,270 @@ def _ejecutar_micromision(caso: dict) -> dict:
     return observado
 
 
+
+# #225: Postulación, reacomodo, Formación y punta a punta. Todo en carpetas temporales y sin LLM.
+INICIO_ENTREVISTA_EVAL = datetime(2026, 10, 20, 10, 0, tzinfo=HUSO_PANAMA)  # SINTÉTICO: fecha fija de la entrevista
+ORIENTADORA_EVAL = "Orientadora Ficticia"
+_DIAS_SEMANA = ("lunes", "martes", "miercoles", "jueves", "viernes")
+
+
+@contextlib.contextmanager
+def _carpeta_aislada(prefijo: str) -> Iterator[Path]:
+    """Una carpeta temporal con la base y el outbox del caso, y sin LangSmith; el entorno queda como estaba."""
+    with tempfile.TemporaryDirectory(prefix=prefijo, ignore_cleanup_errors=True) as temporal:
+        carpeta = Path(temporal)
+        valores = {
+            "PUENTE_DB": str(carpeta / "puente.db"),
+            "PUENTE_OUTBOX": str(carpeta / "outbox"),
+            "LANGSMITH_TRACING": "false",
+        }
+        previos = {nombre: os.environ.get(nombre) for nombre in valores}
+        os.environ.update(valores)
+        try:
+            yield carpeta
+        finally:
+            for nombre, valor in previos.items():
+                if valor is None:
+                    os.environ.pop(nombre, None)
+                else:
+                    os.environ[nombre] = valor
+
+
+def _tipo_archivo(ruta: Path) -> str:
+    """cv | carta | ics | mensaje (a la empresa) | aviso_joven, por el nombre que les da Postulación."""
+    if ruta.suffix == ".ics":
+        return "ics"
+    for prefijo, tipo in (("cv_", "cv"), ("carta_", "carta"), ("mensaje_", "mensaje"), ("joven_", "aviso_joven")):
+        if ruta.name.startswith(prefijo):
+            return tipo
+    return ruta.name
+
+
+def _texto_archivo(ruta: Path) -> str:
+    """Texto de un archivo del outbox con los espacios normalizados (PDF con pypdf; .ics sin el plegado de líneas)."""
+    if ruta.suffix.lower() == ".pdf":
+        from pypdf import PdfReader
+
+        texto = " ".join(pagina.extract_text() or "" for pagina in PdfReader(ruta).pages)
+    else:
+        texto = ruta.read_text(encoding="utf-8", errors="replace").replace("\r\n ", "").replace("\n ", "")
+    return " ".join(texto.split())
+
+
+def _sensibles_en(textos: str, sensibles: Any) -> list[str]:
+    bajo = textos.lower()
+    return [str(s) for s in _lista(sensibles) if str(s).lower() in bajo]
+
+
+def _seguro(valor: str) -> str:
+    return re.sub(r"[^\w-]", "_", str(valor))
+
+
+def _estado_valor(valor: Any) -> Any:
+    return getattr(valor, "value", valor)
+
+
+def _ejecutar_postulacion(caso: dict) -> dict:
+    """#7, #12, #212: postular() real con SQLite y outbox temporales, tras la aprobación del orientador. Telegram
+    apagado: si el entorno trae token, el transporte falla y el mensaje queda en outbox, igual que sin token."""
+    postular = _resolver(POSTULACION_POSTULAR)
+    from puente.graph import sin_telegram
+    from puente.schemas import Match, Oferta, Perfil
+    from puente.tools import db
+
+    entrada = caso["entrada"]
+    perfil, oferta = Perfil.model_validate(entrada["perfil"]), Oferta.model_validate(entrada["oferta"])
+    minutos = float(entrada.get("minutos_traslado") or 0)
+    match = Match(
+        perfil_id=perfil.id, oferta_id=oferta.id, puntaje=1.0, explicacion="caso de eval (#225)",
+        desglose={"cobertura": 1.0, "minutos_traslado": minutos, "pasaje_diario": 0.0, "penalizacion": 0.0},
+    )
+    par = {"perfil_id": perfil.id, "oferta_id": oferta.id}
+    aprobacion = {"orientador": ORIENTADORA_EVAL, "timestamp": "2026-10-20T09:30:00-05:00", "aprobados": [par]}
+    consentimiento = {**par, "otorgado": bool(entrada.get("consentimiento")), "medio": "orientador",
+                      "timestamp": "2026-10-20T09:31:00-05:00"}
+    error = None
+    with _carpeta_aislada("eval_postulacion_") as carpeta:
+        outbox = carpeta / "outbox"
+        conn = db.conectar(carpeta / "puente.db")
+        try:
+            postular(
+                [match], {perfil.id: perfil}, {oferta.id: oferta}, aprobacion=aprobacion, conn=conn, outbox=outbox,
+                consentimientos=[consentimiento], enviar=sin_telegram, inicio_entrevista=lambda _m: INICIO_ENTREVISTA_EVAL,
+            )
+        except ValueError as exc:
+            error = "consentimiento" if "consentimiento" in str(exc).lower() else str(exc)
+        fila = conn.execute(
+            "SELECT estado FROM postulaciones WHERE perfil_id = ? AND oferta_id = ?", (perfil.id, oferta.id)
+        ).fetchone()
+        conn.close()
+        archivos = sorted(outbox.glob("*")) if outbox.exists() else []
+        textos = " ".join(_texto_archivo(a) for a in archivos)
+    return {
+        "error": error,
+        "archivos": sorted({_tipo_archivo(a) for a in archivos}),
+        "estado": fila[0] if fila else None,
+        "datos_sensibles": _sensibles_en(textos, entrada.get("sensibles")),
+        "evidencia_presente": all(str(f).lower() in textos.lower() for f in _lista(entrada.get("evidencia_presente"))),
+    }
+
+
+def _grafo_del_caso(entrada: dict, carpeta: Path) -> tuple[Any, dict, Any]:
+    """El grafo real con el caso de tests/fixtures, base, checkpoints y outbox en `carpeta` y Telegram apagado.
+    Perfil devuelve las habilidades del fixture, sin LLM, como en tests/test_reacomodo.py."""
+    from puente import graph as g
+    from puente.schemas import HabilidadPerfil
+
+    thread, estado = _resolver(GRAFO_CARGAR_CASO)(RAIZ_REPO / entrada["caso_ruta"])
+    for perfil_id, extra in (entrada.get("habilidades_extra") or {}).items():
+        perfil = next(p for p in estado["perfiles"] if p.id == perfil_id)
+        perfil.habilidades.extend(HabilidadPerfil(**h) for h in extra)
+    if entrada.get("config_solver"):
+        estado["config_solver"] = dict(entrada["config_solver"])
+    respuesta = json.dumps({"habilidades": estado["entradas_perfil"][0]["habilidades"]}, ensure_ascii=False)
+    nodos = g.nodos_fase_2(llm_perfil=lambda _prompt: respuesta, ruta_db=carpeta / "puente.db", outbox=carpeta / "outbox")
+    checkpointer = g.checkpointer_sqlite(carpeta / "checkpoints.db")
+    grafo = g.construir_grafo(nodos=nodos, checkpointer=checkpointer)
+    config = g.config_caso(thread)
+    grafo.invoke(estado, config)
+    return grafo, config, checkpointer
+
+
+def _aprobar_todo(grafo: Any, config: dict) -> dict[str, list[str]]:
+    """Aprueba cada vacante que el grafo pone en pausa, con el consentimiento de todos sus candidatos. Devuelve la
+    lista corta que se vio por vacante."""
+    from langgraph.types import Command
+
+    from puente.graph import aprobacion_pendiente
+
+    listas: dict[str, list[str]] = {}
+    for _ in range(20):
+        solicitud = aprobacion_pendiente(grafo, config)
+        if solicitud is None:
+            break
+        candidatos = [c["perfil_id"] for c in solicitud["candidatos"]]
+        listas.setdefault(solicitud["oferta_id"], candidatos)
+        respuesta = {"accion": "aprobar", "orientador": ORIENTADORA_EVAL, "oferta_id": solicitud["oferta_id"],
+                     "consentidos": candidatos}
+        grafo.invoke(Command(resume=respuesta), config)
+    return listas
+
+
+def _cerrar(checkpointer: Any) -> None:
+    with contextlib.suppress(Exception):
+        checkpointer.conn.close()
+
+
+def _ejecutar_reacomodo(caso: dict) -> dict:
+    """#54: se aprueba todo, la empresa responde con `evento_empresa` y se mira el estado del caso y el outbox."""
+    from puente.graph import aprobacion_pendiente, evento_empresa
+
+    entrada = caso["entrada"]
+    evento = entrada["evento"]
+    with _carpeta_aislada("eval_reacomodo_") as carpeta:
+        grafo, config, checkpointer = _grafo_del_caso(entrada, carpeta)
+        try:
+            _aprobar_todo(grafo, config)
+            antes = set((carpeta / "outbox").glob("joven_*"))
+            evento_empresa(grafo, config, evento["oferta_id"], evento.get("perfil_id"), tipo=evento.get("tipo", "rechaza"),
+                           nota=evento.get("nota", ""), orientador=ORIENTADORA_EVAL)
+            foto = grafo.get_state(config)
+            solicitud = aprobacion_pendiente(grafo, config) or {}
+        finally:
+            _cerrar(checkpointer)
+        valores = foto.values
+        nuevos = sorted(set((carpeta / "outbox").glob("joven_*")) - antes)
+        oferta = next((o for o in valores.get("ofertas") or [] if getattr(o, "id", None) == evento["oferta_id"]), None)
+        puesto = str(getattr(oferta, "puesto", "") or "")
+        aviso = any(
+            p.name.startswith(f"joven_{evento.get('perfil_id')}") and puesto and puesto in _texto_archivo(p) for p in nuevos
+        )
+    return {
+        "excluidos": [f"{e.get('perfil_id')}@{e.get('oferta_id')} ({e.get('origen')})" for e in map(_a_dict, valores.get("excluidos") or [])],
+        "postulaciones": {k.replace(":", "@"): _estado_valor(v) for k, v in (valores.get("postulaciones") or {}).items()},
+        "aviso_al_joven": aviso,
+        "siguiente": list(foto.next),
+        "aprobacion_pendiente": solicitud.get("oferta_id"),
+        "candidatos_nuevos": [c["perfil_id"] for c in solicitud.get("candidatos") or []],
+    }
+
+
+def _franja_de_curso(texto: Any) -> dict | None:
+    """«Lunes a Viernes 08:00-12:00» -> {dias, hora_inicio, hora_fin}. Sin franja legible, None."""
+    m = re.search(r"(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})", str(texto or ""))
+    if m is None:
+        return None
+    norma = _norm(texto)
+    dias = list(_DIAS_SEMANA) if "lunes a viernes" in norma else [d for d in (*_DIAS_SEMANA, "sabado", "domingo") if d in norma]
+    return {"dias": dias or list(_DIAS_SEMANA), "hora_inicio": m.group(1).zfill(5), "hora_fin": m.group(2).zfill(5)}
+
+
+def _ejecutar_formacion(caso: dict) -> dict:
+    """#14, #53: recomendar_cursos_brechas con data/cursos.csv y data/traslados.csv. Cada curso propuesto se revisa
+    aparte, aquí: cupo, traslado, pasaje y horario frente a las clases y a la disponibilidad del joven."""
+    recomendar = _resolver(FORMACION_RECOMENDAR)
+    entrada = caso["entrada"]
+    perfil = entrada["perfil"]
+    maximo = int(entrada.get("max_minutos") or MINUTOS_MAXIMOS_TRASLADO)
+    traslados = str(RAIZ_REPO / "data" / "traslados.csv")
+    recomendacion = _a_dict(recomendar(perfil, list(entrada["brechas"]), traslados=traslados, max_minutos_traslado=maximo))
+    clases, libres = _lista(perfil.get("horario_clases")), _lista(perfil.get("horario_libre"))
+    violaciones = []
+    for curso in recomendacion.get("cursos_seleccionados") or []:
+        curso_id = curso.get("id")
+        if int(curso.get("cupos") or 0) <= 0:
+            violaciones.append(f"{curso_id}: cupo")
+        if int(curso.get("minutos_traslado") or 0) > maximo:
+            violaciones.append(f"{curso_id}: traslado")
+        if float(curso.get("pasaje_diario") or 0) > float(perfil.get("presupuesto_pasaje_diario") or 0):
+            violaciones.append(f"{curso_id}: pasaje")
+        franja = _franja_de_curso(curso.get("horario"))
+        if (
+            franja is None
+            or any(_se_cruzan(franja, c) for c in clases)
+            or (libres and not any(_cabe_en(franja, libre) for libre in libres))
+        ):
+            violaciones.append(f"{curso_id}: horario")
+    return {
+        "cursos": [c.get("id") for c in recomendacion.get("cursos_seleccionados") or []],
+        "brechas_cubiertas": _lista(recomendacion.get("brechas_cubiertas")),
+        "brechas_pendientes": _lista(recomendacion.get("brechas_pendientes")),
+        "violaciones": violaciones,
+    }
+
+
+def _ejecutar_punta_a_punta(caso: dict) -> dict:
+    """Perfil -> Matching -> Auditor -> Formación -> aprobación con consentimiento -> Postulación -> outbox, con el grafo
+    real y el caso de tests/fixtures. Se mira lo que vio el orientador y lo que quedó en el outbox."""
+    entrada = caso["entrada"]
+    with _carpeta_aislada("eval_punta_a_punta_") as carpeta:
+        grafo, config, checkpointer = _grafo_del_caso(entrada, carpeta)
+        try:
+            listas = _aprobar_todo(grafo, config)
+            valores = grafo.get_state(config).values
+        finally:
+            _cerrar(checkpointer)
+        outbox = carpeta / "outbox"
+        enviadas = [
+            k for k, v in (valores.get("postulaciones") or {}).items() if _estado_valor(v) == "enviado"
+        ]
+        por_pareja: dict[str, list[str]] = {}
+        for clave in enviadas:
+            perfil_id, oferta_id = clave.split(":", 1)
+            base = f"{_seguro(perfil_id)}_{_seguro(oferta_id)}"  # como los nombra Postulación (pdf.py)
+            nombres = {"cv": f"cv_{base}.pdf", "carta": f"carta_{base}.pdf", "ics": f"entrevista_{base}.ics"}
+            por_pareja[clave.replace(":", "@")] = sorted(t for t, n in nombres.items() if (outbox / n).is_file())
+        archivos = sorted(outbox.glob("*")) if outbox.exists() else []
+        hacia_la_empresa = [a for a in archivos if _tipo_archivo(a) in ("cv", "carta", "mensaje")]
+        textos = " ".join(_texto_archivo(a) for a in hacia_la_empresa)
+    return {
+        "listas_cortas": listas,
+        "enviadas": [c.replace(":", "@") for c in enviadas],
+        "archivos_por_pareja": por_pareja,
+        "mensajes_a_la_empresa": sum(1 for a in archivos if _tipo_archivo(a) == "mensaje"),
+        "datos_sensibles": _sensibles_en(textos, entrada.get("sensibles")),
+    }
+
 def ejecutores_por_defecto(
     taxonomia: dict | None = None,
     *,
@@ -890,6 +1187,10 @@ def ejecutores_por_defecto(
         "horario_validacion": _ejecutar_horario_validacion,
         "redactor_puente": _ejecutar_redactor,
         "micromision": _ejecutar_micromision,
+        "postulacion": _ejecutar_postulacion,
+        "reacomodo": _ejecutar_reacomodo,
+        "formacion": _ejecutar_formacion,
+        "punta_a_punta": _ejecutar_punta_a_punta,
     }
 
 
@@ -1105,6 +1406,14 @@ def _entorno_llm(modo: str = MODO_LLM_POR_DEFECTO) -> Iterator[None]:
                 os.environ[nombre] = valor
 
 
+_LINEA_DE_HORA = re.compile(r"^Generado por `uv run python -m evals\.run` el .*$", re.MULTILINE)
+
+
+def _sin_la_hora(texto: str) -> str:
+    """El archivo sin la línea «Generado por … el <fecha y hora>»: lo único que cambia entre dos corridas iguales."""
+    return _LINEA_DE_HORA.sub("Generado por `uv run python -m evals.run` el <hora>", texto.replace("\r\n", "\n"))
+
+
 def escribir_resultados(
     resultados: list[ResultadoCaso],
     casos: dict,
@@ -1112,7 +1421,11 @@ def escribir_resultados(
     *,
     ahora: datetime | None = None,
 ) -> Path:
-    """Guarda la tabla, el detalle por caso y el registro de fallos en un archivo markdown."""
+    """Guarda la tabla, el detalle por caso y el registro de fallos en un archivo markdown.
+
+    Si el archivo ya existe y solo cambiaría la hora de la línea «Generado por …», no lo reescribe: el archivo está
+    versionado y una corrida igual a la anterior no debe ensuciar `git status` (#231, procedimiento del tag #17).
+    """
     ruta = Path(ruta)
     ahora = (ahora or datetime.now(HUSO_PANAMA)).astimezone(HUSO_PANAMA)
     conteo = _conteo_estados(resultados)
@@ -1150,8 +1463,13 @@ def escribir_resultados(
     for r in resultados:
         lineas.append(f"| {r.id} | {r.categoria} | {r.estado} | {r.aciertos}/{r.corridas} | {_celda(r.detalle)} |")
     lineas += ["", *_registro_de_fallos(resultados, casos), ""]
+    contenido = "\n".join(lineas)
+    if ruta.is_file():
+        with contextlib.suppress(OSError, UnicodeDecodeError):
+            if _sin_la_hora(ruta.read_text(encoding="utf-8")) == _sin_la_hora(contenido):
+                return ruta
     ruta.parent.mkdir(parents=True, exist_ok=True)
-    ruta.write_text("\n".join(lineas), encoding="utf-8", newline="\n")
+    ruta.write_text(contenido, encoding="utf-8", newline="\n")
     return ruta
 
 

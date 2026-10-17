@@ -246,3 +246,18 @@ def test_sin_puesto_ni_empresa_no_quedan_huecos():
     assert lineas[0] == "Al equipo de selección:"
     assert lineas[1].startswith("Me postulo a esta vacante. Estas son")
     assert not any(" de :" in linea or "de ." in linea for linea in lineas)
+
+
+def test_el_nombre_de_una_habilidad_fuera_de_la_taxonomia_tambien_se_ciega():
+    """Sin la habilidad en la taxonomía, el nombre cae al skill_id: no puede llevar el corregimiento del joven (#244)."""
+    perfil = _perfil(habilidades=[
+        HabilidadPerfil(skill_id="atiende_en_vista_alegre", evidencia="atiendo pedidos"),
+    ])
+    perfil = perfil.model_copy(update={"corregimiento": "Vista Alegre"})
+    oferta = _oferta(habilidades=("atiende_en_vista_alegre",))
+    lineas = contenido_carta(perfil, oferta, taxonomia={})
+    assert "- Atiende en [dato omitido]: «atiendo pedidos»" in lineas
+    assert "vista alegre" not in " ".join(lineas).lower()
+    # Con la habilidad en la taxonomía el nombre sale tal cual, sin huecos.
+    normal = contenido_carta(_perfil(), _oferta(), taxonomia=TAXONOMIA)
+    assert "- Asistir a clientes: «atiendo pedidos»" in normal and not any("[dato omitido]" in x for x in normal)

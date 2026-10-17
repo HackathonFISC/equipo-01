@@ -99,7 +99,9 @@ def contenido_carta(
     def item(h: HabilidadPerfil) -> str:
         # La evidencia es literal y puede traer la edad o dónde vive la persona: esto sí se ciega.
         evidencia = cegar(evidencia_de(h).strip(), perfil)
-        return f"- {nombre_habilidad(skill_id_de(h), taxonomia)}: «{evidencia}»"
+        # El nombre sale de la taxonomía; sin ella cae al skill_id, que puede traer un dato personal (#244).
+        nombre = cegar(nombre_habilidad(skill_id_de(h), taxonomia), perfil)
+        return f"- {nombre}: «{evidencia}»"
 
     empresa, puesto = str(oferta.empresa or "").strip(), str(oferta.puesto or "").strip()
     cuerpo = [SALUDO.format(empresa=empresa) if empresa else "Al equipo de selección:"]
