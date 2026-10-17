@@ -598,3 +598,21 @@ def test_un_archivo_fuera_del_paso_del_cv_pide_texto(entorno) -> None:
     params = {**_params(""), "NumMedia": "1", "MediaUrl0": "https://api.twilio.com/x", "MediaContentType0": "application/pdf"}
     r = cliente.post("/api/whatsapp", data=params, headers={"X-Twilio-Signature": wa.firma_twilio(f"{BASE}/api/whatsapp", params, TOKEN)})
     assert "no puedo leer archivos" in r.text and bot.PREGUNTAS_FORMULARIO[0][1] in r.text
+
+
+def test_horario_sin_hora_pregunta_solo_la_hora(entorno) -> None:
+    cliente, *_ = entorno
+    _enviar(cliente, "hola")
+    for texto in FORMULARIO[:4]:  # nombre, edad, corregimiento, clases
+        _enviar(cliente, texto)
+    r = _enviar(cliente, "Todos los días menos fin de semana")
+    assert "Anoté lunes a viernes" in r.text and "¿De qué hora a qué hora?" in r.text
+    r = _enviar(cliente, "de 7 a 3")
+    assert bot.PREGUNTAS_FORMULARIO[5][1] in r.text  # siguió al salario
+    conn = db.conectar(entorno[3] / "wa.db")
+    try:
+        [datos] = [f[0] for f in conn.execute("SELECT datos_json FROM whatsapp_conversaciones")]
+    finally:
+        conn.close()
+    libre = json.loads(datos)["formulario"]["horario_libre"]
+    assert libre == [{"dias": ["lunes", "martes", "miercoles", "jueves", "viernes"], "hora_inicio": "07:00", "hora_fin": "15:00"}]

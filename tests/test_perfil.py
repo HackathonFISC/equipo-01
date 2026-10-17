@@ -470,6 +470,21 @@ def test_corregimiento_del_llm_se_ignora(taxonomia):
         ("sábado 8-12; domingo 9:00 hasta 13:00", [(["sabado"], "08:00", "12:00"), (["domingo"], "09:00", "13:00")]),
         ("", []),
         ("no", []),
+        # Respuestas de chat (WhatsApp, #160): frases de días, horas sueltas, partes del día y errores de tipeo.
+        ("Todos los días menos fin de semana de 8 a 4", [(["lunes", "martes", "miercoles", "jueves", "viernes"], "08:00", "16:00")]),
+        (
+            "Todos los días menos fin de semana de 07:00-12:00 y unes a sábado de 7 a 12",
+            [
+                (["lunes", "martes", "miercoles", "jueves", "viernes"], "07:00", "12:00"),
+                (["lunes", "martes", "miercoles", "jueves", "viernes", "sabado"], "07:00", "12:00"),
+            ],
+        ),
+        ("todos los dias excepto domingo 7am a 5pm", [(["lunes", "martes", "miercoles", "jueves", "viernes", "sabado"], "07:00", "17:00")]),
+        ("entre semana en la mañana", [(["lunes", "martes", "miercoles", "jueves", "viernes"], "07:00", "12:00")]),
+        ("8 a 4 entre semana", [(["lunes", "martes", "miercoles", "jueves", "viernes"], "08:00", "16:00")]),
+        ("fines de semana de 9 a 1", [(["sabado", "domingo"], "09:00", "13:00")]),
+        ("mates y jueves de 2 a 6", [(["martes", "jueves"], "14:00", "18:00")]),
+        ("lunes a viernes desde las 7 hasta las 17", [(["lunes", "martes", "miercoles", "jueves", "viernes"], "07:00", "17:00")]),
     ],
 )
 def test_leer_horario(texto, esperado):
@@ -480,6 +495,14 @@ def test_leer_horario(texto, esperado):
 def test_leer_horario_rechaza_lo_que_no_entiende(texto):
     with pytest.raises(ValueError):
         leer_horario(texto)
+
+
+def test_leer_horario_sin_hora_devuelve_los_dias():
+    from puente.agents.perfil import FaltaFranja
+
+    with pytest.raises(FaltaFranja) as error:
+        leer_horario("Todos los días menos fin de semana")
+    assert error.value.dias == ["lunes", "martes", "miercoles", "jueves", "viernes"]
 
 
 def _respondedor(valores):

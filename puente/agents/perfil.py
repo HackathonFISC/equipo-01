@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import difflib
 import re
 import unicodedata
 from collections.abc import Callable, Iterable
@@ -419,48 +420,132 @@ def entrevistar(responder: Callable[[str], str], preguntas: Iterable[str] = PREG
 
 # ---------------------------------------------------------------- formulario fijo
 
-_FRANJA = re.compile(r"(\d{1,2})(?::(\d{2}))?\s*(?:-|a|hasta)\s*(\d{1,2})(?::(\d{2}))?\s*$")
+# Franja horaria en cualquier parte del bloque: "7 a 5", "de 8:30 a 4pm", "desde las 7 hasta las 17", "18-22".
+_FRANJA = re.compile(
+    r"(?:desde\s+)?(?:las?\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap]m)?\s*(?:-|a|hasta)\s*(?:las?\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap]m)?(?![\d:])"
+)
 _RANGO_DIAS = re.compile(r"\s*([a-z]+)\s*(?:-|a|al|hasta)\s*([a-z]+)\s*")
 _NUMERO = re.compile(r"\d+(?:[.,]\d+)?")
+# Partes del día sin hora exacta: la franja típica de cada una.
+_PARTES_DEL_DIA = (
+    (re.compile(r"\b(?:en\s+la\s+|por\s+la\s+|de\s+)?(?:manana|mananas)\b"), "07:00", "12:00"),
+    (re.compile(r"\b(?:en\s+la\s+|por\s+la\s+|de\s+)?(?:tarde|tardes)\b"), "13:00", "18:00"),
+    (re.compile(r"\b(?:en\s+la\s+|por\s+la\s+|de\s+)?(?:noche|noches)\b"), "18:00", "22:00"),
+)
+_ENTRE_SEMANA = ("lunes", "martes", "miercoles", "jueves", "viernes")
+_FRASES_DIAS = (
+    (re.compile(r"\bfin(?:es)?\s+de\s+semana\b"), ("sabado", "domingo")),
+    (re.compile(r"\b(?:entre\s+semana|dias?\s+de\s+semana|dias?\s+habiles|semana\s+laboral)\b"), _ENTRE_SEMANA),
+    (re.compile(r"\b(?:todos\s+los\s+dias|toda\s+la\s+semana|a\s+diario|diario|cualquier\s+dia)\b"), DIAS_VALIDOS),
+)
+_RELLENO_DIAS = {"y", "e", "los", "las", "el", "la", "de", "del", "dias", "dia", "todos", "solo", "nada", "mas", "puedo", "trabajar"}
+_EXCLUSION = re.compile(r"\b(?:menos|excepto|salvo|sin|pero\s+no)\b")
+
+
+class FaltaFranja(ValueError):
+    """El bloque trae días pero no la hora: quien pregunta puede pedir solo la franja."""
+
+    def __init__(self, dias: list[str], bloque: str) -> None:
+        super().__init__(f"falta la hora (HH:MM-HH:MM) en {bloque!r}")
+        self.dias = dias
 
 
 def _dia(palabra: str) -> str | None:
-    return next((d for d in DIAS_VALIDOS if d[:3] == palabra[:3]), None) if len(palabra) >= 3 else None
+    """'lun', 'Mié', 'sábados' o con un error de tipeo ('unes', 'mates') -> el día; None si no es un día."""
+    if len(palabra) < 3:
+        return None
+    exacto = next((d for d in DIAS_VALIDOS if d[:3] == palabra[:3]), None)
+    if exacto:
+        return exacto
+    parecido = difflib.get_close_matches(palabra.rstrip("s"), DIAS_VALIDOS, n=1, cutoff=0.75)
+    return parecido[0] if parecido else None
 
 
-def _leer_dias(texto: str) -> list[str]:
-    plano = _sin_acentos(texto).casefold()
-    rango = _RANGO_DIAS.fullmatch(plano)
+def _dias_de(parte: str) -> set[str]:
+    """Días de un trozo de texto ya normalizado: frases ("fin de semana", "todos los días"), rangos o nombres."""
+    dias: set[str] = set()
+    for patron, incluidos in _FRASES_DIAS:
+        if patron.search(parte):
+            dias.update(incluidos)
+            parte = patron.sub(" ", parte)
+    resto = " ".join(p for p in re.findall(r"[a-z]+", parte) if p not in _RELLENO_DIAS)
+    if not resto:
+        return dias
+    rango = _RANGO_DIAS.fullmatch(resto)
     if rango and _dia(rango[1]) and _dia(rango[2]):
         i, j = DIAS_VALIDOS.index(_dia(rango[1])), DIAS_VALIDOS.index(_dia(rango[2]))
         if i <= j:
-            return list(DIAS_VALIDOS[i : j + 1])
-    palabras = [p for p in re.findall(r"[a-z]+", plano) if p not in {"y", "e", "los", "las"}]
-    dias = [_dia(p) for p in palabras]
-    if not dias or None in dias:
+            return dias | set(DIAS_VALIDOS[i : j + 1])
+    sueltos = [_dia(p) for p in resto.split() if p not in {"a", "al", "hasta"}]
+    if None in sueltos:
+        raise ValueError(f"días no reconocidos: {parte.strip()!r}")
+    return dias | set(sueltos)
+
+
+def _leer_dias(texto: str) -> list[str]:
+    """'lunes a viernes', 'todos los días menos fin de semana', 'entre semana y sábado' -> días en orden."""
+    plano = _sin_acentos(texto).casefold()
+    partes = _EXCLUSION.split(plano, maxsplit=1)
+    incluir, excluir = (partes[0], partes[1]) if len(partes) == 2 else (plano, "")
+    base = _dias_de(incluir) or (set(DIAS_VALIDOS) if excluir else set())
+    dias = [d for d in DIAS_VALIDOS if d in base and d not in _dias_de(excluir)]
+    if not dias:
         raise ValueError(f"días no reconocidos: {texto.strip()!r}")
-    return list(dict.fromkeys(dias))
+    return dias
+
+
+def _hora(h: str, m: str | None, sufijo: str | None) -> tuple[int, int]:
+    hora = int(h) % 12 + 12 if sufijo == "pm" else (0 if sufijo == "am" and int(h) == 12 else int(h))
+    return hora, int(m or 0)
 
 
 def leer_horario(texto: str) -> list[Horario]:
-    """'lunes a viernes 18:00-22:00; sábado 8-12' -> lista de Horario. Vacío o 'no' -> []."""
+    """'lunes a viernes 18:00-22:00; sábado 8-12' -> lista de Horario. Vacío o 'no' -> [].
+
+    También entiende frases de días ("todos los días menos fin de semana", "entre semana"), horas sueltas
+    ("de 8 a 4" es 08:00-16:00: si el fin queda antes del inicio, es de la tarde; "7am a 5pm") y partes
+    del día ("en la mañana"). Si hay días pero no hora, lanza `FaltaFranja` con los días leídos.
+    """
     horarios = []
     for bloque in re.split(r"[;\n]", texto):
         bloque = bloque.strip()
-        if not bloque or _sin_acentos(bloque).casefold() in {"no", "ninguno", "ninguna", "-"}:
+        plano = re.sub(r"\b([ap])\.?\s?m\b\.?", r"\1m", _sin_acentos(bloque).casefold())
+        if not plano or plano in {"no", "ninguno", "ninguna", "-", "no estudio", "no tengo"}:
             continue
-        franja = _FRANJA.search(bloque)
-        if not franja:
-            raise ValueError(f"falta la franja HH:MM-HH:MM en {bloque!r}")
-        h1, m1, h2, m2 = franja.groups()
+        franjas = list(_FRANJA.finditer(plano))
+        if franjas:
+            # Cada franja cierra un bloque: "todos los días menos fin de semana 7-12 y sábado 8 a 1" son dos.
+            previo = 0
+            for k, franja in enumerate(franjas):
+                h1, m1, s1, h2, m2, s2 = franja.groups()
+                (a, am), (b, bm) = _hora(h1, m1, s1), _hora(h2, m2, s2)
+                if not s1 and not s2 and a <= 6 and b <= 6 and (a, am) < (b, bm):
+                    a, b = a + 12, b + 12  # "de 2 a 6": nadie trabaja ni estudia de 2 a 6 de la madrugada
+                elif not s2 and (b, bm) <= (a, am) and b < 12:
+                    b += 12  # "de 8 a 4": el fin es de la tarde
+                texto_dias = plano[previo : franja.start()]
+                if k == len(franjas) - 1:
+                    texto_dias += " " + plano[franja.end() :]  # "7 a 5 entre semana": los días van después
+                previo = franja.end()
+                try:
+                    horarios.append(
+                        Horario(dias=_leer_dias(texto_dias), hora_inicio=f"{a:02d}:{am:02d}", hora_fin=f"{b:02d}:{bm:02d}")
+                    )
+                except ValidationError as exc:
+                    raise ValueError(f"horario inválido {bloque!r}: {exc.errors()[0]['msg']}") from exc
+            continue
+        else:
+            parte = next(((patron, i, f) for patron, i, f in _PARTES_DEL_DIA if patron.search(plano)), None)
+            if parte is None:
+                try:
+                    dias = _leer_dias(plano)
+                except ValueError:
+                    raise ValueError(f"falta la franja HH:MM-HH:MM en {bloque!r}") from None
+                raise FaltaFranja(dias, bloque)
+            patron, inicio, fin_ = parte
+            texto_dias = patron.sub(" ", plano)
         try:
-            horarios.append(
-                Horario(
-                    dias=_leer_dias(bloque[: franja.start()]),
-                    hora_inicio=f"{int(h1):02d}:{m1 or '00'}",
-                    hora_fin=f"{int(h2):02d}:{m2 or '00'}",
-                )
-            )
+            horarios.append(Horario(dias=_leer_dias(texto_dias), hora_inicio=inicio, hora_fin=fin_))
         except ValidationError as exc:
             raise ValueError(f"horario inválido {bloque!r}: {exc.errors()[0]['msg']}") from exc
     return horarios

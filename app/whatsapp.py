@@ -44,7 +44,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse, Response
 
-from puente.agents.perfil import MAX_PREGUNTAS, PREGUNTAS_ENTREVISTA, detectar_corregimiento, leer_horario
+from puente.agents.perfil import MAX_PREGUNTAS, PREGUNTAS_ENTREVISTA, FaltaFranja, detectar_corregimiento, leer_horario
 from puente.guardrails import detectar_inyeccion, limpiar_entrada, validar_texto
 from puente.schemas import Decision, EstadoPostulacion
 from puente.tools import db
@@ -378,9 +378,20 @@ def _avanzar(
             return ["Tu respuesta es muy larga. ¿Me lo cuentas más corto?", _pregunta(paso)]
         conv.datos.setdefault("respuestas", []).append(texto)
     else:
+        # Días ya anotados en el mensaje anterior ("todos los días menos fin de semana"): este trae la hora.
+        pendientes = conv.datos.pop("dias_pendientes", None) if paso.startswith("horario") else None
+        texto_campo = f"{' '.join(pendientes)} {texto}" if pendientes else texto
         try:
-            conv.datos.setdefault("formulario", {})[paso] = leer_campo(paso, texto)
+            conv.datos.setdefault("formulario", {})[paso] = leer_campo(paso, texto_campo)
+        except FaltaFranja as exc:
+            conv.datos["dias_pendientes"] = exc.dias
+            return [
+                f"Anoté {_servidor()._texto_dias(exc.dias)}. ¿De qué hora a qué hora? "
+                "Por ejemplo «7 a 5» o «en la mañana»."
+            ]
         except (ValueError, ValidationError) as exc:
+            if pendientes:
+                conv.datos["dias_pendientes"] = pendientes
             motivo = exc.errors()[0]["msg"] if isinstance(exc, ValidationError) else str(exc)
             return [f"No entendí: {motivo}.", _pregunta(paso)]
     conv.paso = _siguiente_paso(paso)
