@@ -6,7 +6,8 @@
   <meta name="color-scheme" content="dark" />
   <title>SkillMatch · Tu búsqueda de empleo</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230e0d0b'/%3E%3Cg fill='none' stroke='%23e2a11b' stroke-width='2.4'%3E%3Ccircle cx='12.5' cy='16' r='7'/%3E%3Ccircle cx='19.5' cy='16' r='7'/%3E%3C/g%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="/static/joven.css?v=2026101702" />
+  <link rel="stylesheet" href="/static/joven.css?v=2026101703" />
+  <link rel="stylesheet" href="/static/mobile.css?v=2026101703" />
 </head>
 <body>
   <!-- Vista del joven (#52). Sin recursos externos: la demo tiene que correr sin conexión. -->
@@ -22,18 +23,46 @@
 
   <main class="pagina">
     <section class="intro">
-      <h1>Busquemos un trabajo que te quede cerca</h1>
-      <p>Cuéntanos tu horario, cuánto necesitas ganar y qué sabes hacer. Una orientadora revisa todo antes de que algo llegue a una empresa, y tu CV solo se envía si tú lo aceptas.</p>
+      <span class="intro-etiqueta">TU PRÓXIMO PASO</span>
+      <h1>Tu experiencia puede abrirte puertas.</h1>
+      <p>Empieza con tu CV o cuéntanos lo que sabes hacer. Te ayudamos a encontrar oportunidades cerca de ti.</p>
       <p class="aviso">Demo con datos sintéticos: no escribas tus datos reales.</p>
     </section>
 
     <ol class="pasos" aria-label="Pasos">
-      <li data-paso="datos" aria-current="step">Tus datos</li>
-      <li data-paso="entrevista">Entrevista</li>
+      <li data-paso="ingreso" aria-current="step">Tu CV</li>
+      <li data-paso="datos">Tu perfil</li>
       <li data-paso="resultado">Tu resultado</li>
     </ol>
 
-    <form id="form-joven" class="tarjeta" novalidate>
+    <section id="ingreso" class="ingreso" aria-labelledby="ingreso-titulo">
+      <h2 id="ingreso-titulo">¿Cómo quieres crear tu perfil?</h2>
+      <p class="ayuda">Elige lo que te resulte más fácil. No necesitas tener experiencia formal.</p>
+      <div class="ingreso-opciones">
+        <button type="button" class="ingreso-opcion" data-ingreso="pdf">
+          <span class="ingreso-icono" aria-hidden="true">PDF</span>
+          <span><strong>Subir mi CV en PDF</strong><small>Usa el archivo que ya tienes guardado.</small></span><span aria-hidden="true">↗</span>
+        </button>
+        <button type="button" class="ingreso-opcion" data-ingreso="foto">
+          <span class="ingreso-icono" aria-hidden="true">▧</span>
+          <span><strong>Tomar o subir una foto</strong><small>Una foto clara y completa de tu CV.</small></span><span aria-hidden="true">↗</span>
+        </button>
+        <button type="button" class="ingreso-opcion" data-ingreso="datos">
+          <span class="ingreso-icono" aria-hidden="true">Aa</span>
+          <span><strong>Completar mis datos</strong><small>Sin CV: cuéntanos tu experiencia con tus palabras.</small></span><span aria-hidden="true">→</span>
+        </button>
+      </div>
+      <p class="ingreso-confianza">Tus datos se revisan antes de compartirlos. Tú decides si tu perfil se envía a una empresa.</p>
+    </section>
+
+    <form id="form-joven" class="tarjeta" novalidate hidden>
+      <button type="button" id="cambiar-ingreso" class="enlace-atras">← Cambiar cómo crear mi perfil</button>
+      <section id="cv-adjunto" class="cv-adjunto" hidden>
+        <h2>Tu CV está listo para analizar</h2>
+        <p id="cv-nombre"></p>
+        <p class="ayuda">Confirma tus datos y tu disponibilidad. Nuestro agente leerá tu experiencia y buscará vacantes compatibles.</p>
+        <button type="button" id="cv-cambiar" class="btn btn-sec">Elegir otro archivo</button>
+      </section>
       <fieldset data-paso="datos">
         <legend>Tus datos</legend>
         <div class="campos">
@@ -139,7 +168,8 @@
   </main>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="/static/joven.js?v=2026101702" defer></script>
-  <script src="/static/joven_fase2.js?v=2026101702" defer></script>
+  <script src="/static/joven.js?v=2026101703" defer></script>
+  <script src="/static/joven_fase2.js?v=2026101703" defer></script>
+  <script src="/static/joven_ingreso.js?v=2026101703" defer></script>
 </body>
 </html>

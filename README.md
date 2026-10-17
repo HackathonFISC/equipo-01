@@ -133,6 +133,8 @@ Los siete agentes mínimos que sugiere el documento del reto y dónde están en 
 - **Ofertas y CV por archivo (#170).** En el tablero, «Subir oferta (PDF o foto con cámara)» y «Subir CV (PDF)» (`POST /api/ofertas/archivo` y `POST /api/perfiles/archivo`).
   - Los guardrails de tamaño (5 MB) y de tipo se aplican antes de leer el archivo, y el audio se rechaza.
   - La cédula y el teléfono se quitan antes del LLM.
+  - En `/joven`, el primer paso permite elegir **PDF, foto JPG/PNG o completar los datos**. `POST /api/joven/cv` valida el archivo y los horarios, extrae el texto y llama a Perfil; después recalcula las vacantes y devuelve un código privado al joven. Con CV no se exige la entrevista.
+  - Las fotos se leen con **RapidOCR local** (incluido al ejecutar `uv sync`); la imagen original no sale al modelo. Solo el texto limpio llega a Perfil. El archivo temporal se elimina y no se conserva su texto crudo.
   - Sin red solo funcionan los archivos de prueba, con grabaciones escritas a mano (#236): `tests/fixtures/volante_sintetico.jpg` y `tests/fixtures/cv_sintetico.pdf`.
 - **Demo pública de solo lectura (#161).** `vercel.json` publica el tablero con `PUENTE_DEMO_PUBLICA=1` y `LLM_MODO=reproducir`. Toda acción que no sea GET responde 403 y el estado es efímero. **No es la demo en vivo** (#169), que corre en local. Para verlo en local: `PUENTE_DEMO_PUBLICA=1 uv run python -m app.server`.
 

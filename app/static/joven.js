@@ -243,6 +243,7 @@ async function conBoton(boton, textoOcupado, tarea) {
 }
 
 function marcarPaso(paso) {
+  if (paso === "entrevista") paso = "datos";
   for (const li of document.querySelectorAll(".pasos li")) {
     if (li.dataset.paso === paso) li.setAttribute("aria-current", "step");
     else li.removeAttribute("aria-current");
@@ -373,7 +374,7 @@ function validar() {
   if (pasaje.value === "" || Number(pasaje.value) < 0) return ["Escribe cuánto puedes gastar en pasaje al día.", pasaje];
 
   const respuestas = formulario.preguntas.map((_, i) => $(`f-respuesta-${i}`).value.trim());
-  if (!respuestas.some((r) => r.length >= 3)) return ["Responde al menos una pregunta de la entrevista.", $("f-respuesta-0")];
+  if (!window.ingresoCV?.archivo && !respuestas.some((r) => r.length >= 3)) return ["Responde al menos una pregunta de la entrevista.", $("f-respuesta-0")];
   return null;
 }
 
@@ -400,9 +401,11 @@ async function enviarFormulario(evento) {
     mostrarError(...problema);
     return;
   }
-  await conBoton($("btn-enviar"), "Leyendo tu entrevista…", async () => {
+  await conBoton($("btn-enviar"), window.ingresoCV?.archivo ? "Analizando tu CV…" : "Leyendo tu entrevista…", async () => {
     try {
-      const resultado = await api("/api/joven/perfil", datosDelFormulario());
+      const resultado = window.ingresoCV?.archivo
+        ? await window.ingresoCV.enviar(datosDelFormulario())
+        : await api("/api/joven/perfil", datosDelFormulario());
       tokenActual = resultado.token;
       mostrarResultado(resultado);
       mostrarAviso("Listo: ya tenemos tu perfil.");
