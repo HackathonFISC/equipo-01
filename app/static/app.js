@@ -102,16 +102,19 @@ function nombreHabilidad(skillId) {
 }
 
 // Los nombres en outbox/ son largos; se muestran por tipo y el nombre completo queda en el title.
+function tipoArchivo(nombre) {
+  if (/^cv_/i.test(nombre)) return { etiqueta: "CV · PDF", icono: "file" };
+  if (/^carta_/i.test(nombre)) return { etiqueta: "Carta · PDF", icono: "file" };
+  if (/^telegram_/i.test(nombre)) return { etiqueta: "Telegram", icono: "send" };
+  if (/^mensaje_/i.test(nombre)) return { etiqueta: "Mensaje", icono: "send" };
+  if (/\.ics$/i.test(nombre)) return { etiqueta: "Cita .ics", icono: "clock" };
+  return { etiqueta: nombre, icono: "file" };
+}
+
 function chipsArchivos(archivos) {
-  const tipo = (nombre) => {
-    if (/^cv_/i.test(nombre)) return { etiqueta: "CV · PDF", icono: "file" };
-    if (/^telegram_/i.test(nombre)) return { etiqueta: "Telegram", icono: "send" };
-    if (/\.ics$/i.test(nombre)) return { etiqueta: "Cita .ics", icono: "clock" };
-    return { etiqueta: nombre, icono: "file" };
-  };
   return `<div class="archivos">${(archivos || [])
     .map((a) => {
-      const t = tipo(String(a));
+      const t = tipoArchivo(String(a));
       return `<span class="archivo" title="outbox/${escaparHtml(a)}">${icono(t.icono)}${escaparHtml(t.etiqueta)}</span>`;
     })
     .join("")}</div>`;
