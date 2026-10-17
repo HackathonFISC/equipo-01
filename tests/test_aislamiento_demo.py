@@ -64,3 +64,40 @@ def test_pytest_no_toca_la_base_real_de_la_demo(tmp_path):
     assert "1 passed" in corrida.stdout
     assert _huella(base) == antes  # la base real quedó igual
     assert not rutas["PUENTE_CHECKPOINTS"].exists() and not rutas["PUENTE_OUTBOX"].exists()
+
+
+def test_rutas_vacias_del_env_example_usan_el_valor_por_defecto(tmp_path, monkeypatch):
+    """Con el .env copiado de .env.example, «PUENTE_DB=» y «PUENTE_CHECKPOINTS=» llegan vacíos (#17).
+
+    Vacío cuenta como no definido: la base queda en puente.db y los checkpoints en checkpoints.db del
+    directorio actual. Antes, PUENTE_CHECKPOINTS="" hacía caer `python -m puente.graph` con «unable to
+    open database file», y PUENTE_DB="" abría una base temporal que se borraba al cerrar.
+    """
+    from puente.graph import checkpointer_sqlite
+
+    monkeypatch.chdir(tmp_path)
+    for variable in ("PUENTE_DB", "PUENTE_CHECKPOINTS", "PUENTE_OUTBOX"):
+        monkeypatch.setenv(variable, "")
+
+    conn = db.conectar()
+    try:
+        db.registrar_decision(conn, Decision(agente="prueba", entrada_resumen="x", salida_resumen="y", razon="z"))
+        conn.commit()
+    finally:
+        conn.close()
+    assert (tmp_path / "puente.db").is_file()
+    conn = db.conectar()
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM decisiones").fetchone()[0] == 1  # no se perdió al cerrar
+    finally:
+        conn.close()
+
+    checkpointer_sqlite()
+    assert (tmp_path / "checkpoints.db").is_file()
+
+
+def test_env_example_no_trae_rutas_que_rompan_la_demo():
+    """Toda variable PUENTE_* de ruta que .env.example deje vacía tiene que tolerar el vacío (#17)."""
+    texto = (RAIZ / ".env.example").read_text(encoding="utf-8")
+    vacias = {linea.split("=", 1)[0] for linea in texto.splitlines() if linea.endswith("=") and not linea.startswith("#")}
+    assert {"PUENTE_DB", "PUENTE_CHECKPOINTS", "PUENTE_OUTBOX"} <= vacias  # el caso que cubre la prueba anterior

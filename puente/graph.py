@@ -1215,7 +1215,9 @@ TIPOS_SERIALIZABLES = [
 
 def checkpointer_sqlite(ruta: str | Path | None = None) -> SqliteSaver:
     """Checkpointer en su propio archivo (no en puente.db), con una sola conexión por proceso y ruta."""
-    ruta = Path(ruta or os.getenv("PUENTE_CHECKPOINTS", CHECKPOINTS_POR_DEFECTO)).resolve()
+    # `or`, no el valor por defecto de getenv: el .env copiado de .env.example trae «PUENTE_CHECKPOINTS=»
+    # vacío, y Path("") es el directorio actual (sqlite no lo puede abrir).
+    ruta = Path(ruta or os.getenv("PUENTE_CHECKPOINTS") or CHECKPOINTS_POR_DEFECTO).resolve()
     if ruta.name == "puente.db":
         raise ValueError("los checkpoints van en un archivo aparte de puente.db")
     clave = str(ruta)
