@@ -19,7 +19,10 @@ from puente.agents.mercado import (
     extractor_claude,
     frases_no_verificadas,
     huella,
+    inferir_corregimiento,
     leer_capa_de_texto,
+    lugares_conocidos,
+    mapear_habilidades,
     procesar_ofertas,
     razon_duplicada,
     similitud,
@@ -29,7 +32,7 @@ from puente.agents.mercado import (
 )
 from puente.graph import estado_inicial
 from puente.rules.discriminacion import revisar_texto
-from puente.rules.taxonomia import cargar_taxonomia
+from puente.rules.taxonomia import buscar_habilidades, cargar_taxonomia, normalizar_habilidad
 from puente.schemas import REQUIERE_CONFIRMACION, Decision, HorarioExtraido, Oferta, OfertaExtraida
 
 FIXTURES = Path("tests/fixtures")
@@ -756,3 +759,143 @@ def test_94_pares_de_prueba_de_data(par, ofertas):
     a, b = _de_prueba(par["a"]), _de_prueba(par["b"])
     resultado = procesar_ofertas([a["texto"], b["texto"]], extraer=ExtractorPorTexto(a, b), taxonomia=TAXONOMIA)
     assert len(resultado.ofertas) == ofertas
+
+
+# ---------------------------------------------------------------- #152-#155: fallos del eval de extracción (EXT-01 a EXT-04)
+# Las frases son las que Claude devolvió en las grabaciones de evals/grabaciones; el arreglo va después del LLM.
+
+TAXONOMIA_REAL = cargar_taxonomia(Path("data/taxonomia.csv"))
+EXT01 = ("URGENTE!!! SE BUSCA CAJERO/A  --  Super Rio Ficticio S.A.\n"
+         "Ubicacion: La Chorrera, calle 5ta. Pago: B/. 520.00 al mes.\n")
+
+
+@pytest.mark.parametrize(
+    "frase, esperado",
+    [
+        ("acomodar productos en estantes", ["reposicion_productos"]),  # EXT-02: contiene «acomodar productos»
+        ("recibir mercancía", ["recepcion_mercancia"]),  # EXT-02: la taxonomía dice «recibir mercancías»
+        ("registro de datos de facturas", ["registro_datos"]),  # EXT-03: contiene «registro de datos»
+        ("archivo de documentos", ["archivo_documentos"]),  # EXT-03: la taxonomía dice «archivar documentos»
+        ("venta de mostrador", ["ventas_mostrador"]),  # EXT-04: la taxonomía dice «ventas de mostrador»
+        ("Cobros", ["manejo_caja"]),  # una sola palabra, igual a «cobrar»
+        ("Verificación de documentos", ["verificacion_documentos"]),  # -ción frente a «verificar documentos»
+        ("atención al cliente y manejo de caja", ["atencion_cliente", "manejo_caja"]),
+        ("limpieza de cocina", []),  # un nombre de una sola palabra dentro de una frase no cuenta
+        ("trato a clientes", []),  # atencion_cliente y relaciones_clientes comparten raíces: no se elige
+        ("liderazgo transformacional", []),
+        ("", []),
+    ],
+)
+def test_153_buscar_habilidades_por_raices(frase, esperado):
+    assert buscar_habilidades(frase, TAXONOMIA_REAL) == esperado
+
+
+def test_153_perfil_sigue_con_la_coincidencia_exacta():
+    """Perfil exige evidencia literal y usa normalizar_habilidad: el arreglo de Mercado no lo cambia."""
+    for frase in ("venta de mostrador", "archivo de documentos", "recibir mercancía", "Cobros"):
+        assert normalizar_habilidad(frase, TAXONOMIA_REAL) is None
+
+
+def test_153_mapear_habilidades_exacta_primero_y_luego_por_raices():
+    nombres = ["Excel básico", "registro de datos de facturas", "archivo de documentos", "liderazgo", "Excel"]
+    assert mapear_habilidades(nombres, TAXONOMIA_REAL) == (
+        ["excel_basico", "registro_datos", "archivo_documentos", "excel"],
+        ["liderazgo"],
+    )
+
+
+def test_153_las_habilidades_por_raices_quedan_en_la_decision():
+    texto = "Minimarket Ficticio necesita REPONEDOR en Arraijan. Acomodar productos, recibir mercancia, inventario."
+    extraida = {"puesto": "Reponedor", "empresa": "Minimarket Ficticio", "corregimiento": "Arraiján",
+                "habilidades": ["acomodar productos en estantes", "recibir mercancía", "control de inventario", "puntualidad"]}
+    resultado = procesar_ofertas([texto], extraer=lambda e: extraida, taxonomia=TAXONOMIA_REAL)
+    [oferta] = resultado.ofertas
+    assert oferta.habilidades == ["reposicion_productos", "recepcion_mercancia", "inventario"]
+    [decision] = resultado.decisiones
+    assert "coincidencia aproximada" in decision.razon and "'recibir mercancía': ['recepcion_mercancia']" in decision.razon
+    assert "'control de inventario'" not in decision.razon  # coincidencia exacta: no se anota como aproximada
+    assert "descartadas por no estar en la taxonomía: ['puntualidad']" in decision.razon
+
+
+@pytest.mark.parametrize(
+    "ubicacion, texto, esperado",
+    [
+        ("La Chorrera, calle 5ta", EXT01, "La Chorrera"),  # EXT-01: un distrito que es nodo de traslados.csv
+        ("San Miguelito", "AUXILIAR ADMINISTRATIVO (San Miguelito)", "San Miguelito"),  # EXT-03
+        ("arraijan, panama oeste", "Local en Arraiján, Panamá Oeste", "Arraiján"),  # sin tildes ni mayúsculas
+        ("Terminal de Albrook", "Kiosco en la Terminal de Albrook", "Ancón"),  # alias de #51 -> su nodo
+        ("Capira, Panamá Oeste", "Finca en Capira, Panamá Oeste", ""),  # no es un nodo de traslados.csv
+        ("Bella Vista o San Francisco", "Sucursales en Bella Vista o San Francisco", ""),  # dos lugares: ninguno
+        ("Calle Pedregalito", "Taller en Calle Pedregalito", ""),  # solo palabras completas
+        ("Chitré, Herrera", "Vacante en Chitré, Herrera", ""),  # «Herrera» aquí es la provincia, no el alias
+        ("Herrera, La Chorrera", "Local en Herrera, La Chorrera", "La Chorrera"),
+        ("La Chorrera", "Oferta en Arraiján", ""),  # la ubicación del extractor no está en el texto
+        ("Vista Alegre", "", "Vista Alegre"),  # imagen sin transcripción: no hay texto contra qué verificar
+    ],
+)
+def test_152_inferir_corregimiento_de_la_ubicacion_copiada(ubicacion, texto, esperado):
+    assert inferir_corregimiento(ubicacion, texto)[0] == esperado
+
+
+def test_152_ubicacion_con_dos_lugares_lo_dice_en_la_nota():
+    lugar, nota = inferir_corregimiento("Bella Vista o San Francisco", "Bella Vista o San Francisco")
+    assert lugar == "" and "varios lugares conocidos (Bella Vista, San Francisco)" in nota
+
+
+def test_152_sin_traslados_csv_no_se_deduce_nada(tmp_path):
+    lugares = lugares_conocidos(tmp_path / "no_existe.csv")
+    assert lugares == {} and inferir_corregimiento("La Chorrera", "La Chorrera", lugares) == ("", "")
+
+
+def test_152_lugares_conocidos_son_los_nodos_de_traslados_y_sus_alias():
+    lugares = lugares_conocidos()
+    assert lugares["la chorrera"] == "La Chorrera" and lugares["arraijan"] == "Arraiján"
+    assert lugares["barrio colon"] == "La Chorrera" and lugares["albrook"] == "Ancón"
+
+
+def test_152_corregimiento_vacio_se_toma_de_la_ubicacion_y_queda_en_la_decision():
+    extraida = {"puesto": "Cajero/a", "empresa": "Super Rio Ficticio S.A.", "corregimiento": None,
+                "ubicacion_texto": "La Chorrera, calle 5ta", "salario_mensual": 520, "habilidades": ["cobro en caja"]}
+    resultado = procesar_ofertas([EXT01], extraer=lambda e: extraida, taxonomia=TAXONOMIA_REAL)
+    [oferta] = resultado.ofertas
+    assert oferta.corregimiento == "La Chorrera" and "corregimiento" not in oferta.por_confirmar()
+    [decision] = resultado.decisiones
+    assert "corregimiento «La Chorrera» tomado de la ubicación que copia la oferta («La Chorrera, calle 5ta»)" in decision.razon
+    assert "sin determinar" not in decision.razon
+
+
+def test_152_el_corregimiento_del_extractor_no_se_toca():
+    texto = "Tienda Moda Ficticia: dependiente en Via Espana, Bella Vista."
+    extraida = {"puesto": "Dependiente", "empresa": "Tienda Moda Ficticia", "corregimiento": "Bella Vista",
+                "ubicacion_texto": "Via Espana, Bella Vista"}
+    resultado = procesar_ofertas([texto], extraer=lambda e: extraida, taxonomia=TAXONOMIA_REAL)
+    assert resultado.ofertas[0].corregimiento == "Bella Vista"
+    assert "tomado de la ubicación" not in resultado.decisiones[0].razon
+
+
+def test_152_sin_ubicacion_copiada_no_se_busca_en_el_resto_del_texto():
+    """Un lugar citado por otro motivo no es dónde está la vacante: sin ubicación queda por confirmar."""
+    texto = "Tienda Ficticia busca cajero. Hay bus directo desde Albrook."
+    extraida = {"puesto": "Cajero", "empresa": "Tienda Ficticia", "corregimiento": None, "ubicacion_texto": None}
+    [oferta] = procesar_ofertas([texto], extraer=lambda e: extraida, taxonomia=TAXONOMIA_REAL).ofertas
+    assert oferta.corregimiento == "" and "corregimiento" in oferta.por_confirmar()
+
+
+def test_152_ubicacion_sin_lugar_conocido_sigue_por_confirmar_con_su_nota():
+    texto = "Finca Ficticia busca ayudante general en Capira, Panamá Oeste."
+    extraida = {"puesto": "Ayudante general", "empresa": "Finca Ficticia", "corregimiento": None,
+                "ubicacion_texto": "Capira, Panamá Oeste"}
+    resultado = procesar_ofertas([texto], extraer=lambda e: extraida, taxonomia=TAXONOMIA_REAL)
+    assert resultado.ofertas[0].corregimiento == ""
+    assert "corregimiento sin determinar; la oferta dice «Capira, Panamá Oeste»" in resultado.decisiones[0].razon
+
+
+def test_152_dos_sucursales_sin_texto_con_la_ubicacion_deducida_no_comparten_id(tmp_path):
+    """#75: el id lleva el corregimiento final; si no, dos vacantes sin texto se pisarían en la base."""
+    base = {"puesto": "Cajero(a)", "empresa": "Farmacias Ficticias Vida Sana", "corregimiento": None,
+            "transcripcion_literal": None}
+    por_archivo = {"a.jpg": dict(base, ubicacion_texto="Vista Alegre"), "b.jpg": dict(base, ubicacion_texto="Pedregal")}
+    rutas = [_imagen(tmp_path, nombre) for nombre in por_archivo]
+    resultado = procesar_ofertas(rutas, extraer=lambda e: por_archivo[e.ruta.name], taxonomia=TAXONOMIA)
+    assert [o.corregimiento for o in resultado.ofertas] == ["Vista Alegre", "Pedregal"]
+    assert len({o.id for o in resultado.ofertas}) == 2

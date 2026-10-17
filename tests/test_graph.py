@@ -434,7 +434,8 @@ def test_demo_por_consola_automatica(tmp_path, capsys):
 
 def test_demo_por_consola_interactiva(tmp_path):
     # Cajero (Carlos, María, Yaritza): aprobar solo a Carlos con consentimiento. Cocina: rechazar.
-    respuestas = iter(["aprobar", "Orientadora Ficticia", "", "s", "n", "n", "rechazar", "Orientadora Ficticia", ""])
+    # Al final, Enter: la empresa no respondió sobre Carlos (#54).
+    respuestas = iter(["aprobar", "Orientadora Ficticia", "", "s", "n", "n", "rechazar", "Orientadora Ficticia", "", ""])
     lineas = []
     final = g.main(
         ["--checkpoints", str(tmp_path / "cp.db"), "--thread", "interactiva"],
@@ -445,6 +446,94 @@ def test_demo_por_consola_interactiva(tmp_path):
     # Postulación real (#12): solo sale Carlos, el único con consentimiento; la cocina rechazada no se postula
     assert final["postulaciones"] == {f"carlos:{CAJERO}": EstadoPostulacion.ENVIADO}
     assert "postulacion" in _agentes(final)
+
+
+def _lector(respuestas, preguntas):
+    """`leer` de main() con respuestas fijas; guarda cada pregunta. Sin respuestas, EOF como un stdin cerrado."""
+    pendientes = iter(respuestas)
+
+    def leer(pregunta):
+        preguntas.append(pregunta)
+        try:
+            return next(pendientes)
+        except StopIteration:
+            raise EOFError from None
+
+    return leer
+
+
+def test_quitar_en_la_terminal_pide_el_nombre_del_orientador(tmp_path):
+    """#130: quitar pide quién decide, como aprobar; sin nombre vuelve a preguntar."""
+    respuestas = [
+        "quitar", "carlos", "", "Orientadora Ficticia", "no contesta el teléfono",  # cajero: quitar a Carlos
+        "rechazar", "Orientadora Ficticia", "",  # cajero recalculado
+        "rechazar", "Orientadora Ficticia", "",  # cocina
+    ]
+    preguntas: list[str] = []
+    final = g.main(
+        ["--checkpoints", str(tmp_path / "cp.db")], leer=_lector(respuestas, preguntas), escribir=lambda _: None
+    )
+    assert preguntas[1:5] == ["perfil_id a quitar: ", "Orientador(a): ", "Orientador(a): ", "Nota (opcional): "]
+    quitar = next(d for d in final["decisiones"] if d.agente == "aprobacion" and d.salida_resumen == "quitar carlos")
+    assert quitar.razon == "Orientadora Ficticia: no contesta el teléfono"
+    assert final["excluidos"] == [{"perfil_id": "carlos", "oferta_id": CAJERO}]
+
+
+def test_mostrar_da_el_porque_de_cada_candidato_y_de_la_vacante(ruta_cp, caso, capsys):
+    """#130: sin traslado, pasaje, evidencia ni explicación, Carlos y Yaritza empataban a 100 sin contexto."""
+    thread, estado = caso
+    grafo = construir_grafo(nodos=nodos_fase_2(grabado=True), checkpointer=checkpointer_sqlite(ruta_cp))
+    config = _arrancar(grafo, estado, thread)
+    g._mostrar(aprobacion_pendiente(grafo, config), print, grafo.get_state(config).values)
+    salida = capsys.readouterr().out
+
+    assert "- Carlos Ficticio (carlos) puntaje 100 · 12 min · pasaje $1.00/día ($22.00/mes)" in salida
+    assert "- Yaritza Ficticia (yaritza) puntaje 100 · 20 min · pasaje $1.50/día ($33.00/mes)" in salida
+    assert "Evidencia (manejo_caja): «cobraba en la caja del abarrote»" in salida
+    assert "Evidencia (manejo_caja): «cobro y doy el vuelto»" in salida  # la grabada del caso, literal
+    assert "Matching: Asignado a of-cajero-vista-alegre (Vista Alegre): cobertura 100%" in salida
+    assert "| Descartes:" not in salida  # los descartes de otras vacantes no se cuelan en esta
+    assert "Descartes:\n     - María Ficticia (maria): ninguna habilidad requerida en común" in salida
+    assert "Auditor: no se detectaron diferencias en 21 variantes · consistencia 100.0%" in salida
+    # tests/fixtures/caso_yaritza.json no cambia: entra en el hash de la grabación de la demo
+    assert "Mensaje sugerido:" in salida
+
+
+def test_evidencia_y_resumen_del_auditor_para_la_terminal():
+    perfil = {
+        "habilidades": [
+            {"skill_id": "cocina", "evidencia": "ayudo a cocinar"},
+            {"skill_id": "atencion_cliente", "evidencia": "atiendo y cobro"},
+            {"skill_id": "manejo_caja", "evidencia": "atiendo y cobro"},
+        ]
+    }
+    # La primera habilidad que pide la vacante manda; las pedidas con la misma frase van juntas
+    assert g._linea_evidencia(perfil, {"habilidades": ["manejo_caja", "atencion_cliente"]}) == (
+        "Evidencia (manejo_caja, atencion_cliente): «atiendo y cobro»"
+    )
+    assert g._linea_evidencia(perfil, {"habilidades": ["bodega"]}) == "Evidencia (cocina): «ayudo a cocinar»"
+    assert g._linea_evidencia({"habilidades": []}, {"habilidades": ["cocina"]}) is None
+
+    tope = {"auditoria": {"resumen_corto": "maria (nombre): cambió el puntaje", "accion_grafo": "orientador"}}
+    assert g._resumen_auditor(tope, {}) == "maria (nombre): cambió el puntaje · tope de recálculo alcanzado: decide el orientador"
+    reporte = "### Reporte\n- **Resumen:** no se detectaron diferencias en 3 variantes.\n"
+    assert g._resumen_auditor({}, {"reporte_auditor": reporte}) == "no se detectaron diferencias en 3 variantes."
+    assert g._resumen_auditor({}, {"reporte_auditor": None}) is None
+
+
+def test_mostrar_lista_la_pareja_quitada_y_funciona_sin_estado(ruta_cp, caso, capsys):
+    thread, estado = caso
+    grafo = _grafo(ruta_cp)
+    config = _arrancar(grafo, estado, thread)
+    _responder(grafo, config, accion="quitar", oferta_id=CAJERO, perfil_id="carlos", orientador="Orientadora Ficticia")
+    solicitud = aprobacion_pendiente(grafo, config)
+    g._mostrar(solicitud, print, grafo.get_state(config).values)
+    assert "     - Carlos Ficticio (carlos): quitado por el orientador" in capsys.readouterr().out
+
+    g._mostrar(solicitud, print)  # sin el estado: solo lo que trae la solicitud
+    salida = capsys.readouterr().out
+    assert "Aprobación pendiente · " + CAJERO in salida and "Matching: STUB: cobertura" in salida
+    assert "Evidencia" not in salida and "Descartes" not in salida
 
 
 def test_demo_por_consola_con_salida_cp1252(tmp_path, monkeypatch):
