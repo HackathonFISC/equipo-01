@@ -267,7 +267,10 @@ def _reescribir_linea(linea: str, cambios: Sequence[Cambio], usados: set[str]) -
 def _quitar_del_puesto(puesto: str, cambios: Sequence[Cambio]) -> str:
     for cambio in cambios:
         puesto = _patron_frase(cambio.frase).sub("", puesto)
-    return re.sub(r"\s*[-–,;:/]\s*$", "", " ".join(puesto.split())).strip() or puesto.strip()
+    # Sin paréntesis vacíos ni conector colgando (#190): «Mesero (masculino)» -> «Mesero», no «Mesero ()»;
+    # «Anfitriona de buena apariencia» -> «Anfitriona», no «Anfitriona de».
+    puesto = re.sub(r"\(\s*\)", "", puesto)
+    return re.sub(r"(?:\s*[-–,;:/]|\s+(?:de|del|con|y|e|para|en))+\s*$", "", " ".join(puesto.split())).strip() or puesto.strip()
 
 
 def _sustituir_en_linea(texto: str, cambios: Sequence[Cambio]) -> str:

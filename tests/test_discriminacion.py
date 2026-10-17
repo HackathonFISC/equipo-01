@@ -1,4 +1,4 @@
-"""Reglas de discriminación (#5, #43): regex sobre el texto original, sin LLM."""
+"""Reglas de discriminación (#5, #43, #190, #191): regex sobre el texto original y el puesto, sin LLM."""
 
 import pytest
 
@@ -16,6 +16,7 @@ from puente.rules.discriminacion import (
     SEXO,
     SEXO_IMPLICITO,
     esta_bloqueada,
+    revisar_oferta,
     revisar_texto,
 )
 from puente.rules.taxonomia import cargar_taxonomia, normalizar_habilidad, normalizar_texto
@@ -485,3 +486,204 @@ def test_estado_civil_en_femenino_alerta_sexo_implicito_sin_bloquear(texto, espe
 def test_estado_civil_neutro_solo_alerta_estado_civil(texto, esperado):
     assert _reglas(texto) == esperado
     assert not esta_bloqueada(revisar_texto(texto))
+
+
+# ---------------------------------------------------------------- #191: frases disfrazadas
+
+
+@pytest.mark.parametrize(
+    "texto, frase",
+    [
+        ("Buscamos joven de 18 a 25", "de 18 a 25"),
+        ("Se busca joven entre 18 y 25 para despacho", "entre 18 y 25"),
+        ("Buscamos un joven de 18-25", "de 18-25"),
+        ("Recepcionista joven 18-25", "18-25"),
+        ("Persona de 20 a 30, turno de mañana", "de 20 a 30"),
+        ("Candidato de 20 a 30 con licencia", "de 20 a 30"),
+        ("Joven menor de 25, bachiller", "Joven menor de 25"),
+    ],
+)
+def test_joven_o_persona_en_singular_con_rango_de_edad_bloquea(texto, frase):
+    hallazgos = revisar_texto(texto)
+    assert esta_bloqueada(hallazgos)
+    assert _reglas(texto) == [(EDAD, frase)]
+    assert hallazgos[0].como_texto().startswith("bloqueo · edad") and "Ley 11 de 2005 art. 2" in hallazgos[0].como_texto()
+
+
+@pytest.mark.parametrize(
+    "texto, frase",
+    [
+        ("No embarazadas", "No embarazadas"),
+        ("Se solicita cajero(a), no embarazadas", "no embarazadas"),
+        ("Requisito: que no esté embarazada", "no esté embarazada"),
+        ("No estar en estado de embarazo", "No estar en estado de embarazo"),
+        ("No se aceptan embarazadas", "No se aceptan embarazadas"),
+        ("Abstenerse mujeres embarazadas", "Abstenerse mujeres embarazadas"),
+        ("No se aceptan menores ni embarazadas", "ni embarazadas"),
+        ("Sin embarazo", "Sin embarazo"),
+        ("Presentar prueba de embarazo", "Presentar prueba de embarazo"),
+        ("Prueba de embarazo negativa", "Prueba de embarazo negativa"),
+        ("Certificado médico de no embarazo", "Certificado médico de no embarazo"),
+    ],
+)
+def test_excluir_por_embarazo_es_exigencia_de_sexo_y_bloquea(texto, frase):
+    hallazgos = revisar_texto(texto)
+    assert esta_bloqueada(hallazgos)
+    assert _reglas(texto) == [(SEXO, frase)]
+    assert hallazgos[0].como_texto().startswith("bloqueo · sexo") and "Ley 11 de 2005 art. 1" in hallazgos[0].como_texto()
+
+
+@pytest.mark.parametrize(
+    "texto, frase",
+    [
+        ("Buena apariencia", "Buena apariencia"),
+        ("Recepcionista de excelente apariencia y trato amable", "excelente apariencia"),
+        ("Buena apariencia física", "Buena apariencia"),
+        ("Apariencia física agradable", "Apariencia física"),
+        ("Cuidar su apariencia personal", "apariencia personal"),
+        ("Excelente imagen personal", "Excelente imagen personal"),
+    ],
+)
+def test_buena_apariencia_alerta_como_buena_presencia_sin_bloquear(texto, frase):
+    hallazgos = revisar_texto(texto)
+    assert not esta_bloqueada(hallazgos)
+    assert _reglas(texto) == [(BUENA_PRESENCIA, frase)]
+    assert hallazgos[0].como_texto() == f"alerta · buena_presencia · solo alerta: la ley no menciona la apariencia · «{frase}»"
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        # Edad legal y números que no son edad.
+        "Mayores de 18 años",
+        "Joven mayor de 18 años",
+        "Experiencia de 2 a 5 años",
+        "Experiencia de 10 a 15 años en ventas",
+        "Jóvenes, turno de 14 a 22",
+        # «Joven» sin rango no es un límite: Puente es un servicio de empleo juvenil.
+        "Buscamos joven dinámico para despacho",
+        # La edad de quien se atiende, no la del candidato.
+        "Atención a jóvenes",
+        "Atención a jóvenes de 15 a 24 años",
+        "Trabajo con jóvenes de 15 a 29 años en riesgo social",
+        "Atención a jóvenes menores de 25 años",
+        "Cuidado de personas mayores de 65 años",
+        "Clases a niños de 10 a 12 años",
+        # La apariencia de un lugar o una cosa.
+        "Mantener la apariencia del local",
+        "Mantener la buena apariencia del local",
+        "Cuidar la buena presencia de la tienda y de las vitrinas",
+        "Buena apariencia de los productos en anaqueles",
+        # Embarazo sin excluir a nadie.
+        "Atención a mujeres embarazadas en la clínica",
+        "Licencia por embarazo según la ley",
+        "No discriminamos a embarazadas",
+        "Venta de pruebas de embarazo y medicamentos",
+        "Venta de test de embarazo en farmacia",
+        "No presentarse en estado de ebriedad",
+    ],
+)
+def test_frases_parecidas_que_no_hablan_del_candidato_no_bloquean_ni_alertan(texto):
+    assert revisar_texto(texto) == []
+
+
+def test_un_limite_de_edad_junto_a_la_apariencia_de_un_lugar_sigue_bloqueando():
+    texto = "Buscamos joven de 18 a 25 para mantener la buena apariencia del local"
+    assert _reglas(texto) == [(EDAD, "de 18 a 25")]
+    assert esta_bloqueada(revisar_texto(texto))
+
+
+# ---------------------------------------------------------------- #190: el campo Puesto
+
+
+def _reglas_oferta(puesto, requisitos):
+    return [(h.regla, h.frase) for h in revisar_oferta(puesto, requisitos)]
+
+
+@pytest.mark.parametrize(
+    "puesto, regla, frase",
+    [
+        ("Mesero (masculino)", SEXO, "masculino"),
+        ("Recepcionista (mujer)", SEXO, "(mujer)"),
+        ("Bodeguero (hombres)", SEXO, "(hombres)"),
+        ("Cajero - solo mujeres", SEXO, "solo mujeres"),
+        ("Ayudante general, solo varones", SEXO, "solo varones"),
+        ("Damas para recepción", SEXO, "Damas"),
+        ("Bodeguero caballeros", SEXO, "caballeros"),
+        ("Recepcionista joven 18-25", EDAD, "18-25"),
+        ("Vendedor de 20 a 30 años", EDAD, "de 20 a 30 años"),
+        ("Mesero, no embarazadas", SEXO, "no embarazadas"),
+    ],
+)
+def test_exigencia_de_sexo_o_limite_de_edad_en_el_puesto_bloquea_igual_que_en_requisitos(puesto, regla, frase):
+    requisitos = "Atención al cliente y manejo de caja."
+    assert revisar_texto(requisitos) == []
+    hallazgos = revisar_oferta(puesto, requisitos)
+    assert esta_bloqueada(hallazgos)
+    assert _reglas_oferta(puesto, requisitos) == [(regla, frase)]
+    # Las mismas reglas que en los requisitos: mismo hallazgo si la frase estuviera ahí.
+    assert revisar_oferta("Cajero(a)", puesto) == hallazgos
+
+
+@pytest.mark.parametrize("puesto", ["Vendedora", "Cajera", "Mesera de fin de semana", "Operaria de limpieza"])
+def test_puesto_en_femenino_alerta_usar_forma_inclusiva_sin_bloquear(puesto):
+    hallazgos = revisar_oferta(puesto, "Atención al cliente.")
+    assert not esta_bloqueada(hallazgos)
+    assert [h.regla for h in hallazgos] == [SEXO_IMPLICITO]
+    assert hallazgos[0].frase == puesto.split()[0]
+    assert hallazgos[0].como_texto().startswith("alerta · sexo_implicito") and "art. 1" in hallazgos[0].como_texto()
+
+
+@pytest.mark.parametrize(
+    "puesto",
+    [
+        "Cajero",
+        "Vendedor",
+        "Vendedor de mostrador",
+        "Mesero",
+        "Ayudante de cocina",
+        "Recepcionista",
+        "Cajero(a) de minisúper",
+        "Vendedor/a",
+        "Mesero/a",
+        "Mesero o mesera",
+        "Vendedor(es)",
+    ],
+)
+def test_puesto_en_masculino_generico_o_en_forma_inclusiva_no_alerta(puesto):
+    """El masculino genérico es la forma por defecto en español: alertarlo marcaría casi todas las ofertas."""
+    assert revisar_oferta(puesto, "Manejo de caja.") == []
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Vendedor(a) de ropa de damas",
+        "Vendedor(a) de calzado de dama",
+        "Barbero(a) para caballeros",
+        "Vendedor(a) sección caballeros",
+        "Peluquería para damas y caballeros",
+        "Limpieza de baños de damas y de caballeros",
+    ],
+)
+def test_damas_o_caballeros_que_describen_otra_cosa_no_bloquean(texto):
+    assert revisar_texto(texto) == []
+
+
+def test_puesto_y_requisitos_con_la_misma_frase_no_la_repiten():
+    hallazgos = revisar_oferta("Cajera", "Se busca cajera, de 18 a 25 años.")
+    assert [(h.regla, h.frase) for h in hallazgos] == [(SEXO_IMPLICITO, "cajera"), (EDAD, "de 18 a 25 años")]
+
+
+def test_hallazgos_del_puesto_van_primero_y_los_requisitos_se_revisan_igual_que_solos():
+    requisitos = "Buena presencia, de 18 a 25 años, manejo de caja."
+    hallazgos = revisar_oferta("Vendedora (masculino)", requisitos)
+    assert [(h.regla, h.frase) for h in hallazgos] == [
+        (SEXO_IMPLICITO, "Vendedora"),
+        (SEXO, "masculino"),
+        (BUENA_PRESENCIA, "Buena presencia"),
+        (EDAD, "de 18 a 25 años"),
+    ]
+    assert hallazgos[2:] == revisar_texto(requisitos)
+    assert revisar_oferta("", requisitos) == revisar_texto(requisitos)
+    assert revisar_oferta("Ayudante de cocina", "") == []

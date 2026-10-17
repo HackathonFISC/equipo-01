@@ -592,6 +592,52 @@ def test_frases_no_verificadas_ignora_mayusculas_acentos_y_espacios():
     assert [h.frase for h in frases_no_verificadas(hallazgos, transcripcion)] == ["solo damas"]
 
 
+# ---------------------------------------------------------------- #190: el puesto también pasa por las reglas
+
+
+def _una_oferta(texto, **extraida):
+    resultado = procesar_ofertas([texto], extraer=lambda e: OfertaExtraida(**extraida), taxonomia=TAXONOMIA)
+    [oferta] = resultado.ofertas
+    return oferta, resultado.decisiones[0]
+
+
+def test_limite_de_edad_en_el_puesto_de_la_oferta_bloquea():
+    texto = "Recepcionista joven 18-25 para clínica en Betania. Atención telefónica. Salario B/. 520 mensual."
+    oferta, _ = _una_oferta(texto, puesto="Recepcionista joven 18-25", empresa="Clínica Ficticia", corregimiento="Bethania")
+    assert oferta.bloqueada
+    assert [a for a in oferta.alertas if a.startswith("bloqueo")] == ["bloqueo · edad · límite de edad, Ley 11 de 2005 art. 2 · «18-25»"]
+    assert not any("baja_confianza" in a for a in oferta.alertas)
+
+
+def test_puesto_en_femenino_que_esta_en_el_texto_alerta_una_sola_vez():
+    texto = "Vendedora para tienda en Albrook. Atención al cliente. Salario B/. 500 mensual."
+    oferta, _ = _una_oferta(texto, puesto="Vendedora", empresa="Tienda Ficticia", corregimiento="Bethania")
+    assert not oferta.bloqueada
+    assert oferta.alertas == [h.como_texto() for h in revisar_texto(texto)]
+    assert [a.split(" · ")[1] for a in oferta.alertas] == ["sexo_implicito"]
+
+
+def test_frase_del_puesto_que_no_esta_en_el_texto_no_bloquea_y_pasa_como_baja_confianza():
+    """El puesto lo escribe el extractor: si trae una frase que el texto original no dice, la puso el LLM."""
+    texto = "Se busca mesero para restaurante en Bella Vista. Atención de mesas. Salario B/. 500 mensual."
+    oferta, decision = _una_oferta(texto, puesto="Mesero (masculino)", empresa="Restaurante Ficticio", corregimiento="Bella Vista")
+    assert not oferta.bloqueada
+    assert oferta.alertas == [
+        "alerta · baja_confianza · frases del puesto que no están en el texto de la oferta: el orientador revisa la oferta original"
+    ]
+    assert "frases del puesto que no están en el texto de la oferta: ['masculino']" in decision.razon
+
+
+def test_imagen_con_frase_del_puesto_que_no_esta_en_la_transcripcion_no_bloquea(tmp_path):
+    caso = CASOS["ayudante_cocina"]
+    extraida = dict(caso["extraida"], transcripcion_literal=caso["texto"], puesto="Ayudante de cocina, solo varones")
+    resultado = procesar_ofertas([_imagen(tmp_path)], extraer=lambda e: extraida, taxonomia=TAXONOMIA)
+    [oferta] = resultado.ofertas
+    assert not oferta.bloqueada
+    assert any("baja_confianza" in a for a in oferta.alertas)
+    assert "solo varones" in resultado.decisiones[0].razon
+
+
 # ---------------------------------------------------------------- #43 Fase 2: puente.llm
 
 

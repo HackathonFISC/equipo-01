@@ -23,7 +23,9 @@ from evals.run import DependenciaPendiente, ResultadoCaso
 RAIZ = Path(__file__).resolve().parents[1]
 CONTEO_ESPERADO = {
     "extraccion_ofertas": 5,
-    "requisitos_discriminatorios": 11,  # Incluye DIS-11: límite «menor de 28 años».
+    # Incluye DIS-11: límite «menor de 28 años»; DIS-12 a DIS-14: el campo Puesto (#190); DIS-15 a DIS-18:
+    # «joven de 18 a 25», «buena apariencia», «no embarazadas» y su control negativo (#191).
+    "requisitos_discriminatorios": 18,
     "perfil_sin_cv": 4,
     "matching_factible": 3,
     "sesgo_contrafactual": 3,

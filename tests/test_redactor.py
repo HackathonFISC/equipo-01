@@ -13,7 +13,7 @@ import pytest
 
 from puente.agents import redactor as r
 from puente.llm import ErrorLLM
-from puente.rules.discriminacion import esta_bloqueada, revisar_texto
+from puente.rules.discriminacion import esta_bloqueada, revisar_oferta, revisar_texto
 from puente.rules.traslados import indexar_traslados
 from puente.schemas import Oferta, Perfil
 from puente.solver.asignacion import ConfigSolver, evaluar_factibilidad_par
@@ -328,6 +328,26 @@ def test_puesto_en_femenino_se_cambia_en_el_sitio():
     assert propuesta.puesto_nuevo == "Cajero(a)"
     assert propuesta.texto_nuevo == "Un año como cajero(a); manejo de caja."
     assert propuesta.oferta_corregida.alertas == []
+
+
+@pytest.mark.parametrize(
+    "puesto, esperado",
+    [
+        ("Mesero (masculino)", "Mesero"),
+        ("Recepcionista (mujer)", "Recepcionista"),
+        ("Recepcionista joven 18-25", "Recepcionista joven"),
+        ("Cajera - solo mujeres", "Cajero(a)"),
+        ("Mesero, no embarazadas", "Mesero"),
+        ("Anfitriona de buena apariencia", "Anfitrion(a)"),
+    ],
+)
+def test_puesto_con_frase_de_la_ley_11_queda_limpio_y_sin_bloqueo(puesto, esperado):
+    """#190: lo que bloquea o alerta en el puesto sale del puesto sin dejar «()» ni un «de» colgando."""
+    oferta = _oferta("Atención al cliente.", puesto=puesto)
+    propuesta = r.proponer_version(oferta, [], redactar=r.redactor_plantilla, traslados=TRASLADOS)
+    assert propuesta.puesto_nuevo == esperado
+    assert not propuesta.bloqueada_despues
+    assert revisar_oferta(propuesta.puesto_nuevo, propuesta.texto_nuevo) == []
 
 
 def test_oferta_sin_hallazgos_no_cambia():

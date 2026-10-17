@@ -41,7 +41,7 @@ from puente.graph import (
     stub_mercado,
     stub_perfil,
 )
-from puente.rules.discriminacion import esta_bloqueada, revisar_texto
+from puente.rules.discriminacion import esta_bloqueada, revisar_oferta
 from puente.schemas import (
     SIN_OFERTA,
     Consentimiento,
@@ -364,9 +364,9 @@ def _leer_decisiones_db(estado: dict[str, Any]) -> list[dict[str, Any]]:
         conn.close()
 
 
-def _evaluar_reglas_discriminacion(requisitos_texto: str) -> tuple[bool, list[dict[str, str]]]:
-    """Delega 100% la revisión legal a `puente.rules.discriminacion` (Ley 11 de 2005)."""
-    hallazgos = revisar_texto(requisitos_texto)
+def _evaluar_reglas_discriminacion(requisitos_texto: str, puesto: str = "") -> tuple[bool, list[dict[str, str]]]:
+    """Delega 100% la revisión legal a `puente.rules.discriminacion` (Ley 11 de 2005): requisitos y puesto (#190)."""
+    hallazgos = revisar_oferta(puesto, requisitos_texto)
     alertas_mod = [
         {
             "frase": h.frase,
@@ -1060,7 +1060,7 @@ def obtener_datos_iniciales_demo(
     ]
 
     for o in ofertas_base:
-        bloq, alertas = _evaluar_reglas_discriminacion(o["requisitos_texto"])
+        bloq, alertas = _evaluar_reglas_discriminacion(o["requisitos_texto"], o["puesto"])
         o["bloqueada"] = bloq
         o["alertas"] = alertas
 
@@ -1543,7 +1543,7 @@ def analizar_nueva_oferta_texto(
     if rechazo_gr is not None:
         raise ErrorValidacionTablero(rechazo_gr.respuesta or rechazo_gr.motivo)
 
-    bloqueada, alertas = _evaluar_reglas_discriminacion(requisitos_limpios)
+    bloqueada, alertas = _evaluar_reglas_discriminacion(requisitos_limpios, puesto_limpio)
 
     sufijo_uuid = uuid.uuid4().hex[:8].upper()
     nuevo_id = f"OF-{sufijo_uuid}"

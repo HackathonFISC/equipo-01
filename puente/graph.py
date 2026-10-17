@@ -79,7 +79,7 @@ from puente.guardrails import (
     nodo_guardrails,
     ocultar_trazas_langsmith,
 )
-from puente.rules.discriminacion import esta_bloqueada, revisar_texto
+from puente.rules.discriminacion import esta_bloqueada, revisar_oferta
 from puente.rules.taxonomia import RUTA_TAXONOMIA, cargar_taxonomia
 from puente.schemas import (
     REQUIERE_CONFIRMACION,
@@ -329,7 +329,8 @@ def nodo_consulta(estado: dict) -> dict:
 
 
 def stub_mercado(estado: dict) -> dict:
-    """STUB de Mercado (#5): acepta ofertas ya estructuradas, sin LLM, y aplica las reglas legales reales."""
+    """STUB de Mercado (#5): acepta ofertas ya estructuradas, sin LLM, y aplica las reglas legales reales
+    a los requisitos y al puesto (#190)."""
     ofertas = list(estado.get("ofertas") or [])
     errores = list(estado.get("errores") or [])
     nuevas: list[str] = []
@@ -338,7 +339,7 @@ def stub_mercado(estado: dict) -> dict:
             errores.append("mercado (stub): solo lee ofertas estructuradas; el texto libre llega con #5")
             continue
         texto = f"{cruda.get('requisitos_texto', '')}\n{cruda.get('texto', '')}"
-        hallazgos = revisar_texto(texto)
+        hallazgos = revisar_oferta(str(cruda.get("puesto") or ""), texto)
         oferta = Oferta.model_validate(
             {
                 **cruda,
