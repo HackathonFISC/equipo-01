@@ -468,7 +468,8 @@ def test_la_pagina_empresa_solo_publica_y_no_muestra_a_nadie(entorno) -> None:
         "perfil_id",
     ):
         assert viejo not in html, viejo
-    assert "/api/ofertas" in html and 'href="/empresa/lista-corta"' in html
+    assert "/api/empresa/ofertas" in html and 'href="/empresa/lista-corta"' in html
+    assert 'fetch("/api/ofertas"' not in html  # esa ruta devuelve el estado del tablero: es del orientador
     assert 'class="boton' not in html  # esas clases no existen en joven.css: los botones son .btn
 
 

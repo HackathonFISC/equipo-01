@@ -2926,6 +2926,51 @@ async def endpoint_nueva_oferta(request: Request) -> JSONResponse:
     return await endpoint_estado(request)
 
 
+async def endpoint_empresa_publicar_oferta(request: Request) -> JSONResponse:
+    """La empresa publica una vacante y recibe solo el resultado de esa oferta (#258).
+
+    `/api/ofertas` devuelve el estado completo del tablero, con los jóvenes y sus datos: es del orientador. La
+    página de la empresa (`/empresa`) usa esta ruta, que pasa por el mismo análisis de Ley 11 y por el mismo
+    Matching, pero responde con el id, el puesto, la empresa, si quedó bloqueada y sus alertas con la frase.
+    """
+    datos, err_resp = await _leer_json_validado(request)
+    if err_resp is not None or datos is None:
+        return err_resp  # type: ignore[return-value]
+    try:
+        req = NuevaOfertaRequest.model_validate(datos)
+        previas = {o["id"] for o in ESTADO_GLOBAL["ofertas"]}
+        analizar_nueva_oferta_texto(
+            ESTADO_GLOBAL,
+            puesto=req.puesto,
+            empresa=req.empresa,
+            corregimiento=req.corregimiento,
+            salario_mensual=req.salario_mensual,
+            requisitos_texto=req.requisitos_texto,
+            habilidades=req.habilidades,
+        )
+    except ValidationError as exc:
+        return JSONResponse({"detail": exc.errors(include_context=False)}, status_code=422)
+    except ErrorValidacionTablero as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
+    nueva = next(o for o in reversed(ESTADO_GLOBAL["ofertas"]) if o["id"] not in previas)
+    # Una empresa nueva recibe su código ahora: el enlace sale en la consola del servidor, no en la respuesta.
+    empresa.anunciar_codigos_empresa(ESTADO_GLOBAL)
+    return JSONResponse(
+        {
+            "oferta": {
+                "id": nueva["id"],
+                "puesto": nueva["puesto"],
+                "empresa": nueva["empresa"],
+                "bloqueada": bool(nueva["bloqueada"]),
+                "alertas": [
+                    {"tipo": a.get("tipo"), "frase": a.get("frase"), "regla": a.get("regla")} for a in nueva["alertas"]
+                ],
+            }
+        },
+        status_code=201,
+    )
+
+
 async def endpoint_nuevo_perfil(request: Request) -> JSONResponse:
     datos, err_resp = await _leer_json_validado(request)
     if err_resp is not None or datos is None:
@@ -4149,6 +4194,7 @@ app = Starlette(
         Route("/api/orientador/accion", endpoint_accion_orientador, methods=["POST"]),
         Route("/api/ofertas/desbloquear", endpoint_desbloquear_oferta, methods=["POST"]),
         Route("/api/ofertas", endpoint_nueva_oferta, methods=["POST"]),
+        Route("/api/empresa/ofertas", endpoint_empresa_publicar_oferta, methods=["POST"]),
         Route("/api/ofertas/archivo", endpoint_oferta_archivo, methods=["POST"]),
         Route("/api/perfiles", endpoint_nuevo_perfil, methods=["POST"]),
         Route("/api/perfiles/archivo", endpoint_perfil_archivo, methods=["POST"]),
