@@ -419,6 +419,13 @@ def recalcular_pipeline_tablero(
                 aprobacion=aprobacion,
                 conn=conn,
                 outbox=RUTA_OUTBOX,
+                # nodo_aprobacion solo deja en `aprobados` a los consentidos: el consentimiento lo
+                # confirmó el orientador en el tablero (#12, Ley 81 de 2019).
+                consentimientos=[
+                    {"perfil_id": pid, "oferta_id": oid, "otorgado": True, "medio": "orientador",
+                     "timestamp": aprobacion.get("timestamp")}
+                    for pid, oid in pares_aprob
+                ],
             )
         finally:
             conn.close()

@@ -46,7 +46,8 @@ def entorno(monkeypatch):
     monkeypatch.setenv("LANGSMITH_TRACING", "false")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token-ficticio")
     monkeypatch.setenv("TELEGRAM_CHAT_ID_EMPRESA", CHAT_EMPRESA)
-    monkeypatch.setenv("TELEGRAM_CHATS_JOVENES", f"carlos={CHAT_CARLOS},yaritza={CHAT_YARITZA}")
+    monkeypatch.setenv("TELEGRAM_CHATS_JOVENES",
+                       f"carlos={CHAT_CARLOS},yaritza={CHAT_YARITZA},ana=chat-ana,bea=chat-bea,cira=chat-cira")
     monkeypatch.delenv("PUENTE_ENTREVISTA_INICIO", raising=False)
 
     def prohibido(*a, **k):
@@ -628,7 +629,11 @@ def test_una_persona_sin_ninguna_hora_posible_no_frena_al_resto_de_la_oferta(tmp
     assert {a.name for a in adjuntos} == {f"cv_carlos_{CAJERO}.pdf", f"entrevista_carlos_{CAJERO}.ics"}
     assert not list(caso.outbox.glob("*yaritza*"))  # ni .ics ni CV para ella
     valores = caso.valores
-    assert valores["postulaciones"] == {f"carlos:{CAJERO}": EstadoPostulacion.ENVIADO}
+    # Yaritza consintió (nodo_aprobacion la deja en consentido, #54) pero no sale: no tiene hora.
+    assert valores["postulaciones"] == {
+        f"carlos:{CAJERO}": EstadoPostulacion.ENVIADO,
+        f"yaritza:{CAJERO}": EstadoPostulacion.CONSENTIDO,
+    }
     assert any("yaritza" in e and "sin franja compatible" in e for e in valores["errores"])
     assert not any("carlos" in e for e in valores["errores"])
     (aviso_joven,) = caso.joven.mensajes
