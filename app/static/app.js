@@ -679,7 +679,9 @@ function renderizarPersona(perfil, matches) {
   if (ordenados.length) {
     opciones = `<div class="opciones">${ordenados.map((m, i) => renderizarOpcion(m, i, perfil, mapaOfertas.get(m.oferta_id))).join("")}</div>`;
   } else if (!rechazadas.length) {
-    opciones = `<div class="vacio">${icono("briefcase")}<strong>Ninguna oferta cumple sus restricciones</strong>Traslado, pasaje u horario dejan fuera todas las vacantes válidas.</div>`;
+    // La causa la calcula el servidor (#245): restricciones, cupo lleno o sin ofertas; el texto fijo es solo de respaldo.
+    const sin = estadoActual.sin_opcion?.[perfil.id];
+    opciones = `<div class="vacio">${icono("briefcase")}<strong>${escaparHtml(sin?.titulo || "Ninguna oferta cumple sus restricciones")}</strong>${escaparHtml(sin?.texto || "Traslado, pasaje, salario, horario, habilidades o la Ley 11 dejan fuera todas las vacantes.")}</div>`;
   }
 
   const listaRechazadas = rechazadas.length
