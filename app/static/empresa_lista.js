@@ -153,7 +153,7 @@ function pintar(datos) {
   $("empresa-nombre").textContent = datos.empresa.nombre;
   const nombres = datos.nombres_habilidades || {};
   const vacantes = datos.vacantes.map((v) => tarjetaVacante(v, nombres));
-  vaciar($("vacantes"), vacantes.length ? vacantes : el("p", { class: "vacio", text: "No hay vacantes de tu empresa en Puente." }));
+  vaciar($("vacantes"), vacantes.length ? vacantes : el("p", { class: "vacio", text: "No hay vacantes de tu empresa en SkillMatch." }));
 }
 
 // ---------- Mensajes de los candidatos (#289) ----------
@@ -227,12 +227,12 @@ function panelOfertaCorregida(v) {
   );
   const cifra = p.queda_bloqueada
     ? "Con este texto la vacante seguiría bloqueada: la revisa el orientador."
-    : `Con esta versión pasan de ${p.viables_antes} a ${p.viables_despues} las personas que Puente puede proponerte.`;
+    : `Con esta versión pasan de ${p.viables_antes} a ${p.viables_despues} las personas que SkillMatch puede proponerte.`;
   return el(
     "section",
     { class: "propuesta", "aria-label": "Versión legal sugerida" },
     el("h4", { text: "Versión legal sugerida" }),
-    el("p", { text: "Puente no cambia tu aviso: si quieres usar esta versión, publícala de nuevo en «Publicar vacante»." }),
+    el("p", { text: "SkillMatch no cambia tu aviso: si quieres usar esta versión, publícala de nuevo en «Publicar vacante»." }),
     cambios.length ? el("ul", { class: "datos" }, cambios) : null,
     el("p", {}, el("span", { class: "dato", text: "Puesto: " }), p.puesto),
     // El texto del Redactor suele empezar con su propia etiqueta («Requisitos: …»): no se repite.
@@ -279,7 +279,7 @@ function tarjetaVacante(v, nombres) {
   } else if (v.cubierta) {
     candidatos = el("p", { class: "vacio", text: "Esta vacante ya está cubierta." });
   } else if (v.bloqueada) {
-    candidatos = el("p", { class: "vacio", text: "Puente no propone candidatos mientras el aviso pida requisitos que prohíbe la Ley 11 de 2005." });
+    candidatos = el("p", { class: "vacio", text: "SkillMatch no propone candidatos mientras el aviso pida requisitos que prohíbe la Ley 11 de 2005." });
   } else {
     candidatos = el("p", { class: "vacio", text: "Todavía no hay candidatos enviados para esta vacante." });
   }
@@ -289,7 +289,7 @@ function tarjetaVacante(v, nombres) {
       ? el(
           "p",
           { class: "nota" },
-          `Puente tiene ${v.en_revision} candidato(s) más en revisión. Llegan aquí cuando el orientador los aprueba y cada joven acepta el envío.`,
+          `SkillMatch tiene ${v.en_revision} candidato(s) más en revisión. Llegan aquí cuando el orientador los aprueba y cada joven acepta el envío.`,
         )
       : null;
 
@@ -301,7 +301,7 @@ function tarjetaVacante(v, nombres) {
           formularioRespuesta({
             etiqueta: "Vacante cubierta",
             confirmar: "Confirmar: vacante cubierta",
-            ayuda: "La vacante sale de Puente: los candidatos enviados reciben aviso y quedan libres para otras ofertas.",
+            ayuda: "La vacante sale de SkillMatch: los candidatos enviados reciben aviso y quedan libres para otras ofertas.",
             enviar: (nota) => responder({ accion: "cubierta", oferta_id: v.oferta_id, nota }, "Vacante marcada como cubierta."),
           }),
         )
@@ -384,9 +384,9 @@ function tarjetaCandidato(v, c) {
         etiqueta: "Rechazar",
         peligro: true,
         confirmar: "Confirmar rechazo",
-        ayuda: "Puente avisa al joven y al orientador y recalcula la lista corta de la vacante.",
+        ayuda: "SkillMatch avisa al joven y al orientador y recalcula la lista corta de la vacante.",
         enviar: (nota) =>
-          responder({ accion: "rechazar", oferta_id: v.oferta_id, ref: c.ref, nota }, `${c.alias}: rechazo registrado. Puente recalcula la lista.`),
+          responder({ accion: "rechazar", oferta_id: v.oferta_id, ref: c.ref, nota }, `${c.alias}: rechazo registrado. SkillMatch recalcula la lista.`),
       }),
     );
   }
@@ -481,7 +481,7 @@ async function entrar(codigo, boton) {
   const id = punto < 0 ? "" : texto.slice(0, punto);
   const token = punto < 0 ? "" : texto.slice(punto + 1);
   if (!/^[A-Za-z0-9_-]{1,80}$/.test(id) || !/^[A-Za-z0-9_-]{16,128}$/.test(token)) {
-    mostrarAviso("Ese código no está completo: cópialo tal como te lo dio Puente, con el punto en medio.", "error");
+    mostrarAviso("Ese código no está completo: cópialo tal como te lo dio SkillMatch, con el punto en medio.", "error");
     return;
   }
   empresaActual = id;
