@@ -27,6 +27,10 @@
 #   matching_factible           entrada {config, traslados[], perfiles[], ofertas[]} -> esperado {asignacion{perfil: oferta|null}, violaciones_duras}
 #   sesgo_contrafactual         entrada {matching, traslados[], perfiles[], ofertas[]} -> esperado {sesgo_detectado}
 #   guardrails                  entrada {tipo, ...} -> esperado {veredicto, llamo_llm?, sigue_como_dato?}
+#   horario_tirilla             entrada {ruta (imagen de tests/fixtures), hoy} -> esperado {horario_clases[], problemas[],
+#                               vigente_hasta?, excepciones[]? ({desde, hasta})}  (#164, Claude con visión)
+#   horario_validacion          entrada {bloques[] (como los leería el LLM)} -> esperado {problemas[] ({indice, campo}),
+#                               horario_clases[]}  (#164, solo código)
 #
 # La taxonomía vigente se carga del CSV al ejecutar los casos.
 
@@ -62,6 +66,16 @@ categorias:
     issue: 9
     usa_llm: false
     metrica: "Veredicto (rechazar | marcar | fuera_de_alcance | aceptar) igual a lo esperado y sin llamar al LLM cuando se rechaza"
+    meta: 1.0
+  horario_tirilla:
+    issue: 164
+    usa_llm: true
+    metrica: "La tirilla sintética da exactamente el horario_clases, las excepciones y la vigencia esperados, sin problemas"
+    meta: 1.0
+  horario_validacion:
+    issue: 164
+    usa_llm: false
+    metrica: "Los bloques inválidos se rechazan (índice y campo) y los válidos dan el horario_clases esperado"
     meta: 1.0
 
 casos:
@@ -851,5 +865,47 @@ casos:
       veredicto: aceptar
       sigue_como_dato: true
     escrito_el: "2026-10-16"
+    datos_sinteticos: true
+    fallos: []
+
+  # ------------------------------------------------------------------ Horario vivo (2), issue #164
+  # El esperado de HOR-01 sale del contenido de la tirilla, escrito en tests/fixtures/generar_tirilla_sintetica.py
+  # antes de grabar la lectura del LLM.
+  - id: HOR-01
+    categoria: horario_tirilla
+    descripcion: "Tirilla de matrícula sintética (imagen) de una estudiante nocturna: cinco materias que suman lunes a viernes 18:30-21:30, parciales, finales y fin del semestre."
+    entrada:
+      ruta: tests/fixtures/tirilla_sintetica.png
+      hoy: "2026-10-17"
+    esperado:
+      horario_clases:
+        - dias: [lunes, martes, miercoles, jueves, viernes]
+          hora_inicio: "18:30"
+          hora_fin: "21:30"
+      problemas: []
+      vigente_hasta: "2026-12-12"
+      excepciones:
+        - {desde: "2026-10-19", hasta: "2026-10-23"}
+        - {desde: "2026-12-07", hasta: "2026-12-12"}
+    escrito_el: "2026-10-17"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: HOR-02
+    categoria: horario_validacion
+    descripcion: "Un bloque con una hora imposible (21:80) se rechaza en código y no entra al horario; los demás se conservan."
+    entrada:
+      bloques:
+        - {dia: lunes, hora_inicio: "18:30", hora_fin: "21:30", materia: "Matemática Básica I"}
+        - {dia: martes, hora_inicio: "18:30", hora_fin: "21:80", materia: "Inglés Técnico I"}
+        - {dia: "Mié", hora_inicio: "18:30", hora_fin: "21:30", materia: "Contabilidad I"}
+    esperado:
+      problemas:
+        - {indice: 2, campo: hora_fin}
+      horario_clases:
+        - dias: [lunes, miercoles]
+          hora_inicio: "18:30"
+          hora_fin: "21:30"
+    escrito_el: "2026-10-17"
     datos_sinteticos: true
     fallos: []

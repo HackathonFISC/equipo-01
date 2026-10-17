@@ -28,6 +28,8 @@ CONTEO_ESPERADO = {
     "matching_factible": 3,
     "sesgo_contrafactual": 3,
     "guardrails": 7,
+    "horario_tirilla": 1,
+    "horario_validacion": 1,
 }
 
 
@@ -108,6 +110,8 @@ def test_ids_siguen_el_formato_pedido(casos):
         "matching_factible": "MAT",
         "sesgo_contrafactual": "SES",
         "guardrails": "GRD",
+        "horario_tirilla": "HOR",
+        "horario_validacion": "HOR",
     }
     for caso in casos["casos"]:
         assert caso["id"].startswith(prefijos[caso["categoria"]] + "-")

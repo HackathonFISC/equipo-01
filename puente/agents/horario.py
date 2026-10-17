@@ -145,9 +145,12 @@ class Problema:
     motivo: str
 
     def __str__(self) -> str:
-        donde = f"bloque {self.indice}" if self.campo not in ("desde", "hasta", "vigente_hasta") else (
-            "vigencia" if self.campo == "vigente_hasta" else f"excepción {self.indice}"
-        )
+        if self.campo in ("desde", "hasta"):
+            donde = f"excepción {self.indice}"
+        elif self.campo == "vigente_hasta":
+            donde = "vigencia"
+        else:
+            donde = f"bloque {self.indice}" if self.indice else "horario"
         return f"{donde} · {self.campo}: {self.motivo}"
 
 
