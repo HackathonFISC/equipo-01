@@ -736,3 +736,23 @@ def test_issue_168_roles_umbrales_tocumen_y_panel_operacion(
     asyncio.run(_ejecutar())
 
 
+def test_issue_161_vercel_json_y_modo_demo_publica(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issue #161: configuración de despliegue en Vercel y aviso de demo pública de solo lectura."""
+    import json
+    import app.server as srv
+
+    ruta_vercel = Path(__file__).resolve().parents[1] / "vercel.json"
+    assert ruta_vercel.is_file()
+    cfg_vercel = json.loads(ruta_vercel.read_text(encoding="utf-8"))
+    assert cfg_vercel["env"]["PUENTE_DEMO_PUBLICA"] == "1"
+    assert cfg_vercel["env"]["LLM_MODO"] == "reproducir"
+    assert any(b.get("src") == "app/server.py" for b in cfg_vercel.get("builds", []))
+
+    monkeypatch.setenv("PUENTE_DEMO_PUBLICA", "1")
+    assert srv.es_modo_demo_publica() is True
+    estado_pub = srv.serializar_estado_publico(srv.ESTADO_GLOBAL)
+    assert estado_pub["modo_demo_publica"] is True
+    assert "solo lectura" in (estado_pub["aviso_demo_publica"] or "")
+
+
+

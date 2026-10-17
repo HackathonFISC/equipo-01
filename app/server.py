@@ -86,11 +86,26 @@ from puente.guardrails import EDAD_MAX, EDAD_MIN, evaluar_entrada, limpiar_entra
 from puente.rules.taxonomia import normalizar_habilidad
 from puente.schemas import DIAS_VALIDOS, EntradaPerfil
 
+def es_modo_demo_publica() -> bool:
+    """True cuando el servidor corre en Vercel (`VERCEL=1`) o con `PUENTE_DEMO_PUBLICA=1` (#161)."""
+    return bool(
+        os.getenv("VERCEL", "").strip() in ("1", "true", "True")
+        or os.getenv("PUENTE_DEMO_PUBLICA", "").strip() in ("1", "true", "True")
+    )
+
+
+if es_modo_demo_publica():
+    os.environ.setdefault("LLM_MODO", "reproducir")
+
 RUTA_APP = Path(__file__).resolve().parent
 RUTA_STATIC = RUTA_APP / "static"
 RUTA_RAIZ = RUTA_APP.parent
 RUTA_DATA = RUTA_RAIZ / "data"
-RUTA_OUTBOX = RUTA_RAIZ / "outbox"
+RUTA_OUTBOX = (
+    Path(tempfile.gettempdir()) / "puente_outbox"
+    if es_modo_demo_publica()
+    else RUTA_RAIZ / "outbox"
+)
 RUTA_DB_TABLERO = Path(tempfile.gettempdir()) / "puente_tablero.db"
 
 PATRON_ID_SEGURO = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -2390,11 +2405,18 @@ def serializar_estado_publico(estado: dict[str, Any]) -> dict[str, Any]:
         # `entradas_perfil` (#52) trae las respuestas en texto libre de cada joven: no sale.
         if not k.startswith("_") and k != "entradas_perfil"
     }
+    es_publica = es_modo_demo_publica()
     payload["conteo_embudo"] = conteo_embudo
     payload["catalogo_data"] = listar_catalogo_data()
     payload["decisiones_db"] = _leer_decisiones_db(estado)
     payload["metricas"] = _calcular_metricas_impacto(estado)
     payload["operacion"] = obtener_panel_operacion(estado)
+    payload["modo_demo_publica"] = es_publica
+    payload["aviso_demo_publica"] = (
+        "Demo pública de solo lectura (estado efímero): corre con LLM_MODO=reproducir sin claves y el estado se reinicia entre invocaciones."
+        if es_publica
+        else None
+    )
     return payload
 
 
