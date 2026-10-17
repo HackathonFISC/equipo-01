@@ -32,7 +32,7 @@ Vocabulario. **Agente de desarrollo**: la IA que programa contigo. **Agente del 
 
 **Qué es.** Sistema agéntico de inserción laboral juvenil: un mercado de tres lados, jóvenes, empresas y centros de formación, donde los agentes asignan, agendan y reacomodan con datos sucios y restricciones reales de traslado, horario y dinero. Un orientador humano aprueba todo lo que sale hacia terceros. Caso guía de la demo: **Yaritza**, 20 años, La Chorrera, estudia de noche, sin CV, atiende la fonda de su mamá.
 
-**Principio de diseño.** Modelo de lenguaje en los bordes, código en el centro. El LLM, Gemini vía `langchain-google-genai`, lee ofertas y CVs, entrevista, redacta y explica. El código normaliza a la taxonomía, aplica las reglas legales, calcula traslados y horarios, asigna con CP-SAT, verifica evidencia y audita sesgo. **El LLM nunca ordena candidatos, nunca calcula traslados y nunca decide si una oferta es legal.**
+**Principio de diseño.** Modelo de lenguaje en los bordes, código en el centro. El LLM, Claude Opus 5.5 (`claude-opus-5-5`) detrás de `puente/llm.py` (#45, con Gemini como respaldo opcional), lee ofertas y CVs, entrevista, redacta y explica. El código normaliza a la taxonomía, aplica las reglas legales, calcula traslados y horarios, asigna con CP-SAT, verifica evidencia y audita sesgo. **El LLM nunca ordena candidatos, nunca calcula traslados y nunca decide si una oferta es legal.**
 
 **Flujo del grafo** (`puente/graph.py`, issue #10):
 
