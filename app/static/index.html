@@ -3,192 +3,243 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Puente · Tablero del Orientador Laboral (Reto 3)</title>
-  <link rel="stylesheet" href="/static/styles.css" />
+  <meta name="color-scheme" content="light dark" />
+  <title>Puente · Tablero del orientador</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23e2a11b'/%3E%3Cg fill='none' stroke='%231d1604' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M5 23h22M8 23V10M24 23V10M8 12c2.6 3.4 5.3 5 8 5s5.4-1.6 8-5M12 23v-6M16 23v-5.5M20 23v-6'/%3E%3C/g%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/static/styles.css?v=2" />
 </head>
 <body>
-  <header class="topbar">
-    <div class="topbar-brand">
-      <span class="brand-badge">PUENTE · RETO 3</span>
-      <div>
-        <h1>Tablero del Orientador Laboral</h1>
-        <p class="subtitle">Empleabilidad Juvenil Justa en Panamá · Supervisión Humana (HITL) · Ley 11 de 2005</p>
+  <!-- Íconos en línea: la demo debe funcionar sin conexión, así que nada se carga de fuera. -->
+  <svg xmlns="http://www.w3.org/2000/svg" class="sprite" aria-hidden="true">
+    <symbol id="i-puente" viewBox="0 0 24 24"><path d="M2 18h20"/><path d="M4 18V7"/><path d="M20 18V7"/><path d="M4 8.5c2.5 3.2 5.2 4.8 8 4.8s5.5-1.6 8-4.8"/><path d="M8 18v-5"/><path d="M12 18v-4.6"/><path d="M16 18v-5"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4v16l13-8z"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-wallet" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/><path d="M16 15h2"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+    <symbol id="i-ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m5.7 5.7 12.6 12.6"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
+    <symbol id="i-briefcase" viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/><path d="M3 13h18"/></symbol>
+    <symbol id="i-cap" viewBox="0 0 24 24"><path d="M22 9 12 4 2 9l10 5z"/><path d="M6 11v5c0 1.5 2.7 3 6 3s6-1.5 6-3v-5"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/></symbol>
+    <symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+    <symbol id="i-flask" viewBox="0 0 24 24"><path d="M9 3h6"/><path d="M10 3v6L4.5 18.5A2 2 0 0 0 6.2 21h11.6a2 2 0 0 0 1.7-2.5L14 9V3"/><path d="M7 15h10"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4M12 8h.01"/></symbol>
+    <symbol id="i-scale" viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M7 21h10"/><path d="M4 7h16"/><path d="m6 7-3 7a3 3 0 0 0 6 0z"/><path d="m18 7-3 7a3 3 0 0 0 6 0z"/></symbol>
+    <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8"/><path d="M18.5 14.2A6.5 6.5 0 0 1 21.5 20"/></symbol>
+  </svg>
+
+  <a class="skip-link" href="#principal">Saltar al contenido</a>
+
+  <header class="appbar">
+    <div class="appbar__inner">
+      <div class="brand">
+        <span class="brand__mark"><svg class="icon"><use href="#i-puente"/></svg></span>
+        <div class="brand__text">
+          <span class="brand__name">Puente</span>
+          <span class="brand__context">Tablero del orientador · Empleabilidad juvenil en Panamá</span>
+        </div>
       </div>
-    </div>
-    <div class="topbar-actions">
-      <span id="badge-grafo" class="status-pill status-paused">⏸ Pausa HITL: interrupt(orientador)</span>
-      <button id="btn-reset" class="btn btn-outline" type="button" title="Restaurar datos iniciales del caso Yaritza">
-        ↺ Reiniciar Demo
-      </button>
+      <div class="appbar__actions">
+        <span id="badge-grafo" class="status-pill status-paused">Esperando tu aprobación</span>
+        <button id="btn-reset" class="btn btn--on-dark" type="button" title="Vuelve a los datos iniciales del caso Yaritza">
+          <svg class="icon"><use href="#i-refresh"/></svg><span>Reiniciar demo</span>
+        </button>
+      </div>
     </div>
   </header>
 
-  <main class="container">
-    <!-- KPIs principales -->
-    <section class="kpi-grid" aria-label="Indicadores del sistema">
-      <article class="kpi-card">
-        <span class="kpi-label">Perfiles Jóvenes (18–28)</span>
-        <strong id="kpi-perfiles" class="kpi-value">0</strong>
-        <span class="kpi-foot">Sin PII expuesta a empresas</span>
-      </article>
-      <article class="kpi-card">
-        <span class="kpi-label">Ofertas Válidas / Bloqueadas</span>
-        <strong id="kpi-ofertas" class="kpi-value">0 / 0</strong>
-        <span class="kpi-foot">Filtro Ley 11 de 2005 (edad/sexo)</span>
-      </article>
-      <article class="kpi-card">
-        <span class="kpi-label">Matches en Lista Corta</span>
-        <strong id="kpi-matches" class="kpi-value">0</strong>
-        <span class="kpi-foot">CP-SAT · Traslado ≤ 60 min · Pasaje ≤ 15%</span>
-      </article>
-      <article class="kpi-card">
-        <span class="kpi-label">Auditoría Contrafactual</span>
-        <strong id="kpi-auditoria" class="kpi-value">100%</strong>
-        <span id="kpi-auditoria-foot" class="kpi-foot">0 sesgos por nombre o género</span>
-      </article>
+  <main id="principal" class="container">
+    <!-- Recorrido del caso por los agentes del sistema -->
+    <section class="flujo" aria-labelledby="flujo-titulo">
+      <h2 id="flujo-titulo" class="visually-hidden">Recorrido por los agentes</h2>
+      <ol id="flujo-pasos" class="flujo__pasos"></ol>
     </section>
 
-    <!-- Navegación por pestañas -->
-    <nav class="tabs-nav" role="tablist">
-      <button class="tab-btn active" data-tab="tab-lista-corta" role="tab" aria-selected="true">
-        1. Lista Corta y Aprobación (HITL)
+    <!-- Indicadores -->
+    <section class="kpi-grid" aria-label="Indicadores del sistema">
+      <button type="button" class="kpi" data-ir-a="tab-lista-corta">
+        <span class="kpi__icon"><svg class="icon"><use href="#i-users"/></svg></span>
+        <span class="kpi__label">Jóvenes en proceso</span>
+        <strong id="kpi-perfiles" class="kpi__value">0</strong>
+        <span class="kpi__foot">Sin datos personales hacia empresas</span>
       </button>
-      <button class="tab-btn" data-tab="tab-ofertas-ley11" role="tab" aria-selected="false">
-        2. Ofertas Bloqueadas y Alertas (Ley 11)
+      <button type="button" class="kpi" data-ir-a="tab-ofertas-ley11">
+        <span class="kpi__icon"><svg class="icon"><use href="#i-scale"/></svg></span>
+        <span class="kpi__label">Ofertas válidas / bloqueadas</span>
+        <strong id="kpi-ofertas" class="kpi__value">0 / 0</strong>
+        <span class="kpi__foot">Filtro de la Ley 11 de 2005</span>
       </button>
-      <button class="tab-btn" data-tab="tab-trazas" role="tab" aria-selected="false">
-        3. Trazas de Decisiones
+      <button type="button" class="kpi" data-ir-a="tab-lista-corta">
+        <span class="kpi__icon"><svg class="icon"><use href="#i-briefcase"/></svg></span>
+        <span class="kpi__label">Opciones en lista corta</span>
+        <strong id="kpi-matches" class="kpi__value">0</strong>
+        <span class="kpi__foot">Traslado ≤ 60 min · pasaje ≤ 15 % del salario</span>
       </button>
-      <button class="tab-btn" data-tab="tab-embudo" role="tab" aria-selected="false">
-        4. Embudo de Postulaciones
+      <button type="button" class="kpi" data-ir-a="tab-auditor">
+        <span class="kpi__icon"><svg class="icon"><use href="#i-shield"/></svg></span>
+        <span class="kpi__label">Imparcialidad por nombre y género</span>
+        <strong id="kpi-auditoria" class="kpi__value">100%</strong>
+        <span id="kpi-auditoria-foot" class="kpi__foot">Sin sesgo detectado</span>
       </button>
-      <button class="tab-btn" data-tab="tab-auditor" role="tab" aria-selected="false">
-        5. Agente Auditor (Sesgo)
+    </section>
+
+    <!-- Navegación -->
+    <nav class="tabs" role="tablist" aria-label="Secciones del tablero">
+      <button class="tab active" id="tabbtn-lista-corta" data-tab="tab-lista-corta" role="tab" aria-selected="true" aria-controls="tab-lista-corta">
+        <svg class="icon"><use href="#i-check"/></svg><span>Por aprobar</span><span class="tab__count" id="count-lista">0</span>
+      </button>
+      <button class="tab" id="tabbtn-ofertas-ley11" data-tab="tab-ofertas-ley11" role="tab" aria-selected="false" aria-controls="tab-ofertas-ley11" tabindex="-1">
+        <svg class="icon"><use href="#i-scale"/></svg><span>Ofertas y Ley 11</span><span class="tab__count tab__count--bad" id="count-ofertas">0</span>
+      </button>
+      <button class="tab" id="tabbtn-embudo" data-tab="tab-embudo" role="tab" aria-selected="false" aria-controls="tab-embudo" tabindex="-1">
+        <svg class="icon"><use href="#i-send"/></svg><span>Postulaciones</span><span class="tab__count" id="count-embudo">0</span>
+      </button>
+      <button class="tab" id="tabbtn-auditor" data-tab="tab-auditor" role="tab" aria-selected="false" aria-controls="tab-auditor" tabindex="-1">
+        <svg class="icon"><use href="#i-shield"/></svg><span>Auditoría de sesgo</span><span class="tab__count" id="count-auditor">100%</span>
+      </button>
+      <button class="tab" id="tabbtn-trazas" data-tab="tab-trazas" role="tab" aria-selected="false" aria-controls="tab-trazas" tabindex="-1">
+        <svg class="icon"><use href="#i-activity"/></svg><span>Trazas</span><span class="tab__count" id="count-trazas">0</span>
       </button>
     </nav>
 
-    <!-- Notificación flotante de acciones -->
-    <div id="toast-msg" class="toast hidden" role="status" aria-live="polite"></div>
-
-    <!-- TAB 1: LISTA CORTA Y APROBACIÓN -->
-    <section id="tab-lista-corta" class="tab-panel active" role="tabpanel">
-      <div class="panel-header">
+    <!-- 1. POR APROBAR -->
+    <section id="tab-lista-corta" class="tab-panel active" role="tabpanel" aria-labelledby="tabbtn-lista-corta">
+      <div class="panel-head">
         <div>
-          <h2>Lista Corta Explicable · Punto de Pausa <code>interrupt()</code></h2>
+          <h2>Lista corta por aprobar</h2>
           <p>
-            Ninguna postulación se envía automáticamente. El orientador revisa evidencia literal, traslado en hora pico y pasaje antes de aprobar.
+            Nada se envía a una empresa hasta que apruebes: revisa la evidencia, el traslado y el pasaje
+            de cada opción.
           </p>
         </div>
-        <div class="filter-group">
-          <label for="filtro-perfil">Filtrar candidato:</label>
-          <select id="filtro-perfil" class="input-select">
-            <option value="TODOS">Todos los perfiles</option>
-          </select>
+        <div class="panel-head__tools">
+          <label class="field-inline" for="filtro-perfil">
+            <span>Joven</span>
+            <select id="filtro-perfil" class="input">
+              <option value="TODOS">Todos</option>
+            </select>
+          </label>
         </div>
       </div>
 
-      <div class="info-banner" style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.75rem;">
-        <div>
-          <strong>📂 Cargar desde <code>data/</code>:</strong> Selecciona una oferta o perfil del repositorio para procesarlo en vivo.
-        </div>
-        <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;">
-          <select id="select-data-oferta" class="input-select"></select>
-          <button type="button" id="btn-cargar-data-oferta" class="btn btn-primary">Cargar Oferta</button>
-          <select id="select-data-perfil" class="input-select"></select>
-          <button type="button" id="btn-cargar-data-perfil" class="btn btn-primary">Cargar Perfil</button>
-        </div>
+      <div id="contenedor-matches" class="personas">
+        <div class="esqueleto" aria-busy="true" aria-label="Cargando la lista corta"><i></i><i></i><i></i></div>
       </div>
 
-      <div id="contenedor-matches" class="cards-stack"></div>
-
-      <details class="collapsible-form">
-        <summary>+ Registrar nuevo perfil joven (entrevista conversacional sin CV)</summary>
-        <form id="form-nuevo-perfil" class="form-grid">
-          <label>
-            Nombre del joven
-            <input type="text" id="np-nombre" required placeholder="Ej. Mariela" />
-          </label>
-          <label>
-            Edad (15–29)
-            <input type="number" id="np-edad" min="15" max="29" value="20" required />
-          </label>
-          <label>
-            Corregimiento de residencia
-            <select id="np-corregimiento">
-              <option value="La Chorrera">La Chorrera</option>
-              <option value="Vista Alegre">Vista Alegre</option>
-              <option value="Arraiján">Arraiján</option>
-            </select>
-          </label>
-          <label>
-            Salario mínimo esperado (USD/mes)
-            <input type="number" id="np-salario" min="400" max="2000" step="10" value="600" required />
-          </label>
-          <label>
-            Presupuesto pasaje diario (USD/día)
-            <input type="number" id="np-pasaje" min="1" max="15" step="0.25" value="3.00" required />
-          </label>
-          <label>
-            Habilidades demostradas
-            <select id="np-habilidades" multiple>
-              <option value="atencion_cliente" selected>atencion_cliente</option>
-              <option value="manejo_caja" selected>manejo_caja</option>
-              <option value="inventario">inventario</option>
-              <option value="excel_basico">excel_basico</option>
-            </select>
-          </label>
-          <label class="full-width">
-            Evidencia literal del relato (experiencia informal / comunitaria)
-            <input
-              type="text"
-              id="np-evidencia"
-              required
-              value="Atiende pedidos y cobra en efectivo y Yappy en el puesto de comida familiar"
-            />
-          </label>
-          <div class="form-actions full-width">
-            <button type="submit" class="btn btn-primary">Extraer Habilidades y Recalcular Solver CP-SAT</button>
+      <div class="herramientas">
+        <details class="drawer">
+          <summary><svg class="icon"><use href="#i-database"/></svg><span>Cargar un ejemplo desde <code>data/</code></span><svg class="icon drawer__chev"><use href="#i-chevron"/></svg></summary>
+          <div class="drawer__body">
+            <p class="drawer__hint">Procesa en vivo una oferta o un perfil de los datos de ejemplo del repositorio.</p>
+            <div class="load-row">
+              <label class="field">
+                <span>Oferta</span>
+                <select id="select-data-oferta" class="input"></select>
+              </label>
+              <button type="button" id="btn-cargar-data-oferta" class="btn btn--secondary">Cargar oferta</button>
+            </div>
+            <div class="load-row">
+              <label class="field">
+                <span>Perfil</span>
+                <select id="select-data-perfil" class="input"></select>
+              </label>
+              <button type="button" id="btn-cargar-data-perfil" class="btn btn--secondary">Cargar perfil</button>
+            </div>
           </div>
-        </form>
-      </details>
+        </details>
+
+        <details class="drawer">
+          <summary><svg class="icon"><use href="#i-plus"/></svg><span>Registrar a un joven sin CV (entrevista)</span><svg class="icon drawer__chev"><use href="#i-chevron"/></svg></summary>
+          <form id="form-nuevo-perfil" class="form-grid drawer__body">
+            <label class="field">
+              <span>Nombre</span>
+              <input type="text" id="np-nombre" class="input" required placeholder="Ej. Mariela" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>Edad</span>
+              <input type="number" id="np-edad" class="input" min="15" max="29" value="20" required />
+            </label>
+            <label class="field">
+              <span>Corregimiento donde vive</span>
+              <select id="np-corregimiento" class="input">
+                <option value="La Chorrera">La Chorrera</option>
+                <option value="Vista Alegre">Vista Alegre</option>
+                <option value="Arraiján">Arraiján</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Salario mínimo que acepta (USD/mes)</span>
+              <input type="number" id="np-salario" class="input" min="400" max="2000" step="10" value="600" required />
+            </label>
+            <label class="field">
+              <span>Pasaje que puede pagar (USD/día)</span>
+              <input type="number" id="np-pasaje" class="input" min="1" max="15" step="0.25" value="3.00" required />
+            </label>
+            <fieldset class="field full-width">
+              <legend>Habilidades que mostró en la entrevista</legend>
+              <div class="chip-checks" id="np-habilidades">
+                <label class="chip-check"><input type="checkbox" value="atencion_cliente" checked /><span>Atención al cliente</span></label>
+                <label class="chip-check"><input type="checkbox" value="manejo_caja" checked /><span>Manejo de caja</span></label>
+                <label class="chip-check"><input type="checkbox" value="inventario" /><span>Inventario</span></label>
+                <label class="chip-check"><input type="checkbox" value="excel_basico" /><span>Excel básico</span></label>
+              </div>
+            </fieldset>
+            <label class="field full-width">
+              <span>Evidencia literal de su relato</span>
+              <input
+                type="text"
+                id="np-evidencia"
+                class="input"
+                required
+                value="Atiende pedidos y cobra en efectivo y Yappy en el puesto de comida familiar"
+              />
+            </label>
+            <div class="form-actions full-width">
+              <button type="submit" class="btn btn--primary">Extraer habilidades y recalcular</button>
+            </div>
+          </form>
+        </details>
+      </div>
     </section>
 
-    <!-- TAB 2: OFERTAS BLOQUEADAS Y ALERTAS (LEY 11 DE 2005) -->
-    <section id="tab-ofertas-ley11" class="tab-panel" role="tabpanel">
-      <div class="panel-header">
+    <!-- 2. OFERTAS Y LEY 11 -->
+    <section id="tab-ofertas-ley11" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-ofertas-ley11" hidden>
+      <div class="panel-head">
         <div>
-          <h2>Vigilancia Legal de Vacantes · Ley 11 de 2005 (Panamá)</h2>
+          <h2>Ofertas revisadas con la Ley 11 de 2005</h2>
           <p>
-            El Agente de Mercado bloquea ofertas que discriminan por edad o sexo y marca alertas preventivas de apariencia (<em>«buena presencia»</em>, fotografía o estado civil) con la frase exacta.
+            El agente Mercado bloquea las ofertas que discriminan por edad o sexo y marca con una alerta
+            «buena presencia», foto o estado civil. La frase exacta queda resaltada en el texto original.
           </p>
         </div>
       </div>
 
-      <div class="two-columns">
-        <div>
-          <h3 class="section-subtitle">🚫 Ofertas Bloqueadas (No entran al Solver)</h3>
-          <div id="contenedor-ofertas-bloqueadas" class="cards-stack"></div>
-        </div>
-        <div>
-          <h3 class="section-subtitle">✅ Ofertas Válidas y Alertas Preventivas</h3>
-          <div id="contenedor-ofertas-validas" class="cards-stack"></div>
-        </div>
-      </div>
-
-      <details class="collapsible-form" open>
-        <summary>+ Evaluar nueva oferta de empleo en tiempo real (Agente de Mercado)</summary>
-        <form id="form-nueva-oferta" class="form-grid">
-          <label>
-            Puesto
-            <input type="text" id="no-puesto" required placeholder="Ej. Auxiliar de Tienda" />
+      <details class="drawer drawer--first">
+        <summary><svg class="icon"><use href="#i-plus"/></svg><span>Analizar una oferta nueva</span><svg class="icon drawer__chev"><use href="#i-chevron"/></svg></summary>
+        <form id="form-nueva-oferta" class="form-grid drawer__body">
+          <label class="field">
+            <span>Puesto</span>
+            <input type="text" id="no-puesto" class="input" required placeholder="Ej. Auxiliar de tienda" autocomplete="off" />
           </label>
-          <label>
-            Empresa
-            <input type="text" id="no-empresa" required placeholder="Ej. Almacenes del Oeste" />
+          <label class="field">
+            <span>Empresa</span>
+            <input type="text" id="no-empresa" class="input" required placeholder="Ej. Almacenes del Oeste" autocomplete="off" />
           </label>
-          <label>
-            Corregimiento de la vacante
-            <select id="no-corregimiento">
+          <label class="field">
+            <span>Corregimiento de la vacante</span>
+            <select id="no-corregimiento" class="input">
               <option value="La Chorrera">La Chorrera</option>
               <option value="Vista Alegre">Vista Alegre</option>
               <option value="Arraiján">Arraiján</option>
@@ -196,87 +247,62 @@
               <option value="Tocumen">Tocumen</option>
             </select>
           </label>
-          <label>
-            Salario mensual (USD)
-            <input type="number" id="no-salario" min="400" max="3000" step="10" value="650" required />
+          <label class="field">
+            <span>Salario mensual (USD)</span>
+            <input type="number" id="no-salario" class="input" min="400" max="3000" step="10" value="650" required />
           </label>
-          <label class="full-width">
-            Texto de requisitos de la oferta (prueba escribir «18 a 25 años», «solo hombres» o «buena presencia»)
-            <input
-              type="text"
+          <label class="field full-width">
+            <span>Requisitos tal como vienen en el anuncio</span>
+            <textarea
               id="no-requisitos"
+              class="input"
+              rows="2"
               required
-              placeholder="Ej. Se busca joven de 18 a 24 años con excelente buena presencia para atención en mostrador."
-            />
+              placeholder="Ej. Se busca joven de 18 a 24 años con buena presencia para atención en mostrador."
+            ></textarea>
+            <small class="field__hint">Prueba con «18 a 25 años», «solo hombres» o «buena presencia».</small>
           </label>
           <div class="form-actions full-width">
-            <button type="submit" class="btn btn-primary">Analizar con Agente de Mercado</button>
+            <button type="submit" class="btn btn--primary">Analizar con el agente Mercado</button>
           </div>
         </form>
       </details>
-    </section>
 
-    <!-- TAB 3: TRAZAS DE DECISIONES -->
-    <section id="tab-trazas" class="tab-panel" role="tabpanel">
-      <div class="panel-header">
+      <div class="two-columns">
         <div>
-          <h2>Trazabilidad y Registro de Decisiones (<code>decisiones</code>)</h2>
-          <p>Cada nodo del grafo deja registro auditable con timestamp, resumen de entrada/salida y justificación.</p>
+          <h3 class="col-title col-title--bad"><svg class="icon"><use href="#i-ban"/></svg>Bloqueadas <span id="n-bloqueadas" class="col-title__n">0</span></h3>
+          <p class="col-sub">No entran al Matching.</p>
+          <div id="contenedor-ofertas-bloqueadas" class="stack"></div>
         </div>
-        <div class="filter-group">
-          <label for="filtro-agente">Filtrar por agente:</label>
-          <select id="filtro-agente" class="input-select">
-            <option value="TODOS">Todos los agentes</option>
-            <option value="guardrails">guardrails</option>
-            <option value="mercado">mercado</option>
-            <option value="perfil">perfil</option>
-            <option value="matching">matching</option>
-            <option value="auditor">auditor</option>
-            <option value="orientador_humano">orientador_humano</option>
-            <option value="postulacion">postulacion</option>
-          </select>
+        <div>
+          <h3 class="col-title col-title--ok"><svg class="icon"><use href="#i-check"/></svg>Válidas <span id="n-validas" class="col-title__n">0</span></h3>
+          <p class="col-sub">Entran al Matching; las alertas quedan a la vista del orientador.</p>
+          <div id="contenedor-ofertas-validas" class="stack"></div>
         </div>
-      </div>
-
-      <div class="table-wrapper">
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Timestamp</th>
-              <th>Agente</th>
-              <th>Entrada</th>
-              <th>Salida</th>
-              <th>Razón / Regla Aplicada</th>
-            </tr>
-          </thead>
-          <tbody id="tabla-decisiones-body"></tbody>
-        </table>
       </div>
     </section>
 
-    <!-- TAB 4: EMBUDO DE POSTULACIONES -->
-    <section id="tab-embudo" class="tab-panel" role="tabpanel">
-      <div class="panel-header">
+    <!-- 3. POSTULACIONES -->
+    <section id="tab-embudo" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-embudo" hidden>
+      <div class="panel-head">
         <div>
-          <h2>Embudo de Postulaciones y Artefactos Generados</h2>
-          <p>Seguimiento del ciclo de vida desde <code>perfil_listo</code> hasta <code>contratado</code> o <code>no_seleccionado</code>.</p>
+          <h2>Postulaciones</h2>
+          <p>Cada aprobación genera el CV en PDF sin datos personales, el mensaje de Telegram y la cita <code>.ics</code> en <code>outbox/</code>.</p>
         </div>
       </div>
 
-      <div id="contenedor-embudo" class="funnel-grid"></div>
+      <div id="contenedor-embudo" class="embudo"></div>
 
-      <h3 class="section-subtitle">Detalle de Postulaciones y Archivos en <code>outbox/</code></h3>
-      <div class="table-wrapper">
-        <table class="data-table">
+      <div class="table-card">
+        <table class="table">
           <thead>
             <tr>
-              <th>ID Postulación</th>
-              <th>Candidato</th>
-              <th>Oferta / Empresa</th>
-              <th>Puntaje</th>
-              <th>Estado Actual</th>
-              <th>Observación Orientador</th>
-              <th>Artefactos (<code>outbox/</code>)</th>
+              <th scope="col">Joven</th>
+              <th scope="col">Oferta</th>
+              <th scope="col" class="num">Puntaje</th>
+              <th scope="col">Estado</th>
+              <th scope="col">Nota del orientador</th>
+              <th scope="col">Archivos en <code>outbox/</code></th>
             </tr>
           </thead>
           <tbody id="tabla-postulaciones-body"></tbody>
@@ -284,45 +310,94 @@
       </div>
     </section>
 
-    <!-- TAB 5: AGENTE AUDITOR (SESGO CONTRAFACTUAL) -->
-    <section id="tab-auditor" class="tab-panel" role="tabpanel">
-      <div class="panel-header">
+    <!-- 4. AUDITORÍA DE SESGO -->
+    <section id="tab-auditor" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-auditor" hidden>
+      <div class="panel-head">
         <div>
-          <h2>Agente Auditor · Pruebas Contrafactuales de Sesgo</h2>
+          <h2>Auditoría de sesgo</h2>
           <p>
-            Re-ejecuta Perfil y Matching con 4 variantes de nombre y género manteniendo fijo el corregimiento de residencia.
+            El agente Auditor repite Perfil y Matching cambiando el nombre y el género de cada joven.
+            Si el resultado cambia, el caso vuelve a Matching y no llega al orientador.
           </p>
         </div>
-        <div>
-          <button id="btn-toggle-sesgo" class="btn btn-warning" type="button">
-            🧪 Simular Inyección de Sesgo de Género
+        <div class="panel-head__tools">
+          <button id="btn-toggle-sesgo" class="btn btn--warn" type="button">
+            <svg class="icon"><use href="#i-flask"/></svg><span>Simular sesgo de género</span>
           </button>
         </div>
       </div>
 
-      <div id="alerta-nota-metodologica" class="info-banner"></div>
-      <div id="alerta-sesgo-banner" class="alert-banner hidden"></div>
+      <div id="alerta-sesgo-banner" class="banner banner--bad hidden" role="alert"></div>
 
-      <div class="table-wrapper">
-        <table class="data-table">
+      <div class="audit-summary">
+        <div class="audit-summary__score">
+          <span class="audit-summary__label">Resultado idéntico</span>
+          <strong id="audit-pct">100%</strong>
+          <span id="audit-estado" class="pill pill--ok">Sin sesgo</span>
+          <span id="audit-detalle" class="audit-summary__detalle"></span>
+        </div>
+        <div id="alerta-nota-metodologica" class="audit-summary__note"></div>
+      </div>
+
+      <div class="table-card">
+        <table class="table">
           <thead>
             <tr>
-              <th>Perfil</th>
-              <th>Nombre / Género Original</th>
-              <th>Corregimiento (Fijo)</th>
-              <th>Variantes Idénticas</th>
-              <th>% Idéntico</th>
-              <th>Estado Auditoría</th>
-              <th>Detalle de Diferencias</th>
+              <th scope="col">Joven</th>
+              <th scope="col">Corregimiento (fijo)</th>
+              <th scope="col">Variantes idénticas</th>
+              <th scope="col" class="num">% idéntico</th>
+              <th scope="col">Resultado</th>
+              <th scope="col">Diferencias</th>
             </tr>
           </thead>
           <tbody id="tabla-auditoria-body"></tbody>
         </table>
       </div>
     </section>
+
+    <!-- 5. TRAZAS -->
+    <section id="tab-trazas" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-trazas" hidden>
+      <div class="panel-head">
+        <div>
+          <h2>Trazas de decisiones</h2>
+          <p>Cada agente deja constancia de qué recibió, qué produjo y por qué. Lo más reciente va primero.</p>
+        </div>
+        <div class="panel-head__tools">
+          <label class="field-inline" for="filtro-agente">
+            <span>Agente</span>
+            <select id="filtro-agente" class="input">
+              <option value="TODOS">Todos</option>
+              <option value="guardrails">Guardrails</option>
+              <option value="mercado">Mercado</option>
+              <option value="perfil">Perfil</option>
+              <option value="matching">Matching</option>
+              <option value="auditor">Auditor</option>
+              <option value="formacion">Formación</option>
+              <option value="orientador_humano">Orientador</option>
+              <option value="postulacion">Postulación</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <ol id="tabla-decisiones-body" class="timeline"></ol>
+    </section>
   </main>
 
-  <script src="/static/app.js"></script>
+  <dialog id="dlg-confirmar" class="dialog" aria-labelledby="dlg-titulo">
+    <form method="dialog" class="dialog__body">
+      <h2 id="dlg-titulo" class="dialog__title"></h2>
+      <div id="dlg-texto" class="dialog__text"></div>
+      <div class="dialog__actions">
+        <button value="cancelar" class="btn btn--ghost" type="submit">Cancelar</button>
+        <button value="confirmar" id="dlg-confirmar-btn" class="btn btn--primary" type="submit">Confirmar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast-msg" class="toast hidden" role="status" aria-live="polite"></div>
+
+  <script src="/static/app.js?v=2"></script>
 </body>
 </html>
-
