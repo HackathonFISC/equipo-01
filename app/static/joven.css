@@ -119,6 +119,13 @@ html .btn {
   border-radius: 999px;
 }
 
+/* Salida a la landing en la cabecera (#301). */
+html .barra-enlace {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
+
 /* Texto oscuro sobre el rojo de error: el blanco no llega a 4.5:1 sobre --bad. */
 html .toast[data-tipo="error"] {
   color: #2a0d09;

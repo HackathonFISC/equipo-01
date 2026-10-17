@@ -46,3 +46,15 @@ def test_la_raiz_es_la_landing_y_el_tablero_vive_en_orientador(monkeypatch, tmp_
     assert "Busco empleo" in cliente.get("/").text
     tablero = cliente.get("/orientador")
     assert tablero.status_code == 200 and 'id="flujo-pasos"' in tablero.text
+
+
+@pytest.mark.parametrize("ruta", ["/joven", "/empresa", "/empresa/lista-corta"])
+def test_joven_y_empresa_salen_a_la_landing_y_no_al_tablero(monkeypatch, tmp_path, ruta):
+    # #301: desde la vista del joven o de la empresa se sale a la landing, no al tablero del orientador.
+    monkeypatch.setenv("PUENTE_DB", str(tmp_path / "salida.db"))
+    monkeypatch.setenv("PUENTE_OUTBOX", str(tmp_path / "outbox"))
+    import app.server as srv
+
+    html = TestClient(srv.app).get(ruta).text
+    assert 'href="/">Salir al inicio</a>' in html
+    assert 'href="/orientador"' not in html
