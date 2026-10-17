@@ -720,7 +720,8 @@ def pool_de_perfiles(conn: Any = None, carpeta: Path = CARPETA_PERFILES) -> tupl
         if perfiles:
             return perfiles, "puente.db"
     perfiles = [Perfil.model_validate(json.loads(r.read_text(encoding="utf-8"))) for r in sorted(carpeta.glob("*.json"))]
-    return perfiles, str(carpeta.relative_to(RAIZ)) if carpeta.is_relative_to(RAIZ) else carpeta.name
+    # as_posix: la misma salida en Windows y en Linux («data/perfiles», no «data\perfiles»).
+    return perfiles, carpeta.relative_to(RAIZ).as_posix() if carpeta.is_relative_to(RAIZ) else carpeta.name
 
 
 def _ofertas_pedidas(pedidas: list[str], todas: bool, conn: Any) -> tuple[list[Oferta], list[str]]:
