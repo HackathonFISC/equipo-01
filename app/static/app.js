@@ -31,6 +31,7 @@ const AGENTES = {
   auditor: { nombre: "Auditor", icono: "flask" },
   formacion: { nombre: "Formación", icono: "cap" },
   orientador_humano: { nombre: "Orientador", icono: "check" },
+  tablero: { nombre: "Tablero", icono: "list" },
   consentimiento: { nombre: "Consentimiento", icono: "check" },
   postulacion: { nombre: "Postulación", icono: "send" },
 };
@@ -1254,7 +1255,7 @@ document.addEventListener("DOMContentLoaded", () => {
         document.getElementById("no-puesto").value = "";
         document.getElementById("no-empresa").value = "";
         document.getElementById("no-requisitos").value = "";
-        mostrarToast("El agente Mercado analizó la oferta con la Ley 11 de 2005.");
+        mostrarToast("Oferta revisada con las reglas de la Ley 11 de 2005 y Matching recalculado.");
         senalarNuevo("ofertas", previas, "data-oferta");
       }
     });
