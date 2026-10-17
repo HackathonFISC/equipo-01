@@ -182,6 +182,31 @@ async function conBoton(boton, tarea) {
   }
 }
 
+// Las alertas de la Ley 11 de la oferta, con su frase, a la vista justo donde el orientador decide (#249). Salen de
+// los datos de la oferta (texto que escribió una empresa): todo va escapado. Sin alertas, el diálogo queda igual.
+function alertasLey11ParaAprobar(ofertaId) {
+  const alertas = ((estadoActual?.ofertas || []).find((o) => o.id === ofertaId)?.alertas) || [];
+  if (!alertas.length) return "";
+  const filas = alertas
+    .map(
+      (a) => `<li class="regla">
+        ${a.tipo === "bloqueo" ? pill("Bloqueo", "bad", "ban") : pill("Alerta", "warn", "alert")}
+        <span class="regla__frase">«${escaparHtml(a.frase)}»</span>
+        <span class="regla__norma">${escaparHtml(a.regla)}</span>
+      </li>`
+    )
+    .join("");
+  const hay = alertas.some((a) => a.tipo === "bloqueo");
+  const nota = hay
+    ? "Esta oferta se desbloqueó con motivo, pero conserva frases que la Ley 11 de 2005 prohíbe."
+    : "No bloquean el envío: las decide el orientador.";
+  return `<div class="dialog__alertas" role="note">
+      <strong>Alertas de la Ley 11 de 2005 en esta oferta</strong>
+      <p>${nota}</p>
+      <ul class="reglas">${filas}</ul>
+    </div>`;
+}
+
 function confirmar({ titulo, html, textoBoton, tono = "primary" }) {
   const dlg = document.getElementById("dlg-confirmar");
   if (!dlg || typeof dlg.showModal !== "function") {
@@ -229,10 +254,23 @@ let refrescando = false;
 const CAMPO_DE_ESCRITURA =
   "textarea, select, [contenteditable], input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit])";
 
+// Lo que el orientador escribió o marcó en la lista corta y aún no envió: la nota, el mensaje editado a la empresa
+// y «El joven consintió». Un redibujo lo borraría aunque el campo ya no tenga el foco (#230). Se compara con el
+// valor con que se dibujó (`defaultValue`, `defaultChecked`); el refresco espera a que se envíe o se deje como estaba.
+function hayCambiosSinEnviar() {
+  return [...document.querySelectorAll("#contenedor-matches input, #contenedor-matches textarea, #contenedor-matches select")]
+    .some((campo) => {
+      if (campo.type === "checkbox" || campo.type === "radio") return campo.checked !== campo.defaultChecked;
+      if (campo.tagName === "SELECT") return [...campo.options].some((o) => o.selected !== o.defaultSelected);
+      return campo.value !== campo.defaultValue;
+    });
+}
+
 async function refrescarSiCambio() {
   if (refrescando || document.visibilityState !== "visible") return;
   if (document.querySelector("dialog[open]")) return;
   if (document.activeElement && document.activeElement.matches(CAMPO_DE_ESCRITURA)) return;
+  if (hayCambiosSinEnviar()) return;
   refrescando = true;
   try {
     const resp = await fetch("/api/estado"); // sin llamarApi: un fallo de este ciclo no muestra avisos
@@ -679,7 +717,9 @@ function renderizarPersona(perfil, matches) {
   if (ordenados.length) {
     opciones = `<div class="opciones">${ordenados.map((m, i) => renderizarOpcion(m, i, perfil, mapaOfertas.get(m.oferta_id))).join("")}</div>`;
   } else if (!rechazadas.length) {
-    opciones = `<div class="vacio">${icono("briefcase")}<strong>Ninguna oferta cumple sus restricciones</strong>Traslado, pasaje u horario dejan fuera todas las vacantes válidas.</div>`;
+    // La causa la calcula el servidor (#245): restricciones, cupo lleno o sin ofertas; el texto fijo es solo de respaldo.
+    const sin = estadoActual.sin_opcion?.[perfil.id];
+    opciones = `<div class="vacio">${icono("briefcase")}<strong>${escaparHtml(sin?.titulo || "Ninguna oferta cumple sus restricciones")}</strong>${escaparHtml(sin?.texto || "Traslado, pasaje, salario, horario, habilidades o la Ley 11 dejan fuera todas las vacantes.")}</div>`;
   }
 
   const listaRechazadas = rechazadas.length
@@ -901,7 +941,7 @@ async function ejecutarAccionOrientador(boton) {
     const ok = await confirmar({
       titulo: `¿Enviar la postulación de ${match?.nombre_perfil || perfilId}?`,
       html: `<p><strong>${puesto}</strong> en ${empresa}. Al aprobar, el grafo se reanuda y se generan:</p>
-        <ul><li>CV en PDF sin cédula, teléfono ni dirección</li><li>Mensaje para la empresa (Telegram u <code>outbox/</code>)</li><li>Cita de entrevista en <code>.ics</code></li></ul>`,
+        <ul><li>CV en PDF sin cédula, teléfono ni dirección</li><li>Mensaje para la empresa (Telegram u <code>outbox/</code>)</li><li>Cita de entrevista en <code>.ics</code></li></ul>${alertasLey11ParaAprobar(ofertaId)}`,
       textoBoton: "Aprobar y enviar",
     });
     if (!ok) return;
