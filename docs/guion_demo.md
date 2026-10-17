@@ -1,6 +1,6 @@
 # Guion del video de 3 minutos (#16)
 
-Caso Yaritza de punta a punta, en `LLM_MODO=reproducir`: nada sale a la red y la demo en vivo da lo mismo que el video. Grabación a las 10:00 (#169). Cada paso se verificó el 17 de octubre a la 01:30 sobre `main` (91b8ae4) en un worktree limpio.
+Caso Yaritza de punta a punta, en `LLM_MODO=reproducir`: nada sale a la red y la demo en vivo da lo mismo que el video. Grabación a las 10:00 (#169). Cada paso se verificó el 17 de octubre a la 01:30 sobre `main` (91b8ae4) en un worktree limpio; el bloqueo de aprobar con sesgo en la API es de a9bf04e (#189).
 
 Hay dos superficies y cada una muestra lo que de verdad hace:
 
@@ -113,7 +113,7 @@ Decisión: 4 habilidades con evidencia literal
 
 **Se dice:** «Si le falta Excel, Formación propone un curso del INADEH que no choca con sus clases. El Auditor repite el caso cambiando nombre y género: si el resultado cambia, el caso vuelve a Matching y no se puede aprobar.»
 
-**Cuidado:** restaura el sesgo **antes** del paso 6. El servidor no rechaza una aprobación con sesgo activo; solo la frena el botón.
+**Cuidado:** restaura el sesgo **antes** del paso 6. Mientras esté activo no se puede aprobar: el botón queda bloqueado y la API responde 422 (#189).
 
 ### 6 · El orientador decide (2:00–2:30) · Humano en el ciclo · En vivo
 
