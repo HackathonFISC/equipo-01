@@ -586,3 +586,30 @@ def test_la_cobertura_por_turnos_aprobada_sale_en_la_lista_con_las_refs_de_los_d
     assert {t["ref"] for t in cobertura["turnos"]} == {c["ref"] for c in vacante["candidatos"]}
     texto = json.dumps(vacante, ensure_ascii=False)
     assert "PERFIL-" not in texto and "Sofía" not in texto
+
+
+def test_resumen_de_la_empresa_cuadra_con_el_embudo_y_no_trae_datos_personales(entorno) -> None:
+    """#279: el mini dashboard cuenta enviados y pendientes de sus vacantes, con viables del solver, sin decir quién."""
+    cliente, estado, _ = entorno
+    _aprobar(cliente, YARITZA, CHORRERA)
+
+    r = cliente.get(f"/api/empresa/{SUPER}/lista-corta", headers=_cred(estado))
+    assert r.status_code == 200, r.text
+    resumen = r.json()["resumen"]
+    assert resumen["rotulo"] == "Ilustrativo, datos de la demo"
+    fila = next(f for f in resumen["vacantes"] if f["oferta_id"] == CHORRERA)
+    assert fila["situacion"] == "activa"
+    assert fila["embudo"]["enviado"] == 1 and fila["pendientes"] == 1
+    assert resumen["totales"]["enviado"] >= 1 and resumen["pendientes"] >= 1
+    assert isinstance(fila["viables_pool"], int) and fila["viables_pool"] >= 1
+    # Solo de sus vacantes: la de otra empresa no aparece en su resumen.
+    assert VISTA_ALEGRE not in {f["oferta_id"] for f in resumen["vacantes"]}
+    texto = json.dumps(resumen, ensure_ascii=False)
+    for prohibido in ("yaritza", "PERFIL-", "La Chorrera", "edad", "genero", "perfil_id"):
+        assert prohibido.lower() not in texto.lower()
+
+    # Tras aceptar, sale de pendientes y pasa a entrevista.
+    ref = _vacante(r.json(), CHORRERA)["candidatos"][0]["ref"]
+    assert _accion(cliente, estado, accion="aceptar", oferta_id=CHORRERA, ref=ref).status_code == 200
+    fila = next(f for f in _lista(cliente, estado)["resumen"]["vacantes"] if f["oferta_id"] == CHORRERA)
+    assert fila["pendientes"] == 0 and fila["embudo"]["entrevista"] == 1

@@ -346,6 +346,117 @@ def lista_corta_ciega(estado: dict[str, Any], empresa_id: str) -> dict[str, Any]
         "empresa": {"id": empresa_id, "nombre": ofertas[0].get("empresa", "")},
         "vacantes": vacantes,
         "nombres_habilidades": {sid: taxonomia.get(sid, {}).get("nombre_es", sid) for sid in sorted(ids)},
+        "resumen": resumen_empresa(estado, ofertas, vacantes, modelos, modelos_perfiles),
+    }
+
+
+# Estados del embudo que la empresa puede ver como conteo (#279). Nunca quién: solo cuántos.
+_EMBUDO_EMPRESA = (
+    ("en_revision", "En revisión del orientador"),
+    ("enviado", "Enviados a tu empresa"),
+    ("entrevista", "En entrevista"),
+    ("contratado", "Contratados"),
+    ("no_seleccionado", "No seleccionados"),
+)
+
+
+def resumen_empresa(
+    estado: dict[str, Any],
+    ofertas: list[dict[str, Any]],
+    vacantes: list[dict[str, Any]],
+    modelos: dict[str, Oferta],
+    modelos_perfiles: list[Perfil],
+) -> dict[str, Any]:
+    """Mini dashboard de la empresa (#279): embudo, pendientes, estado de cada vacante, salario de la zona y viables.
+
+    Todo sale de datos que ya existen y en código: el estado de las postulaciones, `tendencias_mercado` (#198) y la
+    factibilidad del solver (`redactor.viables`, #157). Solo conteos de las vacantes de esta empresa: ningún nombre,
+    id, edad ni corregimiento de los jóvenes.
+    """
+    from puente.agents import redactor
+    from puente.metricas import tendencias_mercado
+    from puente.rules.traslados import indexar_traslados
+    from puente.solver.asignacion import ConfigSolver
+
+    por_vacante = {v["oferta_id"]: v for v in vacantes}
+    try:
+        salarios = {
+            fila["corregimiento"]: fila
+            for fila in tendencias_mercado(estado.get("ofertas") or []).get("salario_por_corregimiento", [])
+        }
+    except Exception:  # sin referencia de salario el resumen sigue
+        _registro.warning("Resumen de la empresa: no se pudieron calcular las tendencias", exc_info=True)
+        salarios = {}
+    try:
+        indice = indexar_traslados(None)
+        config = ConfigSolver(**dict(estado.get("config_solver") or {}))
+    except Exception:
+        _registro.warning("Resumen de la empresa: sin índice de traslados para contar viables", exc_info=True)
+        indice, config = None, None
+
+    totales = {clave: 0 for clave, _ in _EMBUDO_EMPRESA}
+    filas: list[dict[str, Any]] = []
+    for oferta in ofertas:
+        oferta_id = oferta["id"]
+        vacante = por_vacante.get(oferta_id, {})
+        conteo = {clave: 0 for clave, _ in _EMBUDO_EMPRESA}
+        conteo["en_revision"] = int(vacante.get("en_revision") or 0)
+        for post in estado.get("postulaciones", []):
+            if post.get("oferta_id") != oferta_id:
+                continue
+            estado_post = post.get("estado")
+            if estado_post in (EstadoPostulacion.CONSENTIDO.value, EstadoPostulacion.ENVIADO.value):
+                conteo["enviado"] += 1
+            elif estado_post in conteo and estado_post != "en_revision":
+                conteo[estado_post] += 1
+        for clave in totales:
+            totales[clave] += conteo[clave]
+
+        if vacante.get("cubierta"):
+            situacion = "cubierta"
+        elif oferta.get("bloqueada"):
+            situacion = "bloqueada"
+        else:
+            situacion = "activa"
+
+        viables: int | None = None
+        if oferta.get("bloqueada"):
+            viables = 0  # Puente no publica una oferta bloqueada: nadie la ve hasta que se corrija
+        elif indice is not None and oferta_id in modelos:
+            try:
+                viables = len(redactor.viables(modelos_perfiles, modelos[oferta_id], indice, config))
+            except Exception:
+                _registro.warning("Resumen de la empresa: no se pudieron contar viables de %s", oferta_id, exc_info=True)
+
+        lugar = str(oferta.get("corregimiento") or "").strip()
+        ref = salarios.get(lugar)
+        filas.append(
+            {
+                "oferta_id": oferta_id,
+                "puesto": oferta.get("puesto", oferta_id),
+                "situacion": situacion,
+                "embudo": conteo,
+                # Enviados que la empresa todavía no acepta ni rechaza: lo que le toca hacer.
+                "pendientes": sum(1 for c in vacante.get("candidatos", []) if c.get("estado") == EstadoPostulacion.ENVIADO.value),
+                "viables_pool": viables,
+                "salario_mensual": oferta.get("salario_mensual"),
+                "salario_zona": None
+                if not ref or ref.get("mediana") is None
+                else {
+                    # Sin el nombre del lugar: la respuesta de la empresa nunca lleva corregimientos (#167).
+                    "mediana": ref["mediana"],
+                    "n": ref.get("n", 0),
+                    "muestra_pequena": int(ref.get("n", 0)) < 3,
+                },
+            }
+        )
+
+    return {
+        "rotulo": "Ilustrativo, datos de la demo",
+        "etiquetas_embudo": dict(_EMBUDO_EMPRESA),
+        "totales": totales,
+        "pendientes": sum(f["pendientes"] for f in filas),
+        "vacantes": filas,
     }
 
 

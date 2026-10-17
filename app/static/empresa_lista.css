@@ -526,3 +526,117 @@ textarea:focus-visible {
     transition: background-color 0.15s ease, border-color 0.15s ease;
   }
 }
+
+/* Mini dashboard de la empresa (#279) */
+.resumen {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radio-l);
+  box-shadow: var(--sombra);
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+.resumen-cabecera {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.resumen-cabecera h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+.rotulo {
+  font-size: 0.8rem;
+  color: var(--text-2);
+}
+.cifras {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+  gap: 0.6rem;
+  margin: 0.9rem 0;
+}
+.cifra {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radio-m, 8px);
+  padding: 0.6rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.cifra strong {
+  font-size: 1.4rem;
+  line-height: 1.1;
+}
+.cifra span {
+  font-size: 0.8rem;
+  color: var(--text-2);
+}
+.cifra.tono-warn {
+  background: var(--warn-soft);
+  border-color: var(--warn);
+}
+.cifra.tono-ok {
+  background: var(--ok-soft);
+  border-color: var(--ok);
+}
+.resumen-vacantes {
+  display: grid;
+  gap: 0.75rem;
+}
+.resumen-vacante {
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+}
+.resumen-vacante header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.resumen-vacante h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+.embudo {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+}
+.embudo li {
+  display: flex;
+  gap: 0.35rem;
+  align-items: baseline;
+  font-size: 0.85rem;
+}
+.pendiente {
+  margin: 0.25rem 0;
+  font-weight: 600;
+  color: var(--warn);
+}
+.aviso-suave {
+  color: var(--warn);
+}
+.etiqueta {
+  font-size: 0.75rem;
+  border-radius: 999px;
+  padding: 0.15rem 0.55rem;
+  border: 1px solid var(--border-strong);
+}
+.etiqueta-activa {
+  background: var(--ok-soft);
+  border-color: var(--ok);
+}
+.etiqueta-cubierta {
+  background: var(--surface-2);
+}
+.etiqueta-bloqueada {
+  background: var(--bad-soft);
+  border-color: var(--bad);
+}
