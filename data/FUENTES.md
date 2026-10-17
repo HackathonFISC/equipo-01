@@ -17,7 +17,6 @@ Este documento distingue explícitamente entre **Dato medido**, **Dato de prueba
 | **Perfiles de jóvenes** | `data/perfiles/*.json`, `tests/fixtures/caso_yaritza.json` | **Dato de prueba (100% sintético)** | Diez perfiles sintéticos de 18 a 29 años, incluida Yaritza, sin datos personales reales (sin cédula, teléfono ni dirección exacta de personas reales). |
 | **Duplicados entre portales** | `data/ofertas_prueba/duplicados.json` | **Dato de prueba (simulado)** | Dos pares de una misma vacante en formatos de portal distintos y un caso negativo (misma cadena, dos sucursales); ver sección 4. |
 | **Ofertas reales ampliadas** | `data/ofertas_ampliadas/*.txt` | **Dato medido (con empresas de prueba)** | 43 anuncios consultados el 2026-10-17 en Computrabajo, Encuentra24, Indeed, LinkedIn, VacantesPanama.com y La Prensa (#223). Sin grabaciones todavía: fuera del catálogo y de `puente.cargar`; ver sección 7. |
-| **Volantes de ferias de empleo** | `data/volantes/*` | **Dato medido (imagen de terceros, anonimizada)** | 5 volantes reales descargados el 2026-10-17, con caras pixeladas y números de contacto tapados (#223); ver sección 7. |
 | **CVs de jóvenes** | `data/cvs/` | **Dato de prueba (100% sintético)** | 10 CVs inventados en formatos de Panamá (texto, WhatsApp, formulario, PDF) con su perfil esperado al lado (#223); ver sección 7. |
 | **Umbrales y simetría de traslado** | `ConfigSolver` (`max_minutos_traslado=60`, `max_porcentaje_salario_pasaje=0.15`, `dias_laborables=22`) | **Supuesto del equipo** | Parámetros configurables: (1) tope de **60 minutos** por trayecto para evitar deserción temprana por fatiga de traslado; (2) tope del **15 % del salario mensual** destinado a transporte público; (3) **22 días laborables al mes por defecto**, equivalentes a `44 × pasaje_ida_usd` para ida y vuelta; (4) **supuesto de simetría**: se asume que ida y vuelta tienen duración y tarifa equivalentes en hora pico. Los días laborables se pueden cambiar mediante `dias_laborables` (alias `dias_laborables_mes`); no son una medición de campo. |
 
@@ -107,11 +106,11 @@ Sin un corregimiento con traslado medido, el Matching no puede comprobar el tope
 
 La matriz de traslados, la tabla de alias y el catálogo de cursos vienen del [issue #51](https://github.com/HackathonFISC/equipo-01/issues/51) (secciones 1 y 2); los cupos y horarios del INADEH son datos de prueba rotulados como tales, según la decisión del 16 de octubre ([#41](https://github.com/HackathonFISC/equipo-01/issues/41)). Las ofertas, los perfiles, los duplicados de prueba y las 42 habilidades de tareas vienen del [issue #3](https://github.com/HackathonFISC/equipo-01/issues/3). Las fotos de volantes del plan inicial no se incluyeron en #3 por falta de material autorizado; #223 añade cinco volantes de ferias, anonimizados, como muestra de prueba (sección 7).
 
-## 7. Ampliación de la muestra (#223): 43 ofertas, 5 volantes y 10 CVs
+## 7. Ampliación de la muestra (#223): 43 ofertas y 10 CVs
 
 Consulta del **2026-10-17**. Esta ampliación **no entra en la demo**: las carpetas nuevas quedan fuera de `data/ofertas/` y `data/perfiles/` a propósito.
 
-- **Ofertas y volantes.** Mercado los lee con el LLM, y todavía no tienen grabación para el modo `reproducir`. En `data/ofertas/` aparecerían en el catálogo del tablero y en `puente.cargar`, y fallarían sin red. Para sumarlos:
+- **Ofertas.** Mercado las lee con el LLM, y todavía no tienen grabación para el modo `reproducir`. En `data/ofertas/` aparecerían en el catálogo del tablero y en `puente.cargar`, y fallarían sin red. Para sumarlas:
   1. Copia los archivos a `data/ofertas/`.
   2. Corre `LLM_MODO=grabar uv run python -m puente.cargar`.
   3. Sube las grabaciones nuevas en el mismo PR.
@@ -121,7 +120,7 @@ Consulta del **2026-10-17**. Esta ampliación **no entra en la demo**: las carpe
 
 ### 7.1 Ofertas reales: `data/ofertas_ampliadas/` (43 fichas)
 
-Las 43 fichas usan el formato de la sección 3, con empresa de prueba («Empresa U» a «Empresa BK») y resumen propio de tareas. El puesto, la zona, el salario, el horario y los requisitos se copian como se publicaron. Los nombres reales de las empresas solo se ven al abrir la URL.
+Las 43 fichas usan el formato de la sección 3, con empresa de prueba («Empresa U» a «Empresa BK») y resumen propio de tareas. El puesto, la zona, el salario, el horario y los requisitos se copian como se publicaron. Los nombres reales de las empresas no se copiaron a las fichas, pero algunas URL de la tabla los llevan (E01, LI01 y PR01).
 
 En los avisos de particulares no se guardó la calle ni el número de casa (E03 y E05). Tampoco se copiaron nombres de reclutadores, teléfonos, correos ni enlaces de WhatsApp.
 
@@ -201,23 +200,9 @@ En los avisos de particulares no se guardó la calle ni el número de casa (E03 
 | VP07 | VacantesPanama.com (anuncios recopilados de redes y WhatsApp) | Cajera | No indicado | [Enlace](https://www.vacantespanama.com/panama/cajeros/) | 2026-10-17 |
 | PR01 | La Prensa (nota que transcribe la convocatoria) | Operadoras profesionales de bus / Personal de mantenimiento femenino | Calidonia (Zona Paga 5 de Mayo) | [Enlace](https://www.prensa.com/economia/mibus-abre-convocatoria-de-empleo-para-operadoras-y-personal-de-mantenimiento-femenino/) | 2026-10-17 |
 
-### 7.2 Volantes reales: `data/volantes/` (5 imágenes)
+### 7.2 Volantes de ferias
 
-Los volantes son de ferias de empleo de cadenas panameñas y se descargaron de VacantesPanama.com, que los recopila de redes. Las marcas y los diseños son de sus empresas, y el equipo no tiene autorización para redistribuirlos. Por eso se usan solo como muestra de prueba para la lectura de imágenes de Mercado.
-
-Antes de guardarlos, el equipo:
-- pixeló las caras de las fotos (V01, V04 y V05);
-- tapó con un rótulo los dos números de contacto de V05, que podrían ser celulares personales.
-
-El teléfono de la central y el correo de reclutamiento de V02 son corporativos y se dejaron. Ninguno de los cinco trae frases de la Ley 11. Los avisos de redes que sí las traen solo existían como texto y están en VP01 a VP07. Los volantes de negocios pequeños tampoco se encontraron como imagen. El detalle de cada uno está en `data/volantes/README.md`.
-
-| ID | Volante | Página de la imagen | Consulta |
-| --- | --- | --- | --- |
-| V01 | Feria Grupo Rey, 20-mar-2026 | [Página](https://www.vacantespanama.com/ferias/feria-empleo-grupo-rey/) | 2026-10-17 |
-| V02 | Feria Super 99, 26-jun-2025 | [Página](https://www.vacantespanama.com/ferias/feria-empleo-super99/) | 2026-10-17 |
-| V03 | Feria Burger King, 7-nov-2025 | [Página](https://www.vacantespanama.com/ferias/feria-empleo-burger-king/) | 2026-10-17 |
-| V04 | Feria Xiaomi Store, 24-abr-2026 | [Página](https://www.vacantespanama.com/ferias/feria-empleo-xiaomi/) | 2026-10-17 |
-| V05 | Feria Riba Smith, 3 y 4-sep-2026 | [Página](https://www.vacantespanama.com/ferias/feria-empleo-riba-smith/) | 2026-10-17 |
+Los volantes de ferias quedan fuera del repo por derechos de las marcas; ver #223.
 
 ### 7.3 CVs sintéticos: `data/cvs/` (10 CVs y su perfil esperado)
 
