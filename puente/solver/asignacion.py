@@ -580,6 +580,10 @@ def evaluar_factibilidad_par(
         cubiertas = [s for s in skills_oferta if s in skills_perfil]
         brechas = [s for s in skills_oferta if s not in skills_perfil]
         cobertura = len(cubiertas) / len(skills_oferta)
+        if not cubiertas:
+            motivos.append(
+                f"ninguna habilidad requerida en común (brechas: {', '.join(brechas)})"
+            )
     else:
         cubiertas = []
         brechas = []

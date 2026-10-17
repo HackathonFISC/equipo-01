@@ -75,12 +75,16 @@ def _valores(grafo, config):
 
 
 def test_la_empresa_rechazo_a_yaritza_y_el_orientador_aprueba_la_lista_nueva(ruta_cp, caso):
+    from puente.schemas import HabilidadPerfil
+
     thread, estado = caso
+    maria = next(p for p in estado["perfiles"] if p.id == "maria")
+    maria.habilidades.append(HabilidadPerfil(skill_id="atencion_cliente", evidencia="atendía a las personas en eventos"))
     estado["config_solver"] = {"max_candidatos_por_vacante": 2}
     grafo = _grafo_real(ruta_cp, estado)
     config = config_caso(thread)
     grafo.invoke(estado, config)
-    assert _candidatos(grafo, config) == ["carlos", "yaritza"]  # cajero, k=2: María queda fuera
+    assert _candidatos(grafo, config) == ["carlos", "yaritza"]  # cajero, k=2: María (50 pts) queda fuera
     _aprobar(grafo, config)
     _aprobar(grafo, config)  # cocina
     assert aprobacion_pendiente(grafo, config) is None
@@ -323,3 +327,20 @@ def test_demo_por_consola_con_vacante_cubierta_mientras_espera(tmp_path, capsys)
     assert "Evento de la empresa · cubierta · " + COCINA in salida
     assert "Flujo terminado." in salida
     assert final["vacantes_cubiertas"] == [COCINA]
+
+
+def test_el_no_del_joven_manda_sobre_la_confirmacion_del_orientador(ruta_cp, caso):
+    """Si el joven dijo que no (consentimientos con otorgado=False), aprobar no lo marca `consentido`."""
+    thread, estado = caso
+    estado["consentimientos"] = [
+        {"perfil_id": "yaritza", "oferta_id": CAJERO, "otorgado": True, "medio": "joven"},
+        {"perfil_id": "yaritza", "oferta_id": CAJERO, "otorgado": False, "medio": "joven"},
+    ]
+    grafo = _grafo(ruta_cp)
+    config = config_caso(thread)
+    grafo.invoke(estado, config)
+    assert aprobacion_pendiente(grafo, config)["oferta_id"] == CAJERO
+    _aprobar(grafo, config)
+    postulaciones = _valores(grafo, config).get("postulaciones") or {}
+    assert clave_postulacion("yaritza", CAJERO) not in postulaciones
+    assert postulaciones.get(clave_postulacion("carlos", CAJERO)) == EstadoPostulacion.CONSENTIDO
