@@ -1,8 +1,8 @@
 # Resultados de los evals de Puente
 
-Generado por `uv run python -m evals.run` el 2026-10-16 23:06 (hora de Panamá, UTC-5). No lo edites a mano: se regenera en cada corrida.
+Generado por `uv run python -m evals.run` el 2026-10-16 23:10 (hora de Panamá, UTC-5). No lo edites a mano: se regenera en cada corrida.
 
-Estados: 23 ok · 0 fallo · 0 pendiente · 9 omitido (de 32 casos).
+Estados: 24 ok · 0 fallo · 0 pendiente · 9 omitido (de 33 casos).
 
 **Esta corrida no mide todo el sistema:** 9 casos con LLM omitidos (sin grabación); no se miden hasta grabar sus respuestas con `LLM_MODO=grabar` y la clave del LLM (ver evals/grabaciones/README.md). Una categoría sin medir no es una categoría aprobada.
 
@@ -17,7 +17,7 @@ LLM de esta corrida: `puente.llm` en modo reproducir, con las grabaciones de `ev
 | Categoría | Casos | Ejecutados | Aciertos | Tasa | Métrica | Meta | Cumple |
 | --- | ---: | ---: | ---: | ---: | --- | ---: | --- |
 | extraccion_ofertas | 5 | 0 | — | — | Fracción de corridas en que los campos esperados salen todos correctos (puesto, empresa, corregimiento, salario_mensual, habilidades) | 80 % | sin medir |
-| requisitos_discriminatorios | 10 | 10 | 10/10 | 100 % | Bloqueada, regla (art. 1 / art. 2) y alertas iguales a lo esperado | 100 % | sí |
+| requisitos_discriminatorios | 11 | 11 | 11/11 | 100 % | Bloqueada, regla (art. 1 / art. 2) y alertas iguales a lo esperado | 100 % | sí |
 | perfil_sin_cv | 4 | 0 | — | — | Habilidades esperadas encontradas con evidencia literal y 0 habilidades sin evidencia | 75 % | sin medir |
 | matching_factible | 3 | 3 | 3/3 | 100 % | Asignación igual a la calculada a mano y 0 violaciones duras | 100 % | sí |
 | sesgo_contrafactual | 3 | 3 | 3/3 | 100 % | sesgo_detectado igual a lo esperado | 100 % | sí |
@@ -42,6 +42,7 @@ LLM de esta corrida: `puente.llm` en modo reproducir, con las grabaciones de `ev
 | DIS-08 | requisitos_discriminatorios | ok | 1/1 | cumple lo esperado |
 | DIS-09 | requisitos_discriminatorios | ok | 1/1 | cumple lo esperado |
 | DIS-10 | requisitos_discriminatorios | ok | 1/1 | cumple lo esperado |
+| DIS-11 | requisitos_discriminatorios | ok | 1/1 | cumple lo esperado |
 | PER-01 | perfil_sin_cv | omitido | 0/0 | omitido (sin grabación) |
 | PER-02 | perfil_sin_cv | omitido | 0/0 | omitido (sin grabación) |
 | PER-03 | perfil_sin_cv | omitido | 0/0 | omitido (sin grabación) |

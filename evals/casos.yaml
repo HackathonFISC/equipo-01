@@ -339,6 +339,19 @@ casos:
     datos_sinteticos: true
     fallos: []
 
+  - id: DIS-11
+    categoria: requisitos_discriminatorios
+    descripcion: "Límite de edad 'menor de 28 años' bloquea la oferta por el artículo 2."
+    entrada:
+      texto: "Empresa Ficticia busca asistente menor de 28 años en Arraiján."
+    esperado:
+      bloqueada: true
+      reglas: ["art. 2"]
+      alertas: []
+    escrito_el: "2026-10-16"
+    datos_sinteticos: true
+    fallos: []
+
   - id: PER-01
     categoria: perfil_sin_cv
     descripcion: "Yaritza (ficticia), 20 años, La Chorrera, atiende la fonda de su mamá; sin CV."
