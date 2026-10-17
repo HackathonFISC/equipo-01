@@ -266,6 +266,26 @@ casos:
     fallos: []
 
   # ------------------------------------------------------------------ Perfil sin CV (4)
+  - id: DIS-07
+    categoria: requisitos_discriminatorios
+    descripcion: "«Se prefiere soltera, sin hijos» en un puesto con nombre neutro. Según la política del equipo (AGENTS.md): estado civil e hijos solo alertan, y «soltera» es una preferencia de sexo implícita, que alerta como «cajera»; no bloquea. Decidido por Jesus el 2026-10-16; pendiente de revisión legal."
+    entrada:
+      texto: |
+        Asistente de tienda para local en Calidonia. Se prefiere soltera, sin hijos.
+        Salario $500 mensual. Turno de 8 a 4. Atención al cliente y reposición de productos.
+    esperado:
+      bloqueada: false
+      reglas: []
+      alertas: [estado_civil, sexo_implicito]
+    escrito_el: "2026-10-16"
+    datos_sinteticos: true
+    fallos:
+      - fecha: "2026-10-16"
+        observado: "bloqueada false y alertas [estado_civil]: falta sexo_implicito por «soltera»"
+        cambio_hecho: "pendiente: que «soltera» dé sexo_implicito en puente/rules/discriminacion.py (#117)"
+        issue: "#117"
+        nueva_ejecucion: "pendiente"
+
   - id: PER-01
     categoria: perfil_sin_cv
     descripcion: "Yaritza (ficticia), 20 años, La Chorrera, atiende la fonda de su mamá; sin CV."

@@ -58,7 +58,12 @@ AUDITOR_AUDITAR = ("puente.agents.auditor", "auditar_lista_corta", 8)
 
 # Reglas de discriminación -> artículo de la Ley 11 de 2005 (solo las que bloquean) o alerta (las que no).
 ARTICULO_POR_REGLA = {"edad": "art. 2", "sexo": "art. 1"}
-ALERTA_POR_REGLA = {"buena_presencia": "presencia", "foto": "foto", "estado_civil": "estado_civil"}
+ALERTA_POR_REGLA = {
+    "buena_presencia": "presencia",
+    "foto": "foto",
+    "estado_civil": "estado_civil",
+    "sexo_implicito": "sexo_implicito",  # preferencia de sexo implícita ("cajera", "soltera"): alerta, no bloquea
+}
 
 ESTADOS = ("ok", "fallo", "pendiente", "omitido")
 
@@ -276,6 +281,8 @@ def _alertas_normalizadas(items: Any) -> list[str]:
             conocidas.add("foto")
         if "civil" in texto:
             conocidas.add("estado_civil")
+        if "implicit" in texto:
+            conocidas.add("sexo_implicito")
         if conocidas:
             tokens |= conocidas
         elif not _regla_normalizada(texto) and texto:
@@ -794,7 +801,12 @@ def _porcentaje(fraccion: float) -> str:
 
 
 def tabla(resultados: list[ResultadoCaso], casos: dict) -> str:
-    """Tabla markdown por categoría: casos, ejecutados, aciertos, tasa, métrica, meta y si cumple."""
+    """Tabla markdown por categoría: casos, ejecutados, aciertos, tasa, métrica, meta y si cumple.
+
+    "Cumple" se decide con los casos medidos (ok o fallo). Si se midieron todos: "sí" o "no" según la meta. Si
+    algún caso quedó pendiente u omitido: "parcial" si lo medido alcanza la meta y "no (parcial)" si no la
+    alcanza; ninguno de los dos aprueba la categoría. "sin medir" si no se midió ninguno.
+    """
     filas = [
         "| Categoría | Casos | Ejecutados | Aciertos | Tasa | Métrica | Meta | Cumple |",
         "| --- | ---: | ---: | ---: | ---: | --- | ---: | --- |",
@@ -807,7 +819,11 @@ def tabla(resultados: list[ResultadoCaso], casos: dict) -> str:
         corridas = sum(r.corridas for r in medidos)
         if corridas:
             tasa = aciertos / corridas
-            cumple = "sí" if tasa >= float(info["meta"]) else "no"
+            alcanza = tasa >= float(info["meta"])
+            if len(medidos) == total:
+                cumple = "sí" if alcanza else "no"
+            else:
+                cumple = "parcial" if alcanza else "no (parcial)"
             celdas = (f"{aciertos}/{corridas}", _porcentaje(tasa))
         else:
             cumple, celdas = "sin medir", ("—", "—")
