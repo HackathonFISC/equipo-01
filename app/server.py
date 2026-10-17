@@ -30,7 +30,7 @@ from starlette.staticfiles import StaticFiles
 
 from puente.agents.auditor import nodo_auditor
 from puente.agents.formacion import nodo_formacion
-from puente.agents.postulacion import postular
+from puente.agents.postulacion import consentimiento_otorgado, consentimientos_para, postular
 from puente.graph import (
     aprobacion_pendiente,
     config_caso,
@@ -392,10 +392,16 @@ def recalcular_pipeline_tablero(
         pares_aprob = {
             (a["perfil_id"], a["oferta_id"]) for a in (aprobacion.get("aprobados") or [])
         }
+        # Los consentimientos del grafo (el «no» del joven manda, #54) más el que confirmó el
+        # orientador en el tablero para cada aprobado sin registro propio (#12, Ley 81 de 2019).
+        consentimientos = consentimientos_para(
+            sorted(pares_aprob), estado_g.get("consentimientos"), str(aprobacion.get("timestamp") or "")
+        )
         matches_aprob = [
             m
             for m in (estado_g.get("lista_corta") or [])
             if (m.perfil_id, m.oferta_id) in pares_aprob
+            and consentimiento_otorgado(consentimientos, (m.perfil_id, m.oferta_id))
         ]
         if not matches_aprob:
             return {}
@@ -419,13 +425,7 @@ def recalcular_pipeline_tablero(
                 aprobacion=aprobacion,
                 conn=conn,
                 outbox=RUTA_OUTBOX,
-                # nodo_aprobacion solo deja en `aprobados` a los consentidos: el consentimiento lo
-                # confirmó el orientador en el tablero (#12, Ley 81 de 2019).
-                consentimientos=[
-                    {"perfil_id": pid, "oferta_id": oid, "otorgado": True, "medio": "orientador",
-                     "timestamp": aprobacion.get("timestamp")}
-                    for pid, oid in pares_aprob
-                ],
+                consentimientos=consentimientos,
             )
         finally:
             conn.close()
@@ -1165,6 +1165,12 @@ def procesar_accion_orientador(
                 brechas=match_activo["brechas"],
                 explicacion=match_activo["explicacion"],
             )
+            # Los del grafo primero: si ahí el joven dijo «no», manda sobre el check del tablero (#54).
+            previos = [
+                *((grafo.get_state(cfg_grafo).values.get("consentimientos") or []) if grafo is not None and cfg_grafo is not None else []),
+                *(estado.get("consentimientos") or []),
+            ]
+            consentimientos = consentimientos_para([(req.perfil_id, req.oferta_id)], previos, ahora)
             RUTA_OUTBOX.mkdir(parents=True, exist_ok=True)
             conn = _conectar_db_estado(estado)
             try:
@@ -1179,7 +1185,11 @@ def procesar_accion_orientador(
                     },
                     conn=conn,
                     outbox=RUTA_OUTBOX,
+                    consentimientos=consentimientos,
                 )
+            except ValueError as error:
+                # Sin consentimiento, oferta bloqueada o datos incompletos: error claro, nunca un 500.
+                raise ErrorValidacionTablero(f"No se envió nada a la empresa: {error}") from error
             finally:
                 conn.close()
             archivos_generados = [arch.name for arch in res_post.archivos]

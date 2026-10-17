@@ -104,6 +104,32 @@ def _consentimiento_otorgado(
     return next((c for c in propios if _leer(c, "otorgado") is True), None)
 
 
+def consentimiento_otorgado(consentimientos: list[dict] | None, par: tuple[str, str]) -> bool:
+    """True si la pareja tiene un consentimiento otorgado y ningún «no» explícito."""
+    return _consentimiento_otorgado(consentimientos, par) is not None
+
+
+def consentimientos_para(
+    pares, previos: list | None, timestamp: str, medio: str = MEDIO_POR_DEFECTO
+) -> list[dict]:
+    """Los consentimientos que trae el estado más uno del orientador por pareja aprobada sin registro propio.
+
+    El orientador confirma en la aprobación que el joven consintió (``consentidos`` de
+    ``nodo_aprobacion``, o el check del tablero). Un ``otorgado=False`` que ya traiga el estado
+    (el «no» del joven, #52 y #54) se conserva y manda: ``postular`` no envía esa pareja.
+    """
+    consentimientos = [c if isinstance(c, dict) else dict(c) for c in previos or []]
+    conocidos = {_par(c) for c in consentimientos}
+    for par in pares:
+        par = _par(par) if not isinstance(par, tuple) else par
+        if par not in conocidos:
+            consentimientos.append(
+                {"perfil_id": par[0], "oferta_id": par[1], "otorgado": True, "medio": medio, "timestamp": timestamp}
+            )
+            conocidos.add(par)
+    return consentimientos
+
+
 def _leer(objeto, nombre: str):
     return objeto.get(nombre) if isinstance(objeto, dict) else getattr(objeto, nombre, None)
 
@@ -558,18 +584,7 @@ def _ejecutar_nodo(
         anotar(entrada, "no se envió nada", "El estado no trae una aprobación con candidatos")
         return cambios(previos)
 
-    # Consentimientos: los que ya trae el estado (por ejemplo del joven) más uno del
-    # orientador por cada aprobado sin entrada propia. Un otorgado=False explícito manda.
-    marca = str(aprobacion.get("timestamp") or "")
-    consentimientos = list(previos)
-    conocidos = {_par(c) for c in previos}
-    for par in pares:
-        if par not in conocidos:
-            consentimientos.append(
-                {"perfil_id": par[0], "oferta_id": par[1], "otorgado": True,
-                 "medio": MEDIO_POR_DEFECTO, "timestamp": marca}
-            )
-            conocidos.add(par)
+    consentimientos = consentimientos_para(pares, previos, str(aprobacion.get("timestamp") or ""))
 
     lista_corta = {_par(m): m for m in estado.get("lista_corta") or []}
     matches: list[Match] = []
