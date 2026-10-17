@@ -139,15 +139,34 @@ _EN_PAREJA = re.compile(r"\b(vivo|vive|estoy|est[aá]|estado civil\s*:?)\s+en pa
 # niñas". "mi mamá" o "la fonda de mi mamá" no se tocan: solo cuenta con hijos o pareja detrás.
 _CANTIDAD = r"(?:\d+|un[oa]?|dos|tres|cuatro|cinco)"
 _HIJOS = r"(?:hij[oa]s?|beb[eé]s?|nen[eao]s?)"
+_PAREJA = r"(?:esposo|esposa|marido|pareja|novio|novia)"
 _FAMILIA = re.compile(
-    r"\bunid[oa]\s+(?:con|a)\s+(?:mi|su)\s+(?:pareja|esposo|esposa|marido|novio|novia)\b"
-    r"|\b(?:mi|su)\s+(?:esposo|esposa|marido|pareja|novio|novia)\b"
-    rf"|\b(?:mis?|sus?)\s+{_HIJOS}\b"  # "cuidar a mis hijos", "y mi hija"
+    rf"\bunid[oa]\s+(?:con|a)\s+(?:mi|su)\s+{_PAREJA}\b"
+    rf"|\bmi\s+{_PAREJA}\b"
+    rf"|\bmis?\s+{_HIJOS}\b"  # "cuidar a mis hijos", "y mi hija"
+    # Tercera persona: "su esposo me apoya", "sus hijos". Ver _familia_ajena (#163).
+    rf"|(?P<tercera>\bsu\s+{_PAREJA}\b|\bsus?\s+{_HIJOS}\b)"
     rf"|\b(?:tengo|tiene)\s+(?:{_CANTIDAD}\s+|\w+\s+)?(?:{_HIJOS}|niñ[oa]s)\b"  # "tengo hijos pequeños", "tengo un bebé"
     rf"|\b(?:mam[aá]|madre|pap[aá]|padre)\s+de\s+{_CANTIDAD}\s+(?:hij|niñ|nen)[oa]s?\b"
     r"|\b(?:madre|padre)\s+de\s+familia\b",
     re.IGNORECASE,
 )
+# "Su esposo" o "sus hijos" de otra persona (#163): "atendí a clientes con sus hijos", "familias con
+# sus hijos", "mamás con sus bebés". Se respetan solo si justo antes se nombra a esa otra persona
+# (cliente, familia, mamás...) unida por "con", "junto a" o "acompañado de", y sin posesivo delante
+# ("su familia con sus hijos" sí se ciega: puede ser la del joven). Con "y" se ciega igual: "atiende
+# clientes y sus hijos la esperan" habla de los hijos del joven. Ante la duda se ciega.
+_TERCEROS = (
+    r"(?:client[ea]s?|familias?|comprador(?:a|es|as)?|comensal(?:es)?|pacientes?|usuari[oa]s?"
+    r"|hu[eé]sped(?:es)?|turistas?|visitantes?|pasajer[oa]s?|personas|se[nñ]or(?:a|e)s"
+    r"|mam[aá]s|madres|pap[aá]s|padres)"
+)
+_TERCERO_DELANTE = re.compile(
+    rf"(?:\b(\w+)\s+)?\b{_TERCEROS}(?:\s+\w+)?\s+"
+    r"(?:con|junto\s+(?:a|con)|acompa[nñ]ad[oa]s?\s+(?:de|por))\s+$",
+    re.IGNORECASE,
+)
+_POSESIVOS = {"mi", "mis", "tu", "tus", "su", "sus", "nuestro", "nuestra", "nuestros", "nuestras"}
 _EMBARAZO = re.compile(r"\b(?:embarazad[oa]s?|embarazos?|encinta|gestante)\b", re.IGNORECASE)
 # Edad en palabras, de 18 a 29 (la demo es con jóvenes de 18 a 29), solo seguida de "años" o
 # después de "edad": "dos años de experiencia" no es una edad y no se toca.
@@ -198,6 +217,19 @@ def _patron_literal(texto: str) -> str:
     return "".join(piezas)
 
 
+def _familia_ajena(coincidencia: re.Match[str]) -> bool:
+    """True si "su esposo" o "sus hijos" son de otra persona nombrada justo antes (#163).
+
+    "atendí a clientes con sus hijos" -> True. "su esposo me apoya", "vivo con mi pareja y sus
+    hijos" o "vive con su familia junto a sus hijos" -> False: sin otra persona delante, o con un
+    posesivo que puede ser del joven, se ciega.
+    """
+    if not coincidencia.group("tercera"):
+        return False
+    delante = _TERCERO_DELANTE.search(coincidencia.string, 0, coincidencia.start())
+    return bool(delante) and (delante.group(1) or "").lower() not in _POSESIVOS
+
+
 def cegar(texto: str, perfil: Perfil, *, del_orientador: bool = False, hoy: date | None = None) -> str:
     """Quita de un texto que va a la empresa lo que identifica al joven por lo que no es su trabajo.
 
@@ -212,6 +244,11 @@ def cegar(texto: str, perfil: Perfil, *, del_orientador: bool = False, hoy: date
     experiencia" ni "trabajé 3 años". ``del_orientador=True`` es para el texto libre del
     orientador: quita además "chica", "muchacha" y parecidos, que en la evidencia del joven
     suelen ser otra cosa ("la caja chica"). `hoy` permite fijar la fecha de referencia en pruebas.
+
+    Pareja e hijos se ciegan ("mis hijos", "su esposo", "tengo un bebé"). En la evidencia del joven
+    se conservan "su esposo" y "sus hijos" de otra persona nombrada justo antes ("atendí a clientes
+    con sus hijos", #163). El orientador habla del joven en tercera persona: en su texto se ciegan
+    siempre.
     """
     patrones = []
     if str(perfil.corregimiento or "").strip():
@@ -223,7 +260,11 @@ def cegar(texto: str, perfil: Perfil, *, del_orientador: bool = False, hoy: date
         texto = re.sub(patron, "[dato omitido]", texto, flags=re.IGNORECASE)
     texto = _UNIDO.sub(lambda m: f"{m.group(1)} [dato omitido]", texto)
     texto = _EN_PAREJA.sub(lambda m: f"{m.group(1)} [dato omitido]", texto)
-    terminos = [_NACIMIENTO, _FAMILIA, _ESTADO_CIVIL, _EMBARAZO, _EDAD_EN_PALABRAS, _TERMINOS_GENERO]
+    texto = _NACIMIENTO.sub("[dato omitido]", texto)
+    texto = _FAMILIA.sub(
+        lambda m: m.group() if not del_orientador and _familia_ajena(m) else "[dato omitido]", texto
+    )
+    terminos = [_ESTADO_CIVIL, _EMBARAZO, _EDAD_EN_PALABRAS, _TERMINOS_GENERO]
     if del_orientador:
         terminos.append(_TERMINOS_SEXO_COLOQUIALES)
     for patron in terminos:
