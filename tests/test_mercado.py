@@ -23,6 +23,7 @@ from puente.agents.mercado import (
     procesar_ofertas,
     razon_duplicada,
     similitud,
+    sin_cabecera,
     verificar_horario,
     verificar_salario,
 )
@@ -648,3 +649,110 @@ def test_error_llm_va_a_errores_con_su_causa_sin_colgar_el_nodo(llm_falso):
     assert salida["errores"][0] == "error previo"
     assert len(salida["errores"]) == 3 and all("(refusal)" in e for e in salida["errores"][1:])
     assert [d.salida_resumen for d in salida["decisiones"]] == ["descartada", "descartada"]
+
+
+# ---------------------------------------------------------------- #94: bloqueadas, empresas distintas y cabecera
+
+LIMPIA = {
+    "texto": "Farmacias Ficticias Vida Sana busca Cajero(a) para su sucursal de Vista Alegre. Requisitos: bachiller, "
+             "manejo de caja y trato amable. Horario de lunes a viernes de 08:00 a 16:00. Salario B/. 650 mensuales.",
+    "extraida": {"puesto": "Cajero(a)", "empresa": "Farmacias Ficticias Vida Sana", "corregimiento": "Vista Alegre",
+                 "salario_mensual": 650, "habilidades": ["manejo de caja"],
+                 "requisitos_texto": "bachiller, manejo de caja y trato amable"},
+}
+
+
+def _con(caso, agregado="", **cambios):
+    return {"texto": caso["texto"] + agregado, "extraida": dict(caso["extraida"], **cambios)}
+
+
+@pytest.mark.parametrize("bloqueada_primero", [False, True], ids=["limpia_primero", "bloqueada_primero"])
+def test_94_bloqueada_y_no_bloqueada_no_se_fusionan(bloqueada_primero):
+    bloqueada = _con(LIMPIA, " Solo mujeres de 18 a 25 años.")
+    assert similitud(LIMPIA["texto"], bloqueada["texto"]) >= UMBRAL_SIMILITUD  # 0.93: antes se fusionaban
+    orden = [bloqueada, LIMPIA] if bloqueada_primero else [LIMPIA, bloqueada]
+    # El extractor prueba primero la bloqueada: su texto empieza con el de la limpia.
+    resultado = procesar_ofertas([c["texto"] for c in orden], extraer=ExtractorPorTexto(bloqueada, LIMPIA),
+                                 taxonomia=TAXONOMIA)
+    assert sorted(o.bloqueada for o in resultado.ofertas) == [False, True]  # no se pierde ninguna de las dos
+    assert _fusiones(resultado) == []
+    [aparte] = _aparte(resultado)
+    [con_bloqueo] = [o for o in resultado.ofertas if o.bloqueada]
+    assert f"solo {con_bloqueo.id} está bloqueada" in aparte.razon and "Ley 11" in aparte.razon
+    assert any(a.startswith("bloqueo · sexo") for a in con_bloqueo.alertas)
+    [limpia] = [o for o in resultado.ofertas if not o.bloqueada]
+    assert limpia.alertas == []
+
+
+@pytest.mark.parametrize("con_alerta_primero", [False, True])
+def test_94_al_fusionar_la_que_queda_hereda_las_alertas(con_alerta_primero):
+    presencia = _con(LIMPIA, " Buena presencia.")
+    orden = [presencia, LIMPIA] if con_alerta_primero else [LIMPIA, presencia]
+    resultado = procesar_ofertas([c["texto"] for c in orden], extraer=ExtractorPorTexto(presencia, LIMPIA),
+                                 taxonomia=TAXONOMIA)
+    [oferta] = resultado.ofertas
+    assert oferta.bloqueada is False
+    assert [a.split(" · ")[1] for a in oferta.alertas] == ["buena_presencia"]
+    [fusion] = _fusiones(resultado)
+    assert ("hereda sus alertas" in fusion.razon) is not con_alerta_primero
+
+
+def test_94_misma_plantilla_de_empresas_distintas_no_se_fusiona():
+    otra = {"texto": LIMPIA["texto"].replace("Farmacias Ficticias Vida Sana", "Farmacia Ficticia San Judas"),
+            "extraida": dict(LIMPIA["extraida"], empresa="Farmacia Ficticia San Judas")}
+    assert similitud(LIMPIA["texto"], otra["texto"]) >= 0.95  # mismo corregimiento: antes se fusionaban
+    resultado = procesar_ofertas([LIMPIA["texto"], otra["texto"]], extraer=ExtractorPorTexto(LIMPIA, otra),
+                                 taxonomia=TAXONOMIA)
+    assert len(resultado.ofertas) == 2 and _fusiones(resultado) == []
+    [aparte] = _aparte(resultado)
+    assert "empresas distintas" in aparte.razon
+    assert "«Farmacia Ficticia San Judas» y «Farmacias Ficticias Vida Sana»" in aparte.razon
+
+
+@pytest.mark.parametrize("empresa_b", ["", "Confidencial", "Empresa confidencial", "FARMACIAS FICTICIAS VIDA SANA, S.A."])
+def test_94_empresa_desconocida_o_igual_al_normalizar_si_se_fusiona(empresa_b):
+    b = _con(LIMPIA, " ¡Postúlate!", empresa=empresa_b)
+    resultado = procesar_ofertas([LIMPIA["texto"], b["texto"]], extraer=ExtractorPorTexto(b, LIMPIA), taxonomia=TAXONOMIA)
+    assert len(resultado.ofertas) == 1 and len(_fusiones(resultado)) == 1
+
+
+def _archivo_real(nombre, **extraida):
+    return {"texto": (Path("data/ofertas") / f"{nombre}.txt").read_text(encoding="utf-8-sig"),
+            "extraida": {"puesto": "Mercaderista", **extraida}}
+
+
+def test_94_cabecera_del_archivo_no_cuenta_en_la_similitud():
+    k05, k06 = _archivo_real("K05"), _archivo_real("K06")
+    assert similitud(k05["texto"], k06["texto"]) >= UMBRAL_SIMILITUD  # 0.864 con ID, Fuente, Estado y Nota
+    assert similitud(sin_cabecera(k05["texto"]), sin_cabecera(k06["texto"])) < UMBRAL_SIMILITUD  # 0.794
+    assert sin_cabecera(k05["texto"]).startswith("Puesto: Mercaderista\n")
+    assert "Nota:" not in sin_cabecera(k05["texto"]) and "Fuente:" not in sin_cabecera(k05["texto"])
+
+
+@pytest.mark.parametrize("empresas", [("", ""), ("Empresa S", "Empresa T")], ids=["sin_empresa", "empresas_s_y_t"])
+def test_94_k05_y_k06_reales_quedan_como_dos_aunque_compartan_corregimiento(empresas):
+    """Criterio de #43: el caso negativo queda como 2. Antes se fusionaban por la cabecera o por la plantilla."""
+    k05 = _archivo_real("K05", empresa=empresas[0], corregimiento="Juan Díaz")
+    k06 = _archivo_real("K06", empresa=empresas[1], corregimiento="Juan Díaz")
+    resultado = procesar_ofertas([k05["texto"], k06["texto"]], extraer=ExtractorPorTexto(k05, k06), taxonomia=TAXONOMIA)
+    assert len(resultado.ofertas) == 2 and _fusiones(resultado) == []
+    # Las reglas siguen sobre el texto completo: «Buena presencia» de K06 alerta.
+    assert any("buena_presencia" in a for a in resultado.ofertas[1].alertas)
+
+
+DUPLICADOS_REALES = json.loads(Path("data/ofertas_prueba/duplicados.json").read_text(encoding="utf-8"))
+
+
+def _de_prueba(caso):
+    return {"texto": caso["texto"], "extraida": {k: caso[k] for k in ("puesto", "empresa", "corregimiento")}}
+
+
+@pytest.mark.parametrize(
+    "par, ofertas",
+    [*((p, 1) for p in DUPLICADOS_REALES["pares_duplicados"]), (DUPLICADOS_REALES["par_distinto"], 2)],
+    ids=lambda v: v["nombre"] if isinstance(v, dict) else str(v),
+)
+def test_94_pares_de_prueba_de_data(par, ofertas):
+    a, b = _de_prueba(par["a"]), _de_prueba(par["b"])
+    resultado = procesar_ofertas([a["texto"], b["texto"]], extraer=ExtractorPorTexto(a, b), taxonomia=TAXONOMIA)
+    assert len(resultado.ofertas) == ofertas
