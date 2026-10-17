@@ -60,6 +60,8 @@ La comparación usa las **20 ofertas reales anonimizadas** de `data/ofertas/` (C
 | **Sus habilidades** | Sin CV, lo que hace en la fonda no aparece en ningún papel. | **3 habilidades con evidencia literal:** atención al cliente («atiendo pedidos»), manejo de caja («cobro en caja») e inventario («cuento los productos que quedan al cerrar»). La oferta propuesta pide atención al cliente. |
 | **Lo que falta** | — | La opción cubre 1 de las 2 habilidades que pide la oferta y su horario no está publicado, así que queda «por confirmar» (puntaje 40). El orientador decide si la aprueba. |
 
+Esta tabla usa `data/perfiles/yaritza.json` (B/. 3,00 de pasaje), igual que el caso de la terminal. En el tablero, el lote de demo de Yaritza trae B/. 5,00, así que ahí Tocumen queda fuera solo por traslado (#234).
+
 Para reproducirlo, sin red ni clave:
 
 ```bash

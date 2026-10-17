@@ -100,9 +100,9 @@ El chat corre sin red con la grabación de #209, verificada en `LLM_MODO=reprodu
 
 1. «Mejor opción»: *Auxiliar de Mostrador e Inventario*, **100 puntos**, traslado 20 min, pasaje $1.50/día (5,2 % del salario), con la fuente del traslado (ATTT + Google Maps Transit). Al lado, La Chorrera con 75.
 2. Despliega «Cómo lo calculó el solver»: 100 de cobertura = 100 puntos.
-3. Despliega «4 ofertas descartadas» (5 si hiciste el opcional del paso 2): Tocumen, traslado 95 min (máximo 60) y pasaje por encima de su presupuesto.
+3. Despliega «4 ofertas descartadas» (5 si hiciste el opcional del paso 2): Tocumen, por traslado de 95 min (máximo 60). En el tablero el lote de demo de Yaritza trae B/. 5,00 de pasaje, así que ahí no queda fuera por pasaje; `yaritza.json` y el caso de la terminal usan B/. 3,00 (#234).
 
-**Se dice:** «El orden lo decide un solver CP-SAT, no el LLM: misma entrada, mismo resultado. La oferta de Tocumen paga hasta un poco más, pero son 95 minutos y más pasaje del que puede pagar: queda fuera, con el motivo escrito. Vista Alegre cubre lo que piden y está a 20 minutos.»
+**Se dice:** «El orden lo decide un solver CP-SAT, no el LLM: misma entrada, mismo resultado. La oferta de Tocumen paga hasta un poco más, pero son 95 minutos de ida: queda fuera, con el motivo escrito. Vista Alegre cubre lo que piden y está a 20 minutos.»
 
 ### 5 · Formación y Auditor (1:45–2:05) · Robustez
 
