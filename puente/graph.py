@@ -1,17 +1,22 @@
 """Grafo LangGraph: guardrails, router, agentes, aprobación del orientador con interrupt() y trazas. Issue #10.
 
 Fase 2: los nodos son los agentes reales de main (Mercado #5/#43, Perfil #6/#44, Matching
-con el solver CP-SAT #4, Auditor v2 #50 y Formación #14). Postulación sigue como stub
-hasta #12. Los stubs de la Fase 1 quedan en `NODOS_FASE_1` para probar la mecánica del grafo.
+con el solver CP-SAT #4, Auditor v2 #50, Formación #14 y Postulación #7/#12, PR #84). Los
+stubs de la Fase 1 quedan en `NODOS_FASE_1` para probar la mecánica del grafo.
 El LLM de Mercado y Perfil es inyectable (`nodos_fase_2`); por defecto es Claude a través de
 `puente.llm` (#45). Los tests y la demo sin conexión usan respuestas grabadas, nunca la red.
+
+Postulación escribe en SQLite (`PUENTE_DB`, por defecto `puente.db`) y deja el CV ciego, el
+`.ics` y los mensajes en `PUENTE_OUTBOX` (por defecto `outbox/`), ambos relativos al directorio
+de trabajo. Telegram está apagado salvo que se pida (`nodos_fase_2(telegram=True)` o
+`--telegram` en la demo): apagado, ningún envío sale a la red aunque `.env` traiga `TELEGRAM_*`.
 
     START → guardrails ─rechazo→ END
        │        └→ router ─oferta→ mercado ─bloqueada→ alerta_oferta → END
        │             │                └→ matching
        │             ├─perfil→ perfil → matching
        │             ├─consulta→ consulta → END
-       └─evento_empresa→ router ─evento_empresa→ evento_empresa → matching, o aprobacion si no aplica
+       └─evento_empresa→ router ─evento_empresa→ evento_empresa → avisos → matching, o aprobacion si no aplica
     matching ─sin matches→ sin_matches → END
         └→ auditor ─sesgo (una vez)→ matching, o perfil si el sesgo viene de la lectura del perfil
               └→ formacion → aprobacion (interrupt)
@@ -30,14 +35,15 @@ Contrato con el tablero (#11, #49):
 Reacomodo (#54): cuando la empresa rechaza a un candidato postulado, su postulación pasa a
 `no_seleccionado`, la pareja entra a `excluidos` con `origen="empresa"`, la vacante vuelve a
 quedar pendiente y el Matching recalcula; el orientador aprueba la lista corta nueva en el mismo
-interrupt de siempre. Una vacante cubierta sale del Matching (`vacantes_cubiertas`). Los avisos al
-joven y al orientador quedan en `avisos_pendientes`; enviarlos es la Fase 2, con #12/#84. Demo sin red:
+interrupt de siempre. Una vacante cubierta sale del Matching (`vacantes_cubiertas`). Los avisos
+quedan en `avisos_pendientes`; el nodo `avisos` manda en seguida los del joven con `enviar_al_joven`
+de #84 (outbox/ o Telegram) y los saca de ahí; los del orientador quedan para el tablero. Demo sin red:
 
     uv run python -m puente.graph --auto "aprobar,aprobar,empresa_rechaza:yaritza@of-cajero-vista-alegre,aprobar"
 
 LangSmith se activa solo con LANGSMITH_TRACING=true y LANGSMITH_API_KEY en `.env`; cada nodo
 aparece como un run con su nombre (guardrails, router, mercado, perfil, matching, auditor,
-formacion, aprobacion, postulacion, evento_empresa) bajo el run `puente:<thread_id>`.
+formacion, aprobacion, postulacion, evento_empresa, avisos) bajo el run `puente:<thread_id>`.
 """
 
 from __future__ import annotations
@@ -63,6 +69,7 @@ from puente.agents.formacion import nodo_formacion
 from puente.agents.matching import nodo_matching
 from puente.agents.mercado import crear_nodo_mercado, extractor_claude
 from puente.agents.perfil import llm_puente, nodo_perfil
+from puente.agents.postulacion import crear_nodo_postulacion
 from puente.guardrails import (
     RESPUESTA_FUERA_DE_ALCANCE,
     limpiar_entrada,
@@ -83,6 +90,7 @@ from puente.schemas import (
     agregar_decision,
 )
 from puente.solver.asignacion import ConfigSolver
+from puente.tools.telegram import Enviador, enviar_al_joven
 
 Nodo = Callable[[dict], Any]
 
@@ -90,7 +98,7 @@ TIPOS_ENTRADA = ("oferta", "perfil", "consulta", "evento_empresa")
 ACCIONES = ("aprobar", "editar", "quitar", "rechazar")
 EVENTOS_EMPRESA = ("rechaza", "cubierta")
 # Estados en que la pareja ya va (o fue) hacia la empresa: solo sobre ellas puede responder.
-# Con Postulación en stub la pareja se queda en `consentido`; con #84 pasa a `enviado`.
+# La aprobación la deja en `consentido`; Postulación (#84) la pasa a `enviado` (el stub no la mueve).
 ESTADOS_ANTE_EMPRESA = (EstadoPostulacion.CONSENTIDO, EstadoPostulacion.ENVIADO, EstadoPostulacion.ENTREVISTA)
 RESPUESTA_APROBACION = {
     "accion": "aprobar | editar | quitar | rechazar",
@@ -103,6 +111,8 @@ RESPUESTA_APROBACION = {
 }
 CANDIDATOS_POR_VACANTE = 3
 CHECKPOINTS_POR_DEFECTO = "checkpoints.db"
+DB_POR_DEFECTO = "puente.db"
+OUTBOX_POR_DEFECTO = "outbox"
 RAIZ = Path(__file__).resolve().parents[1]
 CASO_YARITZA = RAIZ / "tests" / "fixtures" / "caso_yaritza.json"
 TAXONOMIA_MINI = RAIZ / "tests" / "fixtures" / "taxonomia_mini.csv"
@@ -551,6 +561,11 @@ def stub_postulacion(estado: dict) -> dict:
     }
 
 
+def stub_avisos(estado: dict) -> dict:
+    """STUB del envío de avisos del reacomodo (#54): los deja en `avisos_pendientes` y no envía nada."""
+    return {}
+
+
 def ruta_post_postulacion(estado: dict) -> str:
     return "aprobacion" if vacantes_pendientes(estado) else END
 
@@ -698,23 +713,108 @@ def nodo_auditor_grafo(estado: dict) -> dict:
     return {k: v for k, v in cambios.items() if k not in ("perfiles", "ofertas")}
 
 
+def db_por_entorno() -> Path:
+    """Base SQLite de Postulación: PUENTE_DB o, si falta o está vacía, puente.db en el directorio de trabajo."""
+    return Path(os.getenv("PUENTE_DB") or DB_POR_DEFECTO)
+
+
+def outbox_por_entorno() -> Path:
+    """Carpeta del CV ciego, el .ics y los mensajes: PUENTE_OUTBOX o, si falta, outbox/ en el directorio de trabajo."""
+    return Path(os.getenv("PUENTE_OUTBOX") or OUTBOX_POR_DEFECTO)
+
+
+class TelegramApagado(RuntimeError):
+    """El grafo se armó sin Telegram: el mensaje queda en outbox/."""
+
+
+def sin_telegram(token: str, chat_id: str, texto: str, adjuntos: list[Path]) -> dict:
+    """Transporte de Telegram que nunca sale a la red.
+
+    `puente.tools.telegram` solo lo llama si el entorno trae token y chat; como falla, el mensaje
+    queda en outbox/ con el motivo "fallo al enviar (TelegramApagado)". Así un `.env` con
+    `TELEGRAM_*` no manda mensajes reales desde las pruebas ni desde la demo sin `--telegram`.
+    """
+    raise TelegramApagado("Telegram apagado en este grafo")
+
+
+def crear_nodo_avisos(*, outbox: str | Path | None = None, enviar_joven: Enviador | None = None) -> Nodo:
+    """Nodo `avisos`: manda a cada joven su aviso del reacomodo (#54) y lo saca de `avisos_pendientes`.
+
+    Corre justo después de `evento_empresa`, antes de recalcular. Usa `enviar_al_joven` de #84:
+    Telegram al chat del joven o, si no se puede, `outbox/joven_*.txt`; nunca el chat de la empresa.
+    Cada envío deja una Decision con el canal. Los avisos para el orientador se quedan en
+    `avisos_pendientes`, porque no hay canal hacia el orientador: los muestra el tablero. También se
+    queda un aviso que ni Telegram ni el respaldo pudieron dejar, para reintentarlo.
+    """
+    carpeta = Path(outbox) if outbox is not None else outbox_por_entorno()
+
+    def avisos(estado: dict) -> dict:
+        pendientes = list(estado.get("avisos_pendientes") or [])
+        if not any(a.get("para") == "joven" for a in pendientes):
+            return {}
+        quedan: list[dict[str, Any]] = []
+        acumulado = {"decisiones": list(estado.get("decisiones") or [])}
+        for aviso in pendientes:
+            if aviso.get("para") != "joven":
+                quedan.append(aviso)
+                continue
+            # perfil_id elige el chat propio del joven (TELEGRAM_CHATS_JOVENES, #84) y nombra su outbox/joven_<id>_*.txt
+            envio = enviar_al_joven(
+                aviso["texto"], perfil_id=aviso.get("perfil_id") or "", outbox=carpeta, enviar=enviar_joven
+            )
+            if not envio.ok:
+                quedan.append(aviso)
+            archivo = f", {envio.ruta.name}" if envio.ruta else ""
+            acumulado = _decision(
+                acumulado,
+                "avisos",
+                f"aviso de reacomodo para {aviso.get('perfil_id')}: {aviso.get('tipo')} en {aviso.get('oferta_id')}",
+                f"canal {envio.canal}, ok={envio.ok}{archivo}",
+                envio.detalle,
+            )
+        return {"avisos_pendientes": quedan, **acumulado}
+
+    return avisos
+
+
 def nodos_fase_2(
     *,
     llm_perfil: Callable[[str], str] | None = None,
     extraer_oferta: Callable[[Any], Any] | None = None,
     grabado: bool = False,
     taxonomia: dict[str, dict] | None = None,
+    ruta_db: str | Path | None = None,
+    outbox: str | Path | None = None,
+    telegram: bool = False,
+    enviar: Enviador | None = None,
+    enviar_joven: Enviador | None = None,
 ) -> dict[str, Nodo]:
     """Los agentes reales. Sin `llm_perfil` ni `extraer_oferta` usan Claude a través de `puente.llm`
     (`llm_puente` y `extractor_claude`); `grabado=True` usa la `respuesta_llm` guardada en cada entrada
-    (demo sin conexión). Postulación sigue como stub (#12)."""
+    (demo sin conexión).
+
+    Postulación es el nodo real de #84 (`crear_nodo_postulacion`): escribe en `ruta_db` (por defecto
+    PUENTE_DB o puente.db) y deja el CV ciego, el .ics y los mensajes en `outbox` (por defecto
+    PUENTE_OUTBOX u outbox/). Con `telegram=False`, lo normal, nada sale por Telegram aunque el entorno
+    traiga `TELEGRAM_*`: todo queda en outbox. `telegram=True` deja que `puente.tools.telegram` envíe
+    con el token y los chats del entorno. `enviar` (empresa) y `enviar_joven` inyectan el transporte
+    (en pruebas, un doble) y mandan sobre `telegram`. El nodo `avisos` usa el mismo outbox y transporte.
+    """
+    base = Path(ruta_db) if ruta_db is not None else db_por_entorno()
+    carpeta = Path(outbox) if outbox is not None else outbox_por_entorno()
+    apagado = None if telegram else sin_telegram
+    a_la_empresa = enviar if enviar is not None else apagado
+    al_joven = enviar_joven if enviar_joven is not None else apagado
     return {
         "mercado": crear_nodo_mercado_grafo(extraer_oferta, grabado=grabado, taxonomia=taxonomia),
         "perfil": crear_nodo_perfil_grafo(llm_perfil, grabado=grabado, taxonomia=taxonomia),
         "matching": nodo_matching_grafo,
         "auditor": nodo_auditor_grafo,
         "formacion": nodo_formacion,
-        "postulacion": stub_postulacion,
+        "postulacion": crear_nodo_postulacion(
+            ruta_db=base, outbox=carpeta, enviar=a_la_empresa, enviar_joven=al_joven
+        ),
+        "avisos": crear_nodo_avisos(outbox=carpeta, enviar_joven=al_joven),
     }
 
 
@@ -885,8 +985,7 @@ def aviso_reacomodo(
 ) -> list[dict[str, Any]]:
     """Avisos del reacomodo para cada joven que no siguió y para el orientador. Solo arma el texto; no envía nada.
 
-    TODO(#12/#84): cuando el nodo de Postulación de #84 entre al grafo, el aviso al joven usa su
-    mensaje (`texto_para_joven`) y sale por Telegram u outbox/ desde ese nodo, que vacía `avisos_pendientes`.
+    Los del joven los manda en seguida el nodo `avisos` (`crear_nodo_avisos`), por Telegram u outbox/.
     """
     tipo, oferta_id = evento["tipo"], evento["oferta_id"]
     oferta = _oferta(estado, oferta_id)
@@ -924,6 +1023,7 @@ def nodo_evento_empresa(estado: dict) -> Command:
     Cubierta: la vacante entra a `vacantes_cubiertas` y el Matching no la vuelve a ver; las
     postulaciones que iban hacia ella pasan a `no_seleccionado` (o a `contratado`, si el evento dice
     con quién se cubrió) y el Matching recalcula, porque esos jóvenes quedan libres para otras vacantes.
+    En los dos casos sigue el nodo `avisos`, que avisa a los jóvenes antes de recalcular.
     Cada evento deja una Decision. Uno que no aplica (vacante desconocida, pareja sin postular o
     evento repetido) no cambia nada más: deja un error y vuelve a la aprobación pendiente, si la hay.
     """
@@ -991,7 +1091,7 @@ def nodo_evento_empresa(estado: dict) -> Command:
         postulaciones[clave_postulacion(pid, oferta_id)] = EstadoPostulacion.NO_SELECCIONADO
 
     return Command(
-        goto="matching",
+        goto="avisos",
         update={
             **cambios,
             "evento_empresa": None,
@@ -1054,6 +1154,7 @@ NODOS_FASE_1: dict[str, Nodo] = {
     "auditor": stub_auditor,
     "formacion": stub_formacion,
     "postulacion": stub_postulacion,
+    "avisos": stub_avisos,
 }
 
 
@@ -1062,6 +1163,7 @@ def construir_grafo(nodos: dict[str, Nodo] | None = None, checkpointer: Any = No
 
     `nodos` reemplaza cualquiera de ellos: `nodos_fase_2(grabado=True)` para la demo sin
     conexión, LLM falsos en los tests o `NODOS_FASE_1` para probar solo la mecánica.
+    Por defecto Postulación escribe en PUENTE_DB y PUENTE_OUTBOX, sin Telegram (ver `nodos_fase_2`).
     Sin checkpointer el grafo no puede detenerse en la aprobación; el tablero y la demo
     usan `checkpointer_sqlite()`.
     """
@@ -1079,7 +1181,8 @@ def construir_grafo(nodos: dict[str, Nodo] | None = None, checkpointer: Any = No
     grafo.add_node("formacion", agentes["formacion"])
     grafo.add_node("aprobacion", nodo_aprobacion, destinations=("postulacion", "matching", "aprobacion", END))
     grafo.add_node("postulacion", agentes["postulacion"])
-    grafo.add_node("evento_empresa", nodo_evento_empresa, destinations=("matching", "aprobacion"))
+    grafo.add_node("evento_empresa", nodo_evento_empresa, destinations=("avisos", "aprobacion"))
+    grafo.add_node("avisos", agentes["avisos"])
 
     grafo.add_conditional_edges(START, ruta_inicio, ["guardrails", "router", END])
     grafo.add_conditional_edges("guardrails", ruta_guardrails, ["router", END])
@@ -1094,6 +1197,7 @@ def construir_grafo(nodos: dict[str, Nodo] | None = None, checkpointer: Any = No
         "auditor", ruta_post_auditor, {"matching": "matching", "perfil": "perfil", "continuar": "formacion"}
     )
     grafo.add_edge("formacion", "aprobacion")
+    grafo.add_edge("avisos", "matching")
     grafo.add_conditional_edges("postulacion", ruta_post_postulacion, ["aprobacion", END])
     return grafo.compile(checkpointer=checkpointer)
 
@@ -1220,7 +1324,9 @@ def _evento_automatico(paso: str) -> dict[str, Any] | None:
 
 
 def _aplicar_evento(grafo: Any, config: dict, evento: dict[str, Any], escribir: Callable[[str], None]) -> dict:
-    antes = len(grafo.get_state(config).values.get("avisos_pendientes") or [])
+    valores = grafo.get_state(config).values
+    antes = list(valores.get("avisos_pendientes") or [])
+    decisiones_antes = len(valores.get("decisiones") or [])
     sobre = f"{evento['perfil_id']} en " if evento["perfil_id"] else ""
     escribir(f"\n↺  Evento de la empresa · {evento['tipo']} · {sobre}{evento['oferta_id']}")
     final = evento_empresa(
@@ -1233,8 +1339,12 @@ def _aplicar_evento(grafo: Any, config: dict, evento: dict[str, Any], escribir: 
         orientador="Orientadora Ficticia",
     )
     escribir(f"   {final.get('respuesta')}")
-    for aviso in (final.get("avisos_pendientes") or [])[antes:]:
-        escribir(f"   Aviso pendiente para {aviso['para']}: {aviso['texto']}")
+    for decision in (final.get("decisiones") or [])[decisiones_antes:]:
+        if decision.agente == "avisos":
+            escribir(f"   Aviso enviado · {decision.entrada_resumen} · {decision.salida_resumen}")
+    for aviso in final.get("avisos_pendientes") or []:
+        if aviso not in antes:
+            escribir(f"   Aviso pendiente para {aviso['para']}: {aviso['texto']}")
     return final
 
 
@@ -1256,6 +1366,45 @@ def _mostrar(solicitud: dict[str, Any], escribir: Callable[[str], None]) -> None
     if solicitud["error"]:
         escribir(f"   ⚠ {solicitud['error']}")
     escribir(f"   Mensaje sugerido: {solicitud['mensaje_sugerido']}")
+
+
+def _foto_outbox(outbox: Path) -> dict[str, int]:
+    """{archivo: mtime} del outbox, para saber qué dejó esta corrida (el CV de una pareja se reescribe)."""
+    if not outbox.is_dir():
+        return {}
+    return {p.name: p.stat().st_mtime_ns for p in outbox.iterdir() if p.is_file()}
+
+
+def _mostrar_salidas(
+    final: dict, base: Path, outbox: Path, antes: dict[str, int], telegram: bool, escribir: Callable[[str], None]
+) -> None:
+    """Dónde quedó lo que generó Postulación en esta corrida: la base SQLite y los archivos del outbox."""
+    if telegram:
+        canal = "Telegram activado (--telegram)"
+    else:
+        canal = "Telegram apagado: los envíos quedan en el outbox (--telegram los envía)"
+    escribir(f"\nSalidas · {canal}")
+    escribir(f"   Base SQLite (PUENTE_DB): {base.resolve()}")
+    nuevos = sorted(n for n, marca in _foto_outbox(outbox).items() if antes.get(n) != marca)
+    if nuevos:
+        escribir(f"   Outbox (PUENTE_OUTBOX): {outbox.resolve()} · {len(nuevos)} archivo(s) de esta corrida:")
+        for nombre in nuevos:
+            escribir(f"   - {nombre}")
+        return
+    escribir(f"   Outbox (PUENTE_OUTBOX): {outbox.resolve()} · sin archivos nuevos en esta corrida")
+    if any(d.agente == "postulacion" and d.razon.startswith("Ya postulada") for d in final.get("decisiones") or []):
+        escribir("   Esas postulaciones ya estaban enviadas en esa base; para repetir la demo desde cero usa otra PUENTE_DB.")
+
+
+def _agentes_en_orden(decisiones: list) -> str:
+    """Los agentes de las decisiones en orden, con las repeticiones seguidas juntas: a → b → postulacion ×9."""
+    tramos: list[list] = []
+    for d in decisiones:
+        if tramos and tramos[-1][0] == d.agente:
+            tramos[-1][1] += 1
+        else:
+            tramos.append([d.agente, 1])
+    return " → ".join(agente if n == 1 else f"{agente} ×{n}" for agente, n in tramos)
 
 
 def main(argv: list[str] | None = None, leer: Callable[[str], str] = input, escribir: Callable[[str], None] = print) -> dict:
@@ -1281,6 +1430,14 @@ def main(argv: list[str] | None = None, leer: Callable[[str], str] = input, escr
             "ANTHROPIC_API_KEY en .env vía puente.llm (LLM_MODO=grabar las guarda, LLM_MODO=reproducir las lee sin red)"
         ),
     )
+    parser.add_argument(
+        "--telegram",
+        action="store_true",
+        help=(
+            "envía de verdad por Telegram con TELEGRAM_BOT_TOKEN y los chats de .env; sin esta opción nada sale a la red "
+            "y el CV, el .ics y los mensajes quedan en PUENTE_OUTBOX (por defecto outbox/)"
+        ),
+    )
     args = parser.parse_args(argv)
     # Con la salida redirigida en Windows (cp1252) no existen ⏸, ⚠ ni →: se reemplazan en vez de cortar la demo.
     if hasattr(sys.stdout, "reconfigure"):
@@ -1297,11 +1454,14 @@ def main(argv: list[str] | None = None, leer: Callable[[str], str] = input, escr
     caso_id, estado = cargar_caso(args.caso)
     estado = limpiar_entrada(estado)  # sin cédula, teléfono ni dirección en el checkpoint
     thread_id = args.thread or f"{caso_id}-{datetime.now(UTC):%Y%m%d%H%M%S}"
-    nodos = nodos_fase_2(grabado=args.llm == "grabado")
+    # Después de load_dotenv: PUENTE_DB y PUENTE_OUTBOX pueden venir de .env
+    base, outbox = db_por_entorno(), outbox_por_entorno()
+    nodos = nodos_fase_2(grabado=args.llm == "grabado", ruta_db=base, outbox=outbox, telegram=args.telegram)
     grafo = construir_grafo(nodos=nodos, checkpointer=checkpointer_sqlite(args.checkpoints))
     config = config_caso(thread_id)
     pasos = [p.strip() for p in args.auto.split(",")] if args.auto else None
     escribir(f"Caso {args.demo} · thread_id={thread_id} · LLM {args.llm}")
+    antes = _foto_outbox(outbox)
 
     final = grafo.invoke(estado, config)
     while True:
@@ -1317,6 +1477,7 @@ def main(argv: list[str] | None = None, leer: Callable[[str], str] = input, escr
         if pasos is not None:
             if not pasos:
                 escribir("Sin más decisiones automáticas; el caso queda detenido en la aprobación.")
+                _mostrar_salidas(final, base, outbox, antes, args.telegram, escribir)
                 return final
             respuesta = _respuesta_automatica(pasos.pop(0), solicitud)
             escribir(f"   → {respuesta['accion']}")
@@ -1329,7 +1490,7 @@ def main(argv: list[str] | None = None, leer: Callable[[str], str] = input, escr
         escribir(f"Respuesta: {final['respuesta']}")
     if final.get("aprobacion"):
         escribir(f"Última aprobación: {json.dumps(final['aprobacion'], ensure_ascii=False)}")
-    escribir("Decisiones: " + " → ".join(d.agente for d in final.get("decisiones", [])))
+    escribir("Decisiones: " + _agentes_en_orden(final.get("decisiones", [])))
     # Un agente que falla (por ejemplo, falta una grabación en LLM_MODO=reproducir) no corta el flujo:
     # deja su error en el estado y la demo debe mostrarlo, o el caso parece completo sin serlo.
     errores = final.get("errores") or []
@@ -1345,6 +1506,7 @@ def main(argv: list[str] | None = None, leer: Callable[[str], str] = input, escr
         reproducidas = sum(f["reproducidas"] for f in uso.values())
         costo = sum(f["costo_usd"] for f in uso.values())
         escribir(f"LLM: {llamadas} llamada(s), {reproducidas} reproducida(s), costo estimado US${costo:.4f}")
+    _mostrar_salidas(final, base, outbox, antes, args.telegram, escribir)
     return final
 
 
