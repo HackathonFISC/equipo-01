@@ -141,9 +141,14 @@ function mostrarToast(mensaje, tipo = "ok") {
 }
 
 async function llamarApi(url, cuerpo) {
-  const opciones = cuerpo === undefined
-    ? {}
-    : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(cuerpo) };
+  let opciones = {};
+  if (cuerpo !== undefined) {
+    if (cuerpo instanceof FormData) {
+      opciones = { method: "POST", body: cuerpo };
+    } else {
+      opciones = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(cuerpo) };
+    }
+  }
   try {
     const resp = await fetch(url, opciones);
     const payload = await resp.json();
@@ -1444,6 +1449,117 @@ document.addEventListener("DOMContentLoaded", () => {
           )
         ) {
           mostrarToast("Traslado máximo ajustado a 90 min: OF-TOCUMEN-03 ahora es viable para Yaritza y quedó trazado.");
+        }
+      });
+    });
+  }
+
+  // Previsualización y subida de archivos (Issue #170)
+  function configurarPrevisualizacion(inputId, previewId) {
+    const input = document.getElementById(inputId);
+    const preview = document.getElementById(previewId);
+    if (!input || !preview) return;
+    input.addEventListener("change", () => {
+      const archivo = input.files && input.files[0];
+      if (!archivo) {
+        preview.innerHTML = "";
+        preview.style.display = "none";
+        return;
+      }
+      preview.style.display = "block";
+      const kb = Math.round(archivo.size / 1024);
+      if (archivo.type && archivo.type.startsWith("image/")) {
+        const url = URL.createObjectURL(archivo);
+        preview.innerHTML = `
+          <div style="display:flex;align-items:center;gap:0.75rem;padding:0.5rem;background:var(--color-bg-subtle,#f3f4f6);border-radius:6px;">
+            <img src="${url}" alt="Vista previa" style="max-height:80px;border-radius:4px;border:1px solid #d1d5db;" />
+            <div>
+              <div style="font-weight:600;font-size:0.875rem;">${escaparHtml(archivo.name)}</div>
+              <div style="font-size:0.75rem;color:var(--color-text-muted,#6b7280);">${kb} KB · Imagen / Foto</div>
+            </div>
+          </div>
+        `;
+      } else {
+        preview.innerHTML = `
+          <div style="display:flex;align-items:center;gap:0.75rem;padding:0.5rem;background:var(--color-bg-subtle,#f3f4f6);border-radius:6px;">
+            <div style="font-size:1.5rem;line-height:1;">📄</div>
+            <div>
+              <div style="font-weight:600;font-size:0.875rem;">${escaparHtml(archivo.name)}</div>
+              <div style="font-size:0.75rem;color:var(--color-text-muted,#6b7280);">${kb} KB · Documento PDF</div>
+            </div>
+          </div>
+        `;
+      }
+    });
+  }
+
+  configurarPrevisualizacion("so-archivo", "so-preview");
+  configurarPrevisualizacion("scv-archivo", "scv-preview");
+
+  const formSubirOferta = document.getElementById("form-subir-oferta");
+  if (formSubirOferta) {
+    formSubirOferta.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const input = document.getElementById("so-archivo");
+      if (!input.files || !input.files[0]) {
+        mostrarToast("Selecciona o captura una imagen o PDF primero.", "error");
+        return;
+      }
+      const boton = ev.currentTarget.querySelector("button[type=submit]");
+      const fd = new FormData();
+      fd.append("archivo", input.files[0]);
+      const previas = idsActuales("ofertas");
+      await conBoton(boton, async () => {
+        const res = await llamarApi("/api/ofertas/archivo", fd);
+        if (res && aplicarEstado(res)) {
+          input.value = "";
+          const preview = document.getElementById("so-preview");
+          if (preview) { preview.innerHTML = ""; preview.style.display = "none"; }
+          activarPestana("tab-ofertas-ley11");
+          senalarNuevo("ofertas", previas, "data-oferta");
+          const sub = res.subida && res.subida.oferta;
+          if (sub && sub.bloqueada) {
+            mostrarToast(`Oferta ${sub.id} bloqueada por Ley 11: ${sub.alertas[0]?.frase || "discriminación"}`, "error");
+          } else {
+            mostrarToast(`Oferta extraída con éxito por Mercado: ${sub?.id || "nueva"}`);
+          }
+        }
+      });
+    });
+  }
+
+  const formSubirCV = document.getElementById("form-subir-cv");
+  if (formSubirCV) {
+    formSubirCV.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const input = document.getElementById("scv-archivo");
+      if (!input.files || !input.files[0]) {
+        mostrarToast("Selecciona o captura un PDF o imagen primero.", "error");
+        return;
+      }
+      const boton = ev.currentTarget.querySelector("button[type=submit]");
+      const fd = new FormData();
+      fd.append("archivo", input.files[0]);
+      fd.append("nombre", document.getElementById("scv-nombre").value);
+      fd.append("edad", document.getElementById("scv-edad").value || "21");
+      fd.append("corregimiento", document.getElementById("scv-corregimiento").value || "La Chorrera");
+      fd.append("salario_minimo", document.getElementById("scv-salario").value || "600");
+      fd.append("presupuesto_pasaje_diario", document.getElementById("scv-pasaje").value || "3.0");
+      if (document.getElementById("scv-estudia-noche")?.checked) {
+        fd.append("estudia_noche", "1");
+      }
+      const previos = idsActuales("perfiles");
+      await conBoton(boton, async () => {
+        const res = await llamarApi("/api/perfiles/archivo", fd);
+        if (res && aplicarEstado(res)) {
+          input.value = "";
+          document.getElementById("scv-nombre").value = "";
+          const preview = document.getElementById("scv-preview");
+          if (preview) { preview.innerHTML = ""; preview.style.display = "none"; }
+          activarPestana("tab-lista-corta");
+          senalarNuevo("perfiles", previos, "data-perfil");
+          const sub = res.subida && res.subida.perfil;
+          mostrarToast(`CV procesado sin PII: ${sub?.nombre || "Joven"} (${sub?.habilidades?.length || 0} habilidades extraídas)`);
         }
       });
     });
