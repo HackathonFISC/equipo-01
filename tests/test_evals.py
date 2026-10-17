@@ -199,6 +199,12 @@ def test_cargar_casos_rechaza_archivos_invalidos(tmp_path):
         ("extraccion_ofertas", {"puesto": "Auxiliar administrativo"}, {"puesto": "Auxiliar"}, False),
         ("extraccion_ofertas", {"empresa": "Distribuidora Ficticia Istmo"}, {"empresa": "Istmo"}, False),
         ("extraccion_ofertas", {"puesto": "Auxiliar administrativo"}, {"puesto": "Auxiliar administrativo/a"}, True),
+        # #152: marca de género y sufijo societario no son un error de extracción, en ninguno de los dos lados.
+        ("extraccion_ofertas", {"puesto": "Mesero(a)"}, {"puesto": "Mesero/a"}, True),
+        ("extraccion_ofertas", {"empresa": "Farmacia Ficticia, S.A."}, {"empresa": "Farmacia Ficticia"}, True),
+        ("extraccion_ofertas", {"empresa": "Distribuidora Ficticia"}, {"empresa": "Distribuidora Ficticia, S. de R.L."}, True),
+        ("extraccion_ofertas", {"puesto": "Cajero"}, {"puesto": "Cajera"}, False),
+        ("extraccion_ofertas", {"empresa": "Super Rio Ficticio"}, {"empresa": "Super Rio S.A."}, False),
         ("extraccion_ofertas", {"salario_mensual": 520}, {"salario_mensual": 5000}, False),
         ("extraccion_ofertas", {"habilidades": ["a"]}, {"habilidades": ["a", "b"]}, False),
         ("extraccion_ofertas", {"corregimiento": "Arraiján"}, {"corregimiento": "Arraijan"}, True),
@@ -834,6 +840,16 @@ def test_extraccion_acepta_la_salida_en_dict_y_detecta_un_campo_mal_extraido(cas
     resultados = run.correr(_solo(casos, "EXT-01"), ejecutores={"extraccion_ofertas": ejecutor}, usar_llm=True)
     assert [(r.estado, r.aciertos, r.corridas) for r in resultados] == [("fallo", 0, 3)]
     assert "salario_mensual" in resultados[0].detalle
+
+
+def test_ext01_a_ext04_con_las_grabaciones_de_claude_cumplen_lo_esperado(casos):
+    """#152-#155: la salida grabada de Claude, sin volver a llamarlo, pasa por Mercado y cumple lo esperado."""
+    ids = ("EXT-01", "EXT-02", "EXT-03", "EXT-04")
+    with run._entorno_llm():
+        resultados = run.correr(_solo(casos, *ids), repeticiones=1)
+    assert [(r.id, r.estado) for r in resultados] == [(i, "ok") for i in ids], [r.detalle for r in resultados]
+    ext01 = resultados[0].observado
+    assert ext01["corregimiento"] == "La Chorrera" and ext01["puesto"] == "Cajero/a"  # el puesto no se reescribe
 
 
 def test_extraccion_sin_oferta_valida_es_fallo_con_el_motivo(casos):
