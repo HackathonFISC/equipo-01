@@ -1,0 +1,38 @@
+{
+  "id": "P05",
+  "nombre": "Perfil E (ficticio)",
+  "edad": 23,
+  "corregimiento": "Tocumen",
+  "horario_libre": [
+    {
+      "dias": [
+        "lunes",
+        "martes",
+        "miercoles",
+        "jueves",
+        "viernes"
+      ],
+      "hora_inicio": "08:00",
+      "hora_fin": "17:00"
+    }
+  ],
+  "salario_minimo": 600,
+  "presupuesto_pasaje_diario": 2.0,
+  "experiencia_texto": "Vendí manualidades en ferias vecinales: expliqué productos, registré ventas y cobré en efectivo.",
+  "habilidades": [
+    {
+      "skill_id": "ventas_mostrador",
+      "evidencia": "Vendí manualidades en ferias vecinales"
+    },
+    {
+      "skill_id": "registro_datos",
+      "evidencia": "registré ventas"
+    },
+    {
+      "skill_id": "manejo_caja",
+      "evidencia": "cobré en efectivo"
+    }
+  ],
+  "datos_sinteticos": true,
+  "horario_clases": []
+}
