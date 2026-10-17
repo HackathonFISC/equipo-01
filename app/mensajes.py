@@ -2,13 +2,14 @@
 
 El joven escribe desde /joven, en la tarjeta de una vacante cuya empresa ya recibió su CV; la empresa los lee
 en su vista ciega como «Nuevo mensaje de Candidato N». El texto pasa por ``limpiar_entrada`` (cédula, teléfono,
-dirección) y por el cegado de la lista corta (``cegar_para_empresa``: edad, género, corregimiento, estado civil
+dirección), por ``tapar_contactos`` (correo y @usuario) y por el cegado de la lista corta (``cegar_para_empresa``: edad, género, corregimiento, estado civil
 y nombre) antes de guardarse; la empresa lo identifica con la misma referencia opaca de su lista corta y nunca
 con el ``perfil_id``. No se guarda ningún teléfono del joven. El aviso sale por ``puente/tools/mensajes.py``
 (WhatsApp con Twilio, del #253, o ``outbox/`` si no hay número o credenciales). Nada de esto toca el grafo ni el solver.
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from starlette.concurrency import run_in_threadpool
@@ -22,6 +23,15 @@ from puente.tools import mensajes as entrega
 
 MAX_CARACTERES_MENSAJE = 500
 MAX_BYTES_CUERPO = 4 * 1024
+
+# Contactos que `limpiar_entrada` no cubre y con los que la empresa saltaría la lista ciega: correo y usuario de redes.
+CORREO = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+USUARIO = re.compile(r"(?<![\w.])@\w{2,}")
+
+
+def tapar_contactos(texto: str) -> str:
+    """Cambia correos por «[CORREO]» y usuarios de redes (@usuario) por «[USUARIO]»."""
+    return USUARIO.sub("[USUARIO]", CORREO.sub("[CORREO]", texto))
 
 
 class MensajeNoPermitido(Exception):
@@ -56,7 +66,7 @@ def enviar_mensaje(estado: dict[str, Any], perfil_id: str, oferta_id: str, texto
             "Solo puedes escribirle a una empresa que ya recibió tu CV. Primero tienes que decir que sí en «Mis postulaciones»."
         )
     perfil, _ = empresa._modelos(estado, perfil_id, oferta_id)
-    limpio = empresa.cegar_para_empresa(str(limpiar_entrada(crudo)), perfil).strip()
+    limpio = tapar_contactos(empresa.cegar_para_empresa(str(limpiar_entrada(crudo)), perfil)).strip()
     empresa_id = empresa.id_empresa(oferta.get("empresa", ""))
     ref = empresa._ref(estado, empresa_id, perfil_id, oferta_id)
 

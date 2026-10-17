@@ -84,6 +84,29 @@ def test_el_mensaje_se_limpia_se_ciega_y_la_empresa_lo_ve_como_candidato_n(entor
     assert TELEFONO not in " ".join(str(v) for v in fila.values()) and CEDULA not in " ".join(str(v) for v in fila.values())
 
 
+def test_un_correo_o_un_usuario_de_redes_no_llega_a_la_empresa(entorno) -> None:
+    cliente, estado, tmp_path = entorno
+    _aprobar(cliente, YARITZA, CHORRERA)
+    contactos = "Escríbeme a jperez88@gmail.com o a @yari_chorrera20, o a mi otro correo y.perez+cv@correo.com.pa. Gracias."
+    r = _escribir(cliente, estado, contactos)
+    assert r.status_code == 200, r.text
+    assert r.json()["se_limpio"] is True
+    [mensaje] = _mensajes(cliente, estado)
+    assert mensaje["texto"].count("[CORREO]") == 2 and mensaje["texto"].count("[USUARIO]") == 1
+    avisos = list((tmp_path / "outbox").glob("mensaje_a_empresa_*.txt"))
+    assert len(avisos) == 1
+    for texto in (r.text, mensaje["texto"], avisos[0].read_text(encoding="utf-8")):
+        for dato in ("jperez88", "gmail", "yari_chorrera20", "y.perez", "correo.com.pa"):
+            assert dato not in texto
+    assert "Gracias" in mensaje["texto"]
+
+
+def test_tapar_contactos_no_toca_un_texto_sin_correo_ni_usuario() -> None:
+    assert mensajes_app.tapar_contactos("¿Puedo ir mañana a las 8? Mi CV está listo.") == "¿Puedo ir mañana a las 8? Mi CV está listo."
+    assert mensajes_app.tapar_contactos("Hola @c y a@b") == "Hola @c y a@b"  # ni un @ suelto ni algo que no es correo
+    assert mensajes_app.tapar_contactos("a@b.co, @juan_22") == "[CORREO], [USUARIO]"
+
+
 def test_sin_twilio_el_aviso_queda_en_outbox_con_el_texto_limpio(entorno) -> None:
     cliente, estado, tmp_path = entorno
     _aprobar(cliente, YARITZA, CHORRERA)
