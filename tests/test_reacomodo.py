@@ -75,12 +75,16 @@ def _valores(grafo, config):
 
 
 def test_la_empresa_rechazo_a_yaritza_y_el_orientador_aprueba_la_lista_nueva(ruta_cp, caso):
+    from puente.schemas import HabilidadPerfil
+
     thread, estado = caso
+    maria = next(p for p in estado["perfiles"] if p.id == "maria")
+    maria.habilidades.append(HabilidadPerfil(skill_id="atencion_cliente", evidencia="atendía a las personas en eventos"))
     estado["config_solver"] = {"max_candidatos_por_vacante": 2}
     grafo = _grafo_real(ruta_cp, estado)
     config = config_caso(thread)
     grafo.invoke(estado, config)
-    assert _candidatos(grafo, config) == ["carlos", "yaritza"]  # cajero, k=2: María queda fuera
+    assert _candidatos(grafo, config) == ["carlos", "yaritza"]  # cajero, k=2: María (50 pts) queda fuera
     _aprobar(grafo, config)
     _aprobar(grafo, config)  # cocina
     assert aprobacion_pendiente(grafo, config) is None

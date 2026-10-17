@@ -679,11 +679,19 @@ def nodo_formacion(estado: dict[str, Any]) -> dict[str, Any]:
                 if not pid or not oid or (pid, oid) in pares_procesados:
                     continue
                 eval_par = evaluar_factibilidad_par(p_solver, of, indice_tr, config=cfg)
-                if (
-                    eval_par["viable"]
-                    and float(eval_par.get("cobertura", 0.0)) == 0.0
-                    and eval_par.get("brechas")
-                ):
+                motivos_par = list(eval_par.get("motivos") or [])
+                solo_falta_habilidad = (
+                    float(eval_par.get("cobertura", 0.0)) == 0.0
+                    and bool(eval_par.get("brechas"))
+                    and (
+                        eval_par["viable"]
+                        or (
+                            len(motivos_par) == 1
+                            and "ninguna habilidad requerida en común" in str(motivos_par[0])
+                        )
+                    )
+                )
+                if solo_falta_habilidad:
                     rec = recomendar_cursos_brechas(
                         p,
                         list(eval_par["brechas"]),
