@@ -85,6 +85,7 @@ def entorno(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(srv, "RUTA_OUTBOX", outbox)
     llm = LLMFalso()
     monkeypatch.setattr(srv, "llm_perfil_joven", llm)
+    monkeypatch.setattr(srv, "_envios_perfil", {})  # el límite por minuto empieza en cero en cada prueba
     with TestClient(srv.app) as cliente:
         yield cliente, estado, llm, tmp_path
 
@@ -515,3 +516,17 @@ def test_csrf_media_type_exacto_y_otro_sitio(entorno) -> None:
         headers={**_cred(estado), "Content-Type": "application/json; charset=utf-8", "Sec-Fetch-Site": "same-origin"},
     )
     assert mismo.status_code == 200
+
+
+def test_registro_tiene_tope_de_tamano_y_de_frecuencia(entorno, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Revisión del PR #106: el POST que llama al LLM no queda abierto a cuerpos enormes ni a ráfagas."""
+    cliente, estado, llm, _ = entorno
+    enorme = json.dumps(formulario_yaritza(nombre="x" * (srv.MAX_BYTES_CUERPO_JOVEN + 1)))
+    r = cliente.post("/api/joven/perfil", content=enorme, headers={"Content-Type": "application/json"})
+    assert r.status_code == 413
+    assert llm.prompts == []
+
+    monkeypatch.setattr(srv, "LIMITE_PERFILES_POR_MINUTO", 2)
+    codigos = [cliente.post("/api/joven/perfil", json=formulario_yaritza()).status_code for _ in range(3)]
+    assert codigos == [201, 201, 429]
+    assert len(llm.prompts) == 2  # el tercero no llegó al LLM

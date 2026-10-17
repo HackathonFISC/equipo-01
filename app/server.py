@@ -60,6 +60,7 @@ import csv
 import hmac
 import logging
 import secrets
+import time
 from collections.abc import Callable
 from typing import Annotated
 from urllib.parse import urlsplit
@@ -1815,6 +1816,28 @@ def verificar_token_joven(estado: dict[str, Any], perfil_id: str, token: str | N
         )
 
 
+# El registro llama al LLM: tope de tamaño del cuerpo y de envíos por minuto desde una misma IP.
+MAX_BYTES_CUERPO_JOVEN = 64 * 1024
+LIMITE_PERFILES_POR_MINUTO = 10
+_envios_perfil: dict[str, list[float]] = {}
+
+
+def _cuerpo_demasiado_grande(request: Request, cuerpo: bytes) -> bool:
+    declarado = request.headers.get("content-length", "0")
+    return len(cuerpo) > MAX_BYTES_CUERPO_JOVEN or (declarado.isdigit() and int(declarado) > MAX_BYTES_CUERPO_JOVEN)
+
+
+def _dentro_del_limite(request: Request) -> bool:
+    ip = request.client.host if request.client else "desconocida"
+    ahora = time.monotonic()
+    recientes = [t for t in _envios_perfil.get(ip, []) if ahora - t < 60]
+    dentro = len(recientes) < LIMITE_PERFILES_POR_MINUTO
+    if dentro:
+        recientes.append(ahora)
+    _envios_perfil[ip] = recientes
+    return dentro
+
+
 def _token_de(request: Request, *, permitir_query: bool = False) -> str | None:
     token = request.headers.get(ENCABEZADO_TOKEN_JOVEN)
     if not token and permitir_query:  # el enlace del .ics es un <a href>: no lleva encabezados
@@ -2204,6 +2227,8 @@ async def endpoint_joven_formulario(_request: Request) -> JSONResponse:
 
 
 async def endpoint_joven_perfil(request: Request) -> JSONResponse:
+    if _cuerpo_demasiado_grande(request, await request.body()):
+        return JSONResponse({"detail": "La solicitud es demasiado grande."}, status_code=413)
     datos, err_resp = await _leer_json_validado(request)
     if err_resp is not None or datos is None:
         return err_resp  # type: ignore[return-value]
@@ -2218,6 +2243,11 @@ async def endpoint_joven_perfil(request: Request) -> JSONResponse:
     rechazo = revisar_guardrails_joven(ESTADO_GLOBAL, entrada)
     if rechazo:
         return JSONResponse({"detail": rechazo}, status_code=422)
+    if not _dentro_del_limite(request):  # cuenta solo los envíos que llegarían al LLM
+        return JSONResponse(
+            {"detail": "Recibimos muchas entrevistas seguidas. Espera un minuto y vuelve a intentarlo."},
+            status_code=429,
+        )
 
     taxonomia = cargar_taxonomia_grafo()
     try:
