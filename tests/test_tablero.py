@@ -747,3 +747,40 @@ def test_trazas_honestas_el_tablero_no_firma_por_agentes_que_no_corrieron(
     assert 'tablero: { nombre: "Tablero"' in (raiz / "app.js").read_text(encoding="utf-8")
     assert ".ag-tablero" in (raiz / "styles.css").read_text(encoding="utf-8")
 
+
+def test_api_no_aprueba_si_el_auditor_detecto_sesgo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """El freno del Auditor no está solo en el botón: la API responde 422 con el motivo y sin efectos (#189)."""
+    import app.server as srv
+
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    monkeypatch.setattr(srv, "RUTA_OUTBOX", outbox)
+    aprobar = {
+        "accion": "aprobar",
+        "perfil_id": "PERFIL-YARITZA",
+        "oferta_id": "OF-CHORRERA-01",
+        "consentimiento_joven": True,
+    }
+
+    async def _ejecutar() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            assert (await client.post("/api/reset")).status_code == 200
+            r_sesgo = await client.post("/api/auditor/simular-sesgo", json={"activar": True})
+            assert r_sesgo.json()["auditoria"]["sesgo_detectado"] is True
+            antes = (await client.get("/api/estado")).json()
+
+            r = await client.post("/api/orientador/accion", json=aprobar)
+            assert r.status_code == 422
+            assert "sesgo" in r.json()["detail"].lower()
+
+            despues = (await client.get("/api/estado")).json()
+            assert list(outbox.iterdir()) == []  # ni CV, ni mensaje, ni .ics
+            for clave in ("postulaciones", "consentimientos", "decisiones"):
+                assert despues[clave] == antes[clave], clave
+
+            # Sin sesgo, el mismo pedido vuelve a aprobarse.
+            await client.post("/api/auditor/simular-sesgo", json={"activar": False})
+            assert (await client.post("/api/orientador/accion", json=aprobar)).status_code == 200
+
+    asyncio.run(_ejecutar())

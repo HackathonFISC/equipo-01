@@ -1370,6 +1370,12 @@ def procesar_accion_orientador(
 
     # 4. APROBAR: exige el consentimiento explícito del joven o del orientador, registra Consentimiento + Decision y reanuda el grafo (#49, #124)
     if req.accion == "aprobar":
+        # Con sesgo del Auditor el caso volvió a Matching: la API frena igual que el botón, 422 sin efectos (#189).
+        if (estado.get("auditoria") or {}).get("sesgo_detectado"):
+            raise ErrorValidacionTablero(
+                "El Auditor detectó sesgo en este lote: cambiar el nombre o el género altera el resultado. "
+                "No se puede aprobar hasta que el caso vuelva a pasar el Auditor sin sesgo; no se envió nada."
+            )
         # El «no» del joven en /joven (#52) manda sobre la casilla del orientador: 422 sin efectos.
         if _consentimiento_rechazado_por_joven(estado, req.perfil_id, req.oferta_id):
             raise ErrorValidacionTablero(
