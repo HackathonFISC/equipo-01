@@ -222,6 +222,17 @@ def _norm(texto: Any) -> str:
     return " ".join(_sin_tildes(texto).casefold().split())
 
 
+# Diferencias cosméticas de puesto y empresa que no son un error de extracción (#152): la marca de género
+# («Cajero/a», «Mesero(a)») y el sufijo societario («S.A.», «S. de R.L.», «Inc.», «Corp.»).
+_MARCA_GENERO = re.compile(r"(?<=\w)(?:/(?:as|os|a|o)|\s?\(\s?(?:as|os|a|o)\s?\))(?!\w)")
+_SUFIJO_SOCIETARIO = re.compile(r"(?:[\s,]+(?:s\.?\s?a\.?|s\.?\s?de\s?r\.?\s?l\.?|inc\.?|corp\.?))+\s*$")
+
+
+def _norm_nombre(texto: Any) -> str:
+    """`_norm` sin marca de género ni sufijo societario: «Cajero/a» -> «cajero», «Rio Ficticio S.A.» -> «rio ficticio»."""
+    return _SUFIJO_SOCIETARIO.sub("", _MARCA_GENERO.sub("", _norm(texto))).strip()
+
+
 def _norm_literal(texto: Any) -> str:
     """Minúsculas y espacios colapsados, conservando las tildes (para evidencia literal)."""
     return " ".join(str(texto).casefold().split())
@@ -307,7 +318,7 @@ def _diferencias_extraccion(esperado: dict, observado: dict) -> list[str]:
     malos = []
     for campo in ("puesto", "empresa"):
         if campo in esperado:
-            e, o = _norm(esperado[campo]), _norm(observado.get(campo) or "")
+            e, o = _norm_nombre(esperado[campo]), _norm_nombre(observado.get(campo) or "")
             # Lo esperado debe estar completo en lo observado: una extracción truncada no es un acierto.
             if not e or not o or e not in o:
                 malos.append(campo)
