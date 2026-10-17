@@ -68,12 +68,14 @@ def enviar_por_telegram(token: str, chat_id: str, texto: str, adjuntos: list[Pat
     return resultado
 
 
-def _escribir_outbox(texto: str, adjuntos: list[Path], outbox: Path, motivo: str) -> Path:
+def _escribir_outbox(
+    texto: str, adjuntos: list[Path], outbox: Path, motivo: str, prefijo: str = "mensaje"
+) -> Path:
     outbox = Path(outbox)
     outbox.mkdir(parents=True, exist_ok=True)
     sello = datetime.now(timezone(timedelta(hours=-5))).strftime("%Y%m%d-%H%M%S")
     n = 1
-    while (ruta := outbox / f"mensaje_{sello}_{n}.txt").exists():
+    while (ruta := outbox / f"{prefijo}_{sello}_{n}.txt").exists():
         n += 1
     lineas = [texto]
     if adjuntos:
@@ -115,6 +117,63 @@ def enviar_lista_corta(
                 # Solo el tipo de error: su texto podría traer la URL con el token.
                 motivo = f"fallo al enviar ({type(error).__name__})"
         ruta = _escribir_outbox(texto, adjuntos, outbox, motivo)
+        return ResultadoEnvio("outbox", True, ruta, f"Guardado en outbox: {motivo}")
+    except Exception as error:  # noqa: BLE001 - ni siquiera el respaldo puede lanzar
+        return ResultadoEnvio("outbox", False, None, f"No se pudo escribir el respaldo ({type(error).__name__})")
+
+
+def chat_del_joven(perfil_id: str) -> str | None:
+    """Chat de Telegram de ese joven según TELEGRAM_CHATS_JOVENES, o None.
+
+    El formato es ``perfil_id=chat_id`` separados por comas (por ejemplo
+    ``yaritza=123456``). Es un chat por persona y no hay uno compartido: el mensaje de un
+    joven lleva sus postulaciones y descartes, y no debe llegarle a otro.
+    """
+    for entrada in (os.getenv("TELEGRAM_CHATS_JOVENES") or "").split(","):
+        clave, _, chat = entrada.partition("=")
+        if perfil_id and clave.strip() == perfil_id and chat.strip():
+            return chat.strip()
+    return None
+
+
+def _seguro(texto: str) -> str:
+    """Solo letras, dígitos, guion y guion bajo, para nombres de archivo."""
+    return "".join(c if c.isalnum() or c in "-_" else "-" for c in texto)[:40]
+
+
+def enviar_al_joven(
+    texto: str,
+    adjuntos: list[Path] = (),
+    *,
+    perfil_id: str = "",
+    token: str | None = None,
+    chat_id: str | None = None,
+    outbox: Path = Path("outbox"),
+    enviar: Enviador | None = None,
+) -> ResultadoEnvio:
+    """Manda el mensaje al joven (issue #12); si no se puede, lo deja en ``outbox/joven_<id>_*.txt``.
+
+    Lee TELEGRAM_BOT_TOKEN y el chat de ``perfil_id`` en TELEGRAM_CHATS_JOVENES (ver
+    ``chat_del_joven``) si no se pasan. Un joven sin chat propio va a outbox/: nunca a un chat
+    compartido ni a TELEGRAM_CHAT_ID_EMPRESA. Nunca lanza excepción.
+    """
+    adjuntos = [Path(a) for a in adjuntos]
+    token = token or os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = chat_id or chat_del_joven(perfil_id)
+    prefijo = f"joven_{_seguro(perfil_id)}" if perfil_id else "joven"
+    try:
+        if not token or not chat_id:
+            motivo = "sin token o chat del joven configurado"
+        else:
+            transporte = enviar or enviar_por_telegram
+            try:
+                respuesta = transporte(token, chat_id, texto, adjuntos)
+                if respuesta and respuesta.get("ok"):
+                    return ResultadoEnvio("telegram", True, None, "Enviado por Telegram")
+                motivo = "Telegram no aceptó el mensaje"
+            except Exception as error:  # noqa: BLE001 - el envío nunca debe tumbar el flujo
+                motivo = f"fallo al enviar ({type(error).__name__})"
+        ruta = _escribir_outbox(texto, adjuntos, outbox, motivo, prefijo=prefijo)
         return ResultadoEnvio("outbox", True, ruta, f"Guardado en outbox: {motivo}")
     except Exception as error:  # noqa: BLE001 - ni siquiera el respaldo puede lanzar
         return ResultadoEnvio("outbox", False, None, f"No se pudo escribir el respaldo ({type(error).__name__})")

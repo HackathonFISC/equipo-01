@@ -30,6 +30,7 @@ from puente.agents.perfil import (
     medir_habilidades,
     nodo_perfil,
     pedir_formulario,
+    quitar_cedula_y_telefono,
     quitar_pii,
     tiene_evidencia,
 )
@@ -229,6 +230,17 @@ def test_direccion_sin_etiqueta_deja_solo_corregimiento():
             "Vivo en Calle 5ta, Arraiján. Atiendo la fonda de mi mamá y manejo la caja.",
             "Vivo en Corregimiento: Arraiján. Atiendo la fonda de mi mamá y manejo la caja.",
         ),
+        # #95: el número con "#" va con la calle; "ph", "torre" y "piso" son piezas de la dirección.
+        ("Calle Ficticia #23 frente a la escuela", "[DIRECCION]"),
+        ("vivo en Calle Ficticia #23, Arraiján. Atiendo la fonda", "vivo en Corregimiento: Arraiján. Atiendo la fonda"),
+        ("PH Ficticio torre 2 apto 5B", "[DIRECCION]"),
+        ("vivo en PH Ficticio, torre 2, piso 3, apto 5B, San Francisco", "vivo en Corregimiento: San Francisco"),
+        ("Resido en P.H. Ficticio, Torre B, piso 12, Bella Vista.", "Resido en Corregimiento: Bella Vista."),
+        ("Entrevistas en Edificio Ficticio, piso 2", "Entrevistas en [DIRECCION]"),
+        # #95: tras una coma el nombre suelto cuenta si cierra la frase o le sigue otra pieza.
+        ("Vivo en Arraiján, Los Pinos.", "Vivo en Corregimiento: Arraiján."),
+        ("Vivo en Arraiján, Los Pinos, casa 3", "Vivo en Corregimiento: Arraiján"),
+        ("Vivo en Arraiján, Los Pinos, Panamá Oeste", "Vivo en Corregimiento: Arraiján"),
     ],
 )
 def test_direccion_sin_etiqueta_variantes(texto, esperado):
@@ -249,10 +261,25 @@ def test_direccion_sin_etiqueta_variantes(texto, esperado):
         "vivo en Panamá desde niña",
         "Me gustaría aprender a manejar la caja, pero nunca lo he hecho.",
         "vivo en Burunga, cerca de la fonda de mi mamá donde atiendo clientes",
+        # #95: la palabra que sigue al corregimiento tras una coma es evidencia, no dirección.
+        "Vivo en Arraiján, Excel y Word son mis fuertes",
+        "Vivo en Tocumen, Sé cocinar",
+        "Vivo en La Chorrera, Estudio de noche",
+        "Vivo en Arraiján, Excel, Word y PowerPoint.",
+        "Limpio el piso de la fonda y trapeo 2 pisos.",
+        "Trabajé en un edificio de 3 pisos",
     ],
 )
 def test_direccion_sin_etiqueta_no_borra_de_mas(texto):
     assert quitar_pii(texto) == texto
+
+
+def test_quitar_cedula_y_telefono_no_toca_direcciones():
+    """#95: para las ofertas, la dirección es la de la empresa y se queda."""
+    texto = "Entrevistas en Edificio Ficticio, piso 2, Calle 50. Llamar al 6123-4567 o cédula 8-123-4567."
+    assert quitar_cedula_y_telefono(texto) == (
+        "Entrevistas en Edificio Ficticio, piso 2, Calle 50. Llamar al [TELEFONO] o cédula [CEDULA]."
+    )
 
 
 def test_quitar_pii_dos_veces_da_lo_mismo():

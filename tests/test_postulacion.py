@@ -12,7 +12,7 @@ from puente.tools.telegram import ResultadoEnvio
 
 PANAMA = timezone(timedelta(hours=-5))
 INICIO = datetime(2026, 10, 20, 10, 0, tzinfo=PANAMA)  # SINTÉTICO: fecha de prueba
-ACCIONES = 6  # crear, aprobar, CV, .ics, envío, enviado
+ACCIONES = 7  # crear, aprobar, consentir, CV, .ics, envío, enviado
 
 
 def _perfil(id_="p1", nombre="Yaritza Ficticia"):
@@ -51,6 +51,15 @@ def _aprobacion(aprobados, orientador="Orientadora Ficticia", timestamp="2026-10
     }
 
 
+def _consentimientos(aprobados, otorgado=True, medio="orientador"):
+    """Lo que el joven (o el orientador en su nombre) consiente por cada pareja. SINTÉTICO."""
+    return [
+        {"perfil_id": m.perfil_id, "oferta_id": m.oferta_id, "otorgado": otorgado,
+         "medio": medio, "timestamp": "2026-10-20T09:31:00-05:00"}
+        for m in aprobados
+    ]
+
+
 @pytest.fixture(autouse=True)
 def sin_red_ni_claves(monkeypatch):
     """Ninguna prueba toca el Telegram real aunque el entorno traiga token (.env, shell de la demo)."""
@@ -86,6 +95,7 @@ def enviador():
 def _correr(conn, tmp_path, aprobados=None, **extra):
     aprobados = aprobados if aprobados is not None else [_match()]
     extra.setdefault("aprobacion", _aprobacion(aprobados))
+    extra.setdefault("consentimientos", _consentimientos(aprobados))
     perfiles = {"p1": _perfil(), "p2": _perfil("p2", "Marcos Ficticio")}
     ofertas = {"o1": _oferta(), "o2": _oferta("o2")}
     return postular(aprobados, perfiles, ofertas, conn=conn, outbox=tmp_path / "outbox",
@@ -100,7 +110,9 @@ def test_flujo_match_aprobado(conn, tmp_path, monkeypatch, enviador):
     (pid,) = r.postulaciones
     assert db.obtener_postulacion(conn, pid)["estado"] == "enviado"
     estados = [(h["estado_anterior"], h["estado_nuevo"]) for h in db.historial(conn, pid)]
-    assert estados[1:] == [("preseleccionado", "aprobado"), ("aprobado", "enviado")]
+    assert estados[1:] == [
+        ("preseleccionado", "aprobado"), ("aprobado", "consentido"), ("consentido", "enviado"),
+    ]
 
     (pdf,) = (tmp_path / "outbox").glob("cv_*.pdf")
     assert pdf.read_bytes().startswith(b"%PDF")
@@ -187,7 +199,7 @@ def test_oferta_bloqueada_no_se_postula(conn, tmp_path):
     ofertas = {"o1": _oferta().model_copy(update={"bloqueada": True})}
     with pytest.raises(ValueError):
         postular([_match()], {"p1": _perfil()}, ofertas, aprobacion=_aprobacion([_match()]),
-                 conn=conn, outbox=tmp_path / "outbox")
+                 consentimientos=_consentimientos([_match()]), conn=conn, outbox=tmp_path / "outbox")
     assert conn.execute("SELECT COUNT(*) FROM postulaciones").fetchone()[0] == 0
 
 
@@ -230,22 +242,26 @@ def test_fecha_mal_configurada_falla_antes_de_cualquier_efecto(conn, tmp_path, m
     monkeypatch.setenv("TELEGRAM_CHAT_ID_EMPRESA", "c")
     args = ([_match()], {"p1": _perfil()}, {"o1": _oferta()})
     aprobacion = _aprobacion(args[0])
+    consentimientos = _consentimientos(args[0])
     with pytest.raises(ValueError, match="PUENTE_ENTREVISTA_INICIO"):
-        postular(*args, aprobacion=aprobacion, conn=conn, outbox=tmp_path / "outbox", enviar=enviador)
+        postular(*args, aprobacion=aprobacion, consentimientos=consentimientos, conn=conn,
+                 outbox=tmp_path / "outbox", enviar=enviador)
     for tabla in ("postulaciones", "decisiones", "perfiles", "ofertas"):
         assert conn.execute(f"SELECT COUNT(*) FROM {tabla}").fetchone()[0] == 0
     assert not (tmp_path / "outbox").exists() and enviador.mensajes == []
 
     # Con la fecha corregida, el reintento sobre la misma base funciona.
     monkeypatch.setenv("PUENTE_ENTREVISTA_INICIO", "2026-10-20T10:00")
-    r = postular(*args, aprobacion=aprobacion, conn=conn, outbox=tmp_path / "outbox", enviar=enviador)
+    r = postular(*args, aprobacion=aprobacion, consentimientos=consentimientos, conn=conn,
+                 outbox=tmp_path / "outbox", enviar=enviador)
     assert db.obtener_postulacion(conn, r.postulaciones[0])["estado"] == "enviado"
 
 
 def test_inicio_entrevista_que_no_es_fecha_falla_sin_efectos(conn, tmp_path):
     with pytest.raises(ValueError):
         postular([_match()], {"p1": _perfil()}, {"o1": _oferta()}, aprobacion=_aprobacion([_match()]),
-                 conn=conn, outbox=tmp_path / "outbox", inicio_entrevista=lambda m: "mañana")
+                 consentimientos=_consentimientos([_match()]), conn=conn, outbox=tmp_path / "outbox",
+                 inicio_entrevista=lambda m: "mañana")
     assert conn.execute("SELECT COUNT(*) FROM postulaciones").fetchone()[0] == 0
 
 
@@ -259,7 +275,7 @@ def test_reintento_tras_envio_fallido_completa_hasta_enviado(conn, tmp_path, mon
         )
         r1 = _correr(conn, tmp_path)
     (pid,) = r1.postulaciones
-    assert db.obtener_postulacion(conn, pid)["estado"] == "aprobado"
+    assert db.obtener_postulacion(conn, pid)["estado"] == "consentido"
 
     r2 = _correr(conn, tmp_path, enviar=enviador)
 
@@ -268,7 +284,10 @@ def test_reintento_tras_envio_fallido_completa_hasta_enviado(conn, tmp_path, mon
     assert len(enviador.mensajes) == 1
     assert conn.execute("SELECT COUNT(*) FROM postulaciones").fetchone()[0] == 1
     estados = [(h["estado_anterior"], h["estado_nuevo"]) for h in db.historial(conn, pid)]
-    assert estados == [(None, "preseleccionado"), ("preseleccionado", "aprobado"), ("aprobado", "enviado")]
+    assert estados == [
+        (None, "preseleccionado"), ("preseleccionado", "aprobado"),
+        ("aprobado", "consentido"), ("consentido", "enviado"),
+    ]
     assert len(list((tmp_path / "outbox").glob("cv_*.pdf"))) == 1
 
 
@@ -284,7 +303,7 @@ def test_reintento_tras_fallo_al_generar_el_cv(conn, tmp_path, monkeypatch, envi
         with pytest.raises(OSError):
             _correr(conn, tmp_path, enviar=enviador)
     (fila,) = conn.execute("SELECT id, estado FROM postulaciones").fetchall()
-    assert fila["estado"] == "aprobado" and enviador.mensajes == []
+    assert fila["estado"] == "consentido" and enviador.mensajes == []
 
     r = _correr(conn, tmp_path, enviar=enviador)
     assert r.postulaciones == [fila["id"]]
@@ -304,7 +323,7 @@ def test_retoma_postulacion_que_no_llego_a_aprobado(conn, tmp_path, monkeypatch,
 
     assert r.postulaciones == [pid]
     assert db.obtener_postulacion(conn, pid)["estado"] == "enviado"
-    assert [h["estado_nuevo"] for h in db.historial(conn, pid)][-2:] == ["aprobado", "enviado"]
+    assert [h["estado_nuevo"] for h in db.historial(conn, pid)][-3:] == ["aprobado", "consentido", "enviado"]
 
 
 @pytest.mark.parametrize("estado", ["entrevista", "no_seleccionado"])
@@ -312,7 +331,7 @@ def test_postulacion_mas_adelantada_se_salta(conn, tmp_path, enviador, estado):
     db.guardar_perfil(conn, _perfil())
     db.guardar_oferta(conn, _oferta())
     pid = db.crear_postulacion(conn, "p1", "o1")
-    for siguiente in ["aprobado", "enviado", estado]:
+    for siguiente in ["aprobado", "consentido", "enviado", estado]:
         db.cambiar_estado(conn, pid, siguiente, "prueba")
     r = _correr(conn, tmp_path, enviar=enviador)
     assert r.postulaciones == [pid] and enviador.mensajes == []
