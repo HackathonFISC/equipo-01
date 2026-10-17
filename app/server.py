@@ -1770,12 +1770,12 @@ def listar_catalogo_data() -> dict[str, list[dict[str, str]]]:
     ]
     dir_of = RUTA_DATA / "ofertas"
     if dir_of.exists():
-        for arch in sorted(dir_of.glob("*.txt"))[:10]:
+        for arch in sorted(dir_of.glob("*.txt")):  # todas: con [:10] quedaban fuera las de Konzerta (#188)
             rel = f"data/ofertas/{arch.name}"
             ofertas_cat.append({"id": rel, "etiqueta": f"{rel} · anuncio real, lo lee Mercado"})
     dir_pf = RUTA_DATA / "perfiles"
     if dir_pf.exists():
-        for arch in sorted(dir_pf.glob("*.json"))[:10]:
+        for arch in sorted(dir_pf.glob("*.json")):
             rel = f"data/perfiles/{arch.name}"
             perfiles_cat.append({"id": rel, "etiqueta": f"{rel} · perfil sintético del archivo"})
     return {"ofertas": ofertas_cat, "perfiles": perfiles_cat}
