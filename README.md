@@ -314,7 +314,7 @@ uv run python -m app.server
 
 Los códigos de acceso de `/joven` y `/empresa/lista-corta` se imprimen en la consola al arrancar, en cada reinicio y cuando una empresa nueva publica su primera vacante.
 
-La empresa publica vacantes en `/empresa`, que no muestra a ninguna persona: `POST /api/empresa/ofertas` pasa por la misma Ley 11 y responde solo con su oferta (id, bloqueo y alertas con su frase). El estado completo del tablero lo recibe únicamente el orientador por `POST /api/ofertas`.
+La empresa publica vacantes en `/empresa`, que no muestra a ninguna persona: `POST /api/empresa/ofertas` pasa por la misma Ley 11 y responde solo con su oferta (id, bloqueo y alertas con su frase). El estado completo del tablero (con los jóvenes) lo piden solo la página del orientador, por `POST /api/ofertas` y `GET /api/estado`; en la demo esas dos rutas no piden código, así que lo recibe quien llegue al servidor (en Vercel, solo lectura).
 
 El selector de rol, los umbrales y el panel de operación, subir ofertas o CV por archivo y la cobertura por turnos están en el mismo tablero: ver «Más allá de los siete agentes».
 
