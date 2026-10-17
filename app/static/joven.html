@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light dark" />
+  <title>Puente · Tu búsqueda de empleo</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23e2a11b'/%3E%3Cg fill='none' stroke='%231d1604' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M5 23h22M8 23V10M24 23V10M8 12c2.6 3.4 5.3 5 8 5s5.4-1.6 8-5M12 23v-6M16 23v-5.5M20 23v-6'/%3E%3C/g%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/static/joven.css?v=1" />
+</head>
+<body>
+  <!-- Vista del joven (#52). Sin recursos externos: la demo tiene que correr sin conexión. -->
+  <header class="barra">
+    <div class="barra-in">
+      <a class="marca" href="/joven">
+        <svg class="marca-icono" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 18h20"/><path d="M4 18V7"/><path d="M20 18V7"/><path d="M4 8.5c2.5 3.2 5.2 4.8 8 4.8s5.5-1.6 8-4.8"/><path d="M8 18v-5"/><path d="M12 18v-4.6"/><path d="M16 18v-5"/></svg>
+        Puente
+      </a>
+      <a class="barra-enlace" href="/">Tablero del orientador</a>
+    </div>
+  </header>
+
+  <main class="pagina">
+    <section class="intro">
+      <h1>Busquemos un trabajo que te quede cerca</h1>
+      <p>Cuéntanos tu horario, cuánto necesitas ganar y qué sabes hacer. Una orientadora revisa todo antes de que algo llegue a una empresa, y tu CV solo se envía si tú lo aceptas.</p>
+      <p class="aviso">Demo con datos sintéticos: no escribas tus datos reales.</p>
+    </section>
+
+    <ol class="pasos" aria-label="Pasos">
+      <li data-paso="datos" aria-current="step">Tus datos</li>
+      <li data-paso="entrevista">Entrevista</li>
+      <li data-paso="resultado">Tu resultado</li>
+    </ol>
+
+    <form id="form-joven" class="tarjeta" novalidate>
+      <fieldset data-paso="datos">
+        <legend>Tus datos</legend>
+        <div class="campos">
+          <label class="campo">
+            <span>Nombre o apodo <span class="opcional">(opcional)</span></span>
+            <input id="f-nombre" maxlength="80" autocomplete="off" />
+          </label>
+          <label class="campo campo-corto">
+            <span>Edad</span>
+            <input id="f-edad" type="number" inputmode="numeric" min="18" max="29" step="1" required />
+          </label>
+          <label class="campo campo-ancho">
+            <span>Corregimiento donde vives</span>
+            <select id="f-corregimiento" required>
+              <option value="">Elige tu corregimiento</option>
+            </select>
+          </label>
+        </div>
+      </fieldset>
+
+      <fieldset data-paso="datos">
+        <legend>Tu horario</legend>
+        <div id="h-libre" class="horario" data-horario="libre">
+          <p class="horario-titulo">¿Qué días y a qué horas puedes trabajar?</p>
+        </div>
+        <label class="casilla">
+          <input type="checkbox" id="f-estudia" />
+          <span>Estudio o tomo clases</span>
+        </label>
+        <div id="h-clases" class="horario" data-horario="clases" hidden>
+          <p class="horario-titulo">¿Qué días y a qué horas tienes clases?</p>
+        </div>
+      </fieldset>
+
+      <fieldset data-paso="datos">
+        <legend>Dinero</legend>
+        <div class="campos">
+          <label class="campo">
+            <span>Salario mínimo que necesitas al mes (B/.)</span>
+            <input id="f-salario" type="number" inputmode="decimal" min="0" step="10" required />
+          </label>
+          <label class="campo">
+            <span>Lo máximo que puedes gastar en pasaje al día (B/.)</span>
+            <input id="f-pasaje" type="number" inputmode="decimal" min="0" step="0.25" required />
+          </label>
+        </div>
+      </fieldset>
+
+      <fieldset id="entrevista" data-paso="entrevista">
+        <legend>Entrevista</legend>
+        <p class="ayuda">Responde con tus palabras. Lo que haces en casa, en el negocio de tu familia o en tu comunidad también cuenta como experiencia. No escribas tu cédula, tu teléfono ni tu dirección: si se cuelan, los borramos antes de guardar.</p>
+        <ol id="preguntas" class="preguntas"></ol>
+      </fieldset>
+
+      <p id="form-error" class="error" role="alert" hidden></p>
+      <div class="acciones">
+        <button type="button" id="btn-ejemplo" class="btn btn-sec">Usar el ejemplo de Yaritza</button>
+        <button type="submit" id="btn-enviar" class="btn btn-pri">Enviar mis respuestas</button>
+      </div>
+    </form>
+
+    <section id="buscar" class="tarjeta buscar" aria-labelledby="buscar-titulo">
+      <h2 id="buscar-titulo" class="buscar-titulo">¿Ya hiciste la entrevista?</h2>
+      <form id="form-buscar" class="buscar-form">
+        <label class="campo">
+          <span>Escribe tu código</span>
+          <input id="f-codigo" placeholder="PERFIL-…" autocomplete="off" spellcheck="false" maxlength="80" />
+        </label>
+        <button type="submit" class="btn btn-sec">Ver mi resultado</button>
+      </form>
+    </section>
+
+    <section id="resultado" class="resultado" hidden>
+      <div class="tarjeta" id="res-cabecera"></div>
+      <div class="tarjeta" id="res-habilidades"></div>
+      <section class="bloque" aria-labelledby="t-vacantes">
+        <h2 id="t-vacantes">Vacantes que te proponemos</h2>
+        <p class="ayuda">Cumplen tu horario, tu salario mínimo y tu pasaje. Tu orientador/a revisa la lista antes de enviarla, y tu CV solo sale si marcas la casilla.</p>
+        <div id="res-vacantes" class="lista"></div>
+      </section>
+      <section class="bloque" aria-labelledby="t-formacion">
+        <h2 id="t-formacion">Cursos que te acercan</h2>
+        <div id="res-formacion" class="lista"></div>
+      </section>
+      <section class="bloque" aria-labelledby="t-descartes">
+        <h2 id="t-descartes">Ofertas que descartamos y por qué</h2>
+        <div id="res-descartes" class="lista"></div>
+      </section>
+      <!-- TODO(#12/#84): aquí va el mensaje para el joven que arma Postulación (campo "mensaje" de la API). Esta página no redacta uno propio. -->
+      <div class="acciones">
+        <button type="button" id="btn-actualizar" class="btn btn-sec">Actualizar</button>
+        <button type="button" id="btn-nueva" class="btn btn-sec">Hacer otra entrevista</button>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <script src="/static/joven.js?v=1" defer></script>
+</body>
+</html>

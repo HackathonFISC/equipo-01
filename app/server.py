@@ -53,6 +53,27 @@ from puente.schemas import (
 )
 from puente.tools import db
 
+# Vista del joven (#52): imports en un grupo propio para no tocar los del tablero (#49/#99).
+import csv
+from collections.abc import Callable
+from typing import Annotated
+
+from pydantic import StrictBool, TypeAdapter
+from starlette.concurrency import run_in_threadpool
+
+from puente.agents.perfil import (
+    MAX_PREGUNTAS,
+    PREGUNTAS_ENTREVISTA,
+    construir_perfil,
+    detectar_corregimiento,
+    entrada_entrevista,
+    llm_puente,
+)
+from puente.graph import cargar_taxonomia_grafo
+from puente.guardrails import EDAD_MAX, EDAD_MIN, evaluar_entrada, limpiar_entrada
+from puente.rules.taxonomia import normalizar_habilidad
+from puente.schemas import DIAS_VALIDOS, EntradaPerfil
+
 RUTA_APP = Path(__file__).resolve().parent
 RUTA_STATIC = RUTA_APP / "static"
 RUTA_RAIZ = RUTA_APP.parent
@@ -1662,6 +1683,530 @@ async def endpoint_reset(request: Request) -> JSONResponse:
     return await endpoint_estado(request)
 
 
+# --- Vista del joven (#52, fase 1) ---
+# El joven llena el formulario fijo y la entrevista del agente Perfil (#6), decide si consiente cada
+# envío y ve su resultado. Solo se agregan funciones: las del tablero (#49/#99) quedan igual.
+# El mensaje para el joven lo arma Postulación (#12, PR #84); esta vista no redacta texto propio.
+
+MEDIO_CONSENTIMIENTO_JOVEN = "joven_web"
+MAX_CARACTERES_RESPUESTA = 2000
+# El consentimiento se da antes del envío: con la pareja en la lista corta o ya aprobada.
+ESTADOS_ADMITEN_CONSENTIMIENTO = (
+    EstadoPostulacion.PRESELECCIONADO.value,
+    EstadoPostulacion.APROBADO.value,
+)
+ESTADOS_ENVIADOS = (
+    EstadoPostulacion.ENVIADO.value,
+    EstadoPostulacion.ENTREVISTA.value,
+    EstadoPostulacion.CONTRATADO.value,
+)
+ESTADOS_CERRADOS = (*ESTADOS_ENVIADOS, EstadoPostulacion.NO_SELECCIONADO.value)
+NOMBRES_DIAS = {"miercoles": "miércoles", "sabado": "sábado"}
+
+# Perfil (#6) extrae las habilidades con este LLM a través de `puente.llm` (#45); las pruebas lo
+# cambian por uno falso. El LLM solo propone: el código verifica taxonomía y evidencia literal.
+llm_perfil_joven: Callable[[str], Any] = llm_puente
+
+_ADAPTADOR_ENTRADA_PERFIL = TypeAdapter(EntradaPerfil)
+_ADAPTADOR_CONSENTIMIENTO = TypeAdapter(Consentimiento)
+
+
+def _id_seguro(valor: str) -> str:
+    """Misma regla que `_validar_id_seguro` del tablero: solo [A-Za-z0-9_-]."""
+    limpio = str(valor).strip()
+    if not limpio or len(limpio) > 80 or not PATRON_ID_SEGURO.fullmatch(limpio):
+        raise ValueError(f"ID inválido '{valor}': solo se permiten caracteres [A-Za-z0-9_-]")
+    return limpio
+
+
+class PerfilJovenRequest(BaseModel):
+    """Formulario fijo (#6, #39) y respuestas de la entrevista que manda la vista del joven."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    nombre: str = Field(default="", max_length=80, description="Nombre o apodo; opcional")
+    edad: int = Field(ge=EDAD_MIN, le=EDAD_MAX)
+    corregimiento: str = Field(min_length=2, max_length=80)
+    horario_clases: list[Horario] = Field(default_factory=list, max_length=3)
+    horario_libre: list[Horario] = Field(default_factory=list, max_length=3)
+    salario_minimo: float = Field(ge=0, le=50000)
+    presupuesto_pasaje_diario: float = Field(ge=0, le=500)
+    respuestas: list[Annotated[str, Field(max_length=MAX_CARACTERES_RESPUESTA)]] = Field(
+        min_length=1, max_length=MAX_PREGUNTAS
+    )
+
+    @field_validator("respuestas")
+    @classmethod
+    def _al_menos_una_respuesta(cls, respuestas: list[str]) -> list[str]:
+        limpias = [r.strip() for r in respuestas]
+        if not any(len(r) >= 3 for r in limpias):
+            raise ValueError("responde al menos una pregunta de la entrevista")
+        return limpias
+
+
+class ConsentimientoJovenRequest(BaseModel):
+    """La casilla de consentimiento de una vacante de la lista corta (#42, #12)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    perfil_id: str = Field(min_length=1, max_length=80)
+    oferta_id: str = Field(min_length=1, max_length=80)
+    otorgado: StrictBool
+
+    @field_validator("perfil_id", "oferta_id")
+    @classmethod
+    def _validar_id_seguro(cls, valor: str) -> str:
+        return _id_seguro(valor)
+
+
+def corregimientos_con_traslado() -> list[str]:
+    """Corregimientos de origen en `data/traslados.csv`: con otro, el Matching no tiene traslado.
+
+    Solo lee la lista; los minutos y el pasaje los calcula el solver (#4).
+    """
+    ruta = RUTA_DATA / "traslados.csv"
+    if not ruta.exists():
+        return []
+    with ruta.open(encoding="utf-8", newline="") as archivo:
+        return sorted({(f.get("origen") or "").strip() for f in csv.DictReader(archivo)} - {""})
+
+
+def _texto_dias(dias: list[str]) -> str:
+    indices = sorted({DIAS_VALIDOS.index(d) for d in dias if d in DIAS_VALIDOS})
+    nombres = [NOMBRES_DIAS.get(DIAS_VALIDOS[i], DIAS_VALIDOS[i]) for i in indices]
+    if len(indices) > 2 and indices == list(range(indices[0], indices[-1] + 1)):
+        return f"{nombres[0]} a {nombres[-1]}"
+    return ", ".join(nombres)
+
+
+def _texto_horarios(horarios: list[Horario]) -> str:
+    return "; ".join(f"{_texto_dias(h.dias)} {h.hora_inicio}-{h.hora_fin}" for h in horarios)
+
+
+def _horario_para_tablero(perfil: Perfil) -> str:
+    """Texto de horario del perfil en el tablero.
+
+    El tablero (#49) arma hoy el horario del solver desde este texto: con "noche" pone clases
+    de 18:00 a 22:00. Los horarios exactos del formulario quedan en `entradas_perfil`.
+    """
+    libre = _texto_horarios(perfil.horario_libre) or "sin horario indicado"
+    if not perfil.horario_clases:
+        return f"{libre} (sin clases)"
+    clases = _texto_horarios(perfil.horario_clases)
+    if any(h.hora_fin > "18:00" for h in perfil.horario_clases):
+        return f"{libre} (estudia de noche: {clases})"
+    return f"{libre} (clases: {clases})"
+
+
+def preparar_entrada_joven(req: PerfilJovenRequest) -> dict[str, Any]:
+    """Un elemento de `entradas_perfil` (forma de #39/#42) sin cédula, teléfono ni dirección.
+
+    El corregimiento sale de la lista con traslado y el id lo pone el servidor, nunca el joven.
+    """
+    corregimiento = detectar_corregimiento(req.corregimiento, corregimientos_con_traslado())
+    if corregimiento is None:
+        raise ErrorValidacionTablero(
+            "Corregimiento sin datos de traslado: elige uno de la lista."
+        )
+    nombre = str(limpiar_entrada(req.nombre.strip())) or "Joven"
+    perfil_id = f"PERFIL-{_slug_seguro(nombre, prefijo='JOVEN')}-{uuid.uuid4().hex[:6].upper()}"
+    formulario = {
+        "nombre": nombre,
+        "edad": req.edad,
+        "corregimiento": corregimiento,
+        "horario_clases": [h.model_dump() for h in req.horario_clases],
+        "horario_libre": [h.model_dump() for h in req.horario_libre],
+        "salario_minimo": req.salario_minimo,
+        "presupuesto_pasaje_diario": req.presupuesto_pasaje_diario,
+    }
+    entrada = limpiar_entrada(entrada_entrevista(perfil_id, formulario, req.respuestas))
+    entrada["id"] = perfil_id
+    return dict(_ADAPTADOR_ENTRADA_PERFIL.validate_python(entrada))
+
+
+def revisar_guardrails_joven(estado: dict[str, Any], entrada: dict[str, Any]) -> str | None:
+    """Guardrails (#9) sobre las respuestas ya limpias; deja sus Decisiones y devuelve el rechazo, si hay."""
+    texto = "\n".join(entrada.get("respuestas") or [])
+    resultados = evaluar_entrada({"texto": texto, "edad": entrada.get("edad")})
+    for resultado in resultados:
+        _registrar_decision_db(estado, resultado.decision)
+    rechazo = next((r for r in resultados if not r.ok), None)
+    return (rechazo.respuesta or rechazo.motivo) if rechazo else None
+
+
+def registrar_perfil_joven(
+    estado: dict[str, Any],
+    entrada: dict[str, Any],
+    perfil: Perfil,
+    decision: Decision,
+    taxonomia: dict[str, dict] | None = None,
+) -> dict[str, Any]:
+    """Suma al joven al tablero y recalcula el grafo.
+
+    No usa `registrar_nuevo_perfil` porque ese fija el horario y recibe los skill_id del
+    orientador; aquí las habilidades vienen verificadas por el agente Perfil (#6).
+    """
+    taxonomia = taxonomia or {}
+    estado.setdefault("entradas_perfil", []).append(entrada)
+    estado["perfiles"].append(
+        {
+            "id": perfil.id,
+            "nombre": perfil.nombre,
+            "genero": perfil.genero or "no_especificado",
+            "edad": perfil.edad,
+            "corregimiento": perfil.corregimiento,
+            "modalidad_ingreso": "Vista del joven: formulario fijo y entrevista (#52)",
+            "horario_libre": _horario_para_tablero(perfil),
+            "salario_minimo": perfil.salario_minimo,
+            "presupuesto_pasaje_diario": perfil.presupuesto_pasaje_diario,
+            "habilidades": [
+                {
+                    "skill_id": h.skill_id,
+                    "nombre": taxonomia.get(h.skill_id, {}).get("nombre_es", h.skill_id),
+                    "evidencia": h.evidencia,
+                }
+                for h in perfil.habilidades
+            ],
+        }
+    )
+    _registrar_decision_db(estado, decision)
+    return recalcular_pipeline_tablero(estado, registrar_trazas=True)
+
+
+def _buscar_perfil(estado: dict[str, Any], perfil_id: str) -> dict[str, Any] | None:
+    return next((p for p in estado.get("perfiles", []) if p.get("id") == perfil_id), None)
+
+
+def _buscar_postulacion(estado: dict[str, Any], perfil_id: str, oferta_id: str) -> dict[str, Any] | None:
+    return next(
+        (
+            p
+            for p in estado.get("postulaciones", [])
+            if p.get("perfil_id") == perfil_id and p.get("oferta_id") == oferta_id
+        ),
+        None,
+    )
+
+
+def _en_lista_corta(estado: dict[str, Any], perfil_id: str, oferta_id: str) -> bool:
+    return any(
+        m.get("perfil_id") == perfil_id and m.get("oferta_id") == oferta_id
+        for m in estado.get("matches", [])
+    )
+
+
+def _ultimo_consentimiento(estado: dict[str, Any], perfil_id: str, oferta_id: str) -> dict[str, Any] | None:
+    """El registro más reciente de la pareja en `consentimientos` (el joven puede cambiar de opinión)."""
+    return next(
+        (
+            c
+            for c in reversed(estado.get("consentimientos") or [])
+            if c.get("perfil_id") == perfil_id and c.get("oferta_id") == oferta_id
+        ),
+        None,
+    )
+
+
+def _estado_consentimiento(registro: dict[str, Any] | None) -> str:
+    if registro is None:
+        return "pendiente"
+    return EstadoPostulacion.CONSENTIDO.value if registro.get("otorgado") else "no_consentido"
+
+
+def registrar_consentimiento_joven(
+    estado: dict[str, Any],
+    *,
+    perfil_id: str,
+    oferta_id: str,
+    otorgado: bool,
+) -> dict[str, Any]:
+    """Casilla del joven: un `Consentimiento` en `consentimientos` y su Decision, como en el tablero (#49).
+
+    Es el mismo registro que deja hoy la aprobación del orientador, con medio "joven_web". El
+    estado de la postulación en el tablero no se mueve: el orientador solo actúa sobre
+    "preseleccionado" y SQLite todavía no tiene "consentido" (#84). El joven ve "consentido".
+    """
+    req = ConsentimientoJovenRequest(perfil_id=perfil_id, oferta_id=oferta_id, otorgado=otorgado)
+    if _buscar_perfil(estado, req.perfil_id) is None:
+        raise LookupError(f"No existe el perfil '{req.perfil_id}'.")
+    post = _buscar_postulacion(estado, req.perfil_id, req.oferta_id)
+    if post is None or not _en_lista_corta(estado, req.perfil_id, req.oferta_id):
+        raise ErrorValidacionTablero(f"La vacante '{req.oferta_id}' no está en tu lista corta.")
+    if post.get("estado") not in ESTADOS_ADMITEN_CONSENTIMIENTO:
+        raise ErrorValidacionTablero(
+            f"Tu postulación a '{req.oferta_id}' está en '{post.get('estado')}': "
+            "el consentimiento se da antes del envío."
+        )
+    previo = _ultimo_consentimiento(estado, req.perfil_id, req.oferta_id)
+    if previo is not None and bool(previo.get("otorgado")) == req.otorgado:
+        return estado  # misma respuesta que la anterior: no se duplica el registro
+
+    ahora = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    consentimiento = _ADAPTADOR_CONSENTIMIENTO.validate_python(
+        {
+            "perfil_id": req.perfil_id,
+            "oferta_id": req.oferta_id,
+            "otorgado": req.otorgado,
+            "medio": MEDIO_CONSENTIMIENTO_JOVEN,
+            "timestamp": ahora,
+        }
+    )
+    estado.setdefault("consentimientos", []).append(dict(consentimiento))
+    empresa = post.get("empresa") or "la empresa"
+    _registrar_decision_db(
+        estado,
+        Decision(
+            agente="consentimiento",
+            entrada_resumen=f"{req.perfil_id} -> {req.oferta_id}",
+            salida_resumen=(
+                f"Consentimiento confirmado (medio: {MEDIO_CONSENTIMIENTO_JOVEN})"
+                if req.otorgado
+                else f"Consentimiento negado (medio: {MEDIO_CONSENTIMIENTO_JOVEN}): el CV no se envía"
+            ),
+            razon=(
+                f"El joven marcó en la vista del joven que acepta que su CV, sin cédula, teléfono ni dirección, llegue a {empresa}."
+                if req.otorgado
+                else f"El joven indicó en la vista del joven que no acepta que su CV llegue a {empresa}."
+            ),
+            timestamp=ahora,
+        ),
+    )
+    post["consentimiento_joven"] = req.otorgado
+    post["consentimiento_medio"] = MEDIO_CONSENTIMIENTO_JOVEN
+    for m in estado.get("matches", []):
+        if m.get("perfil_id") == req.perfil_id and m.get("oferta_id") == req.oferta_id:
+            m["consentimiento_joven"] = req.otorgado
+    estado["metricas"] = _calcular_metricas_impacto(estado)
+    return estado
+
+
+def _rutas_formacion_de(estado: dict[str, Any], perfil_id: str) -> list[dict[str, Any]]:
+    """`rutas_formacion` que dejó Formación (#14) en el estado del grafo, solo las del joven."""
+    grafo, config = estado.get("_grafo"), estado.get("_config_grafo")
+    if grafo is None or config is None:
+        return []
+    try:
+        rutas = grafo.get_state(config).values.get("rutas_formacion") or []
+    except Exception:
+        return []
+    return [dict(r) for r in rutas if isinstance(r, dict) and r.get("perfil_id") == perfil_id]
+
+
+def resultado_joven(estado: dict[str, Any], perfil_id: str) -> dict[str, Any]:
+    """Lo que ve el joven: lista corta con estado y consentimiento, descartes con motivo y formación.
+
+    Son los datos estructurados del tablero; ningún texto se redacta aquí.
+    """
+    perfil = _buscar_perfil(estado, perfil_id)
+    if perfil is None:
+        raise LookupError(f"No existe el perfil '{perfil_id}'.")
+    ofertas = {o["id"]: o for o in estado.get("ofertas", [])}
+    matches = {m["oferta_id"]: m for m in estado.get("matches", []) if m.get("perfil_id") == perfil_id}
+
+    vacantes: list[dict[str, Any]] = []
+    for post in estado.get("postulaciones", []):
+        if post.get("perfil_id") != perfil_id:
+            continue
+        oferta_id = post["oferta_id"]
+        match = matches.get(oferta_id)
+        estado_post = post.get("estado", EstadoPostulacion.PRESELECCIONADO.value)
+        if match is None and estado_post not in ESTADOS_CERRADOS:
+            continue  # ya no está en la lista corta tras un recálculo
+        consentimiento = _estado_consentimiento(_ultimo_consentimiento(estado, perfil_id, oferta_id))
+        if estado_post in ESTADOS_CERRADOS or consentimiento != EstadoPostulacion.CONSENTIDO.value:
+            estado_visible = estado_post
+        else:
+            estado_visible = EstadoPostulacion.CONSENTIDO.value
+        desglose = (match or {}).get("desglose") or {}
+        oferta = ofertas.get(oferta_id, {})
+        vacantes.append(
+            {
+                "oferta_id": oferta_id,
+                "puesto": post.get("puesto") or oferta.get("puesto", oferta_id),
+                "empresa": post.get("empresa") or oferta.get("empresa", ""),
+                "corregimiento": oferta.get("corregimiento", ""),
+                "salario_mensual": oferta.get("salario_mensual"),
+                "minutos_traslado": desglose.get("minutos_traslado"),
+                "pasaje_diario": desglose.get("pasaje_diario"),
+                "habilidades_cubiertas": list(desglose.get("habilidades_cubiertas") or []),
+                "brechas": list((match or {}).get("brechas") or []),
+                "estado": estado_visible,
+                "estado_postulacion": estado_post,
+                "consentimiento": consentimiento,
+                "puede_consentir": match is not None and estado_post in ESTADOS_ADMITEN_CONSENTIMIENTO,
+                "enviada": estado_post in ESTADOS_ENVIADOS,
+                "ics": next(
+                    (a for a in post.get("archivos_generados") or [] if str(a).endswith(".ics")),
+                    None,
+                ),
+            }
+        )
+
+    descartes = [
+        {
+            "oferta_id": d.get("oferta_id"),
+            "puesto": d.get("puesto"),
+            "empresa": d.get("empresa"),
+            "corregimiento": d.get("corregimiento_oferta"),
+            "motivo": d.get("motivo"),
+        }
+        for d in estado.get("descartados", [])
+        if d.get("perfil_id") == perfil_id
+    ]
+
+    rutas = _rutas_formacion_de(estado, perfil_id)
+    taxonomia = cargar_taxonomia_grafo()
+    ids_habilidades = {h.get("skill_id") for h in perfil.get("habilidades", []) if isinstance(h, dict)}
+    for v in vacantes:
+        ids_habilidades.update(v["habilidades_cubiertas"], v["brechas"])
+    for r in rutas:
+        ids_habilidades.update(r.get("brechas_iniciales") or [])
+
+    return {
+        "perfil": {
+            "id": perfil["id"],
+            "nombre": perfil.get("nombre", ""),
+            "edad": perfil.get("edad"),
+            "corregimiento": perfil.get("corregimiento", ""),
+            "horario": perfil.get("horario_libre", ""),
+            "salario_minimo": perfil.get("salario_minimo"),
+            "presupuesto_pasaje_diario": perfil.get("presupuesto_pasaje_diario"),
+            "modalidad_ingreso": perfil.get("modalidad_ingreso", ""),
+            "habilidades": [
+                {"skill_id": h.get("skill_id"), "evidencia": h.get("evidencia", "")}
+                for h in perfil.get("habilidades", [])
+                if isinstance(h, dict)
+            ],
+        },
+        "nombres_habilidades": {
+            sid: taxonomia.get(sid, {}).get("nombre_es", sid) for sid in sorted(i for i in ids_habilidades if i)
+        },
+        "vacantes": vacantes,
+        "descartes": descartes,
+        "rutas_formacion": rutas,
+        # TODO(#12/#84): el mensaje para el joven lo arma Postulación (#12). Cuando #84 esté en main,
+        # este campo lleva ese texto; esta vista no redacta un mensaje propio.
+        "mensaje": None,
+    }
+
+
+async def endpoint_joven_pagina(_request: Request) -> FileResponse:
+    return FileResponse(RUTA_STATIC / "joven.html")
+
+
+async def endpoint_joven_formulario(_request: Request) -> JSONResponse:
+    """Lo que la página necesita para armar el formulario fijo y la entrevista de #6."""
+    return JSONResponse(
+        {
+            "preguntas": list(PREGUNTAS_ENTREVISTA)[:MAX_PREGUNTAS],
+            "max_preguntas": MAX_PREGUNTAS,
+            "max_caracteres_respuesta": MAX_CARACTERES_RESPUESTA,
+            "corregimientos": corregimientos_con_traslado(),
+            "dias": list(DIAS_VALIDOS),
+            "edad_min": EDAD_MIN,
+            "edad_max": EDAD_MAX,
+        }
+    )
+
+
+async def endpoint_joven_perfil(request: Request) -> JSONResponse:
+    datos, err_resp = await _leer_json_validado(request)
+    if err_resp is not None or datos is None:
+        return err_resp  # type: ignore[return-value]
+    try:
+        req = PerfilJovenRequest.model_validate(datos)
+        entrada = preparar_entrada_joven(req)
+    except ValidationError as exc:
+        return JSONResponse({"detail": exc.errors(include_context=False)}, status_code=422)
+    except ErrorValidacionTablero as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
+
+    rechazo = revisar_guardrails_joven(ESTADO_GLOBAL, entrada)
+    if rechazo:
+        return JSONResponse({"detail": rechazo}, status_code=422)
+
+    taxonomia = cargar_taxonomia_grafo()
+    try:
+        # El LLM puede tardar: corre fuera del bucle de eventos. El estado se toca después, aquí.
+        perfil, decision = await run_in_threadpool(
+            construir_perfil,
+            entrada,
+            taxonomia=taxonomia,
+            normalizar=normalizar_habilidad,
+            llm=llm_perfil_joven,
+        )
+    except ValueError as exc:
+        return JSONResponse({"detail": f"No se pudo armar tu perfil: {exc}"}, status_code=422)
+    except (RuntimeError, OSError) as exc:  # ErrorLLM es un RuntimeError
+        return JSONResponse(
+            {
+                "detail": (
+                    "El agente Perfil no pudo leer tu entrevista ahora. Avísale a tu orientador/a: "
+                    f"la entrevista puede seguir por terminal. ({exc})"
+                )
+            },
+            status_code=503,
+        )
+    registrar_perfil_joven(ESTADO_GLOBAL, entrada, perfil, decision, taxonomia)
+    return JSONResponse(resultado_joven(ESTADO_GLOBAL, perfil.id), status_code=201)
+
+
+async def endpoint_joven_consentimiento(request: Request) -> JSONResponse:
+    datos, err_resp = await _leer_json_validado(request)
+    if err_resp is not None or datos is None:
+        return err_resp  # type: ignore[return-value]
+    try:
+        req = ConsentimientoJovenRequest.model_validate(datos)
+        registrar_consentimiento_joven(
+            ESTADO_GLOBAL,
+            perfil_id=req.perfil_id,
+            oferta_id=req.oferta_id,
+            otorgado=req.otorgado,
+        )
+    except ValidationError as exc:
+        return JSONResponse({"detail": exc.errors(include_context=False)}, status_code=422)
+    except ErrorValidacionTablero as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
+    except LookupError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=404)
+    return JSONResponse(resultado_joven(ESTADO_GLOBAL, req.perfil_id))
+
+
+async def endpoint_joven_resultado(request: Request) -> JSONResponse:
+    try:
+        perfil_id = _id_seguro(request.path_params["perfil_id"])
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
+    try:
+        return JSONResponse(resultado_joven(ESTADO_GLOBAL, perfil_id))
+    except LookupError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=404)
+
+
+async def endpoint_joven_ics(request: Request) -> FileResponse | JSONResponse:
+    """El .ics de la entrevista propuesta, solo si la postulación ya se envió."""
+    try:
+        perfil_id = _id_seguro(request.path_params["perfil_id"])
+        oferta_id = _id_seguro(request.path_params["oferta_id"])
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
+    post = _buscar_postulacion(ESTADO_GLOBAL, perfil_id, oferta_id)
+    nombre = None
+    if post is not None and post.get("estado") in ESTADOS_ENVIADOS:
+        nombre = next(
+            (a for a in post.get("archivos_generados") or [] if str(a).endswith(".ics")), None
+        )
+    if nombre is None:
+        return JSONResponse({"detail": "Todavía no hay entrevista propuesta para esta vacante."}, status_code=404)
+    try:
+        ruta = _ruta_segura_en_outbox(RUTA_OUTBOX, nombre)
+    except ErrorValidacionTablero as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
+    if not ruta.is_file():
+        return JSONResponse({"detail": "No se encontró el archivo .ics."}, status_code=404)
+    return FileResponse(ruta, media_type="text/calendar", filename=nombre)
+
+
 RUTA_STATIC.mkdir(parents=True, exist_ok=True)
 
 app = Starlette(
@@ -1676,6 +2221,13 @@ app = Starlette(
         Route("/api/cargar-data", endpoint_cargar_data, methods=["POST"]),
         Route("/api/auditor/simular-sesgo", endpoint_simular_sesgo, methods=["POST"]),
         Route("/api/reset", endpoint_reset, methods=["POST"]),
+        # Vista del joven (#52)
+        Route("/joven", endpoint_joven_pagina, methods=["GET"]),
+        Route("/api/joven/formulario", endpoint_joven_formulario, methods=["GET"]),
+        Route("/api/joven/perfil", endpoint_joven_perfil, methods=["POST"]),
+        Route("/api/joven/consentimiento", endpoint_joven_consentimiento, methods=["POST"]),
+        Route("/api/joven/{perfil_id}/resultado", endpoint_joven_resultado, methods=["GET"]),
+        Route("/api/joven/{perfil_id}/ics/{oferta_id}", endpoint_joven_ics, methods=["GET"]),
         Mount("/static", app=StaticFiles(directory=str(RUTA_STATIC)), name="static"),
     ],
 )
