@@ -356,3 +356,21 @@ def test_id_de_empresa_y_cegado_para_la_empresa() -> None:
     assert "maria" not in ciego.lower() and "María" not in ciego
     assert "21 años" not in ciego and "Colon" not in ciego
     assert "atiende la caja" in ciego
+
+
+def test_con_puente_outbox_el_ics_que_confirma_la_empresa_va_a_esa_carpeta(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sin RUTA_OUTBOX fijada a mano, la vista de la empresa escribe y lee en PUENTE_OUTBOX (#186)."""
+    carpeta = tmp_path / "outbox_de_la_demo"
+    monkeypatch.setenv("PUENTE_OUTBOX", str(carpeta))
+    assert srv.RUTA_OUTBOX == srv._RUTA_OUTBOX_POR_DEFECTO  # nadie la fijó: manda la variable
+    estado = srv.obtener_datos_iniciales_demo(db_path=tmp_path / "empresa.db")
+    monkeypatch.setattr(srv, "ESTADO_GLOBAL", estado)
+    with TestClient(srv.app) as cliente:
+        _aprobar(cliente, YARITZA, CHORRERA)
+        [candidato] = _vacante(_lista(cliente, estado), CHORRERA)["candidatos"]
+        ref = candidato["ref"]
+        assert _accion(cliente, estado, accion="aceptar", oferta_id=CHORRERA, ref=ref).status_code == 200
+        assert cliente.get(f"/api/empresa/{SUPER}/ics/{CHORRERA}/{ref}", headers=_cred(estado)).status_code == 200
+    assert list(carpeta.glob(f"{empresa.PREFIJO_ICS}{CHORRERA}_*.ics"))  # el .ics confirmado quedó ahí

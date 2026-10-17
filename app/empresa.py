@@ -352,7 +352,7 @@ def aceptar_candidato(estado: dict[str, Any], empresa_id: str, oferta_id: str, r
                 conn, *par, oferta.empresa, inicio, inicio + timedelta(minutes=DURACION_ENTREVISTA_MIN), traslado
             )
         # El .ics no lleva el nombre ni el perfil_id (tampoco en el archivo): lo descarga la empresa.
-        destino = srv._ruta_segura_en_outbox(srv.RUTA_OUTBOX, f"{PREFIJO_ICS}{oferta_id}_{ref}.ics")
+        destino = srv._ruta_segura_en_outbox(srv._ruta_outbox(), f"{PREFIJO_ICS}{oferta_id}_{ref}.ics")
         ics = generar_ics(
             titulo=f"Entrevista confirmada: {oferta.puesto} - {oferta.empresa}",
             inicio=inicio,
@@ -620,7 +620,7 @@ async def endpoint_ics(request: Request) -> FileResponse | JSONResponse:
         nombre = _ics_confirmado(_candidato(estado, empresa_id, oferta_id, ref))
         if nombre is None:
             return JSONResponse({"detail": "Todavía no aceptaste la entrevista de este candidato."}, status_code=404)
-        ruta = srv._ruta_segura_en_outbox(srv.RUTA_OUTBOX, nombre)
+        ruta = srv._ruta_segura_en_outbox(srv._ruta_outbox(), nombre)
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=422)
     except CredencialEmpresaInvalida as exc:
