@@ -271,6 +271,44 @@ def test_cegar_quita_datos_que_no_son_del_trabajo(texto, queda):
     assert cegar(texto, _perfil()) == queda
 
 
+def test_cegar_fecha_numerica_de_nacimiento_y_conservar_fechas_de_experiencia():
+    from datetime import date
+    from puente.tools.pdf import cegar
+
+    texto = "Nací el 03/05/2006; trabajé del 03/05/2024 al 2026-06-01 atendiendo clientes."
+    ciego = cegar(texto, _perfil(), hoy=date(2026, 10, 16))
+    assert "03/05/2006" not in ciego
+    assert "[dato omitido]" in ciego
+    assert "03/05/2024 al 2026-06-01 atendiendo clientes" in ciego
+    assert cegar("2006-05-03", _perfil(), hoy=date(2026, 10, 16)) == "[dato omitido]"
+
+    hoy_real = date.today()
+    anio_nacimiento = hoy_real.year - 20 - ((hoy_real.month, hoy_real.day) < (5, 3))
+    fecha_nacimiento = f"03/05/{anio_nacimiento}"
+    perfil = _perfil()
+    perfil.habilidades[0] = HabilidadPerfil(
+        skill_id="atencion_cliente", evidencia=f"Nací el {fecha_nacimiento}; atendí clientes desde 03/05/2024"
+    )
+    cv = "\n".join(contenido_cv(perfil, _oferta()))
+    assert fecha_nacimiento not in cv
+    assert "atendí clientes desde 03/05/2024" in cv
+
+
+@pytest.mark.parametrize(
+    ("texto", "esperado"),
+    [
+        ("Está separada y atiende clientes", "Está [dato omitido] y atiende clientes"),
+        ("Vive en unión consensual; vende en tienda", "Vive en [dato omitido]; vende en tienda"),
+        ("Vivo en pareja y manejo caja", "Vivo [dato omitido] y manejo caja"),
+        ("Trabajo en pareja preparando pedidos", "Trabajo en pareja preparando pedidos"),
+    ],
+)
+def test_cegar_mas_estados_civiles_sin_borrar_experiencia(texto, esperado):
+    from puente.tools.pdf import cegar
+
+    assert cegar(texto, _perfil()) == esperado
+
+
 @pytest.mark.parametrize(
     "texto",
     [
