@@ -905,7 +905,7 @@ def test_el_tablero_registra_la_decision_cuando_la_hora_queda_por_confirmar(
 def test_issue_168_roles_umbrales_tocumen_y_panel_operacion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Issue #168: 3 vistas de rol (orientador, empresa, joven) con Decision firmada, umbrales del solver (90 min hace viable Tocumen para Yaritza) y panel de operación."""
+    """Issue #168: 3 vistas de rol (orientador, empresa, joven) con Decision firmada, umbrales del solver (95 min hace viable Tocumen para Yaritza) y panel de operación."""
     import app.server as srv
 
     monkeypatch.setattr(srv, "RUTA_OUTBOX", tmp_path / "outbox")

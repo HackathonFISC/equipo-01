@@ -1,6 +1,6 @@
 # Guion del video de 3 minutos (#16)
 
-Caso Yaritza de punta a punta, en `LLM_MODO=reproducir`: nada sale a la red y la demo en vivo da lo mismo que el video. Grabación a las 10:00 (#169). Cada paso se verificó el 17 de octubre, entre las 02:00 y las 02:40, sobre `main` 9346874 (incluye #189, #205 y #206) en un worktree limpio. Un commit anterior no sirve: sin #205, CT02 entra al tablero como stub sintético y no se bloquea.
+Caso Yaritza de punta a punta, en `LLM_MODO=reproducir`: nada sale a la red y la demo en vivo da lo mismo que el video. Grabación a las 10:00 (#169). Verificado el 17 de octubre, sin navegador: los pasos 2, 3, 4 y 6 por la API del tablero (TestClient) y por la terminal, sobre `main` aff46eb (incluye #189, #205, #206, #243, #251 y #259) más los cambios de texto de este PR; los pasos 5 y 7, en la revisión del #202, por la API sobre 7eb4a4e. Un commit anterior no sirve: sin #205, CT02 entra al tablero como stub sintético y no se bloquea.
 
 Hay dos superficies y cada una muestra lo que de verdad hace:
 
@@ -122,7 +122,7 @@ El chat corre sin red con la grabación de #209, verificada en `LLM_MODO=reprodu
 
 1. En la tarjeta de Daniela, **Quitar** en una vacante → «Quitar y recalcular». El Matching se recalcula y Daniela sigue disponible para la otra.
 2. En la mejor opción de Yaritza, **Aprobar y enviar** sin marcar la casilla: aviso «Marca la casilla “El joven consintió”».
-3. Marca **El joven consintió…**, pulsa **Aprobar y enviar** y confirma. El diálogo de confirmación dice «Mensaje para la empresa (Telegram u outbox/)»: sin token, como se graba, ese mensaje queda como archivo `mensaje_….txt` en el outbox. No lo leas en voz alta como un envío por Telegram. La opción queda **Enviada**, con «CV · PDF», «Cita .ics» y el archivo del mensaje a la empresa.
+3. Marca **El joven consintió…** y pulsa **Aprobar y enviar**. El diálogo muestra un bloque ámbar con la alerta de la Ley 11 de esa oferta, «buena presencia», y su norma (#251): el humano decide con esa información. Confirma. El diálogo de confirmación dice «Mensaje para la empresa (Telegram u outbox/)»: sin token, como se graba, ese mensaje queda como archivo `mensaje_….txt` en el outbox. No lo leas en voz alta como un envío por Telegram. La opción queda **Enviada**, con «CV · PDF», «Cita .ics» y el archivo del mensaje a la empresa.
 
 **Se dice:** «Nada sale sin el orientador. Puede quitar a alguien y el sistema recalcula. Y sin el consentimiento de Yaritza, Postulación no envía nada. Con su sí, se genera un CV sin edad, género ni dirección, el mensaje para la empresa y la cita.»
 
@@ -132,7 +132,7 @@ El chat corre sin red con la grabación de #209, verificada en `LLM_MODO=reprodu
 
 1. Pestaña de la empresa, **abierta antes de grabar** con `http://localhost:8000/empresa/lista-corta#codigo=…` (la última línea de distribuidora-el-progreso en la terminal A): pulsa **Actualizar**. La empresa ve **«Candidato 1»**: habilidades con evidencia, sin nombre, edad ni corregimiento.
 2. Pulsa **Rechazar**, escribe un motivo corto (*Falta experiencia en inventario*) y confirma.
-3. De vuelta en el tablero, que se actualiza solo (#230): **la pestaña del tablero tiene que estar visible al volver de la vista de la empresa**, porque en segundo plano el temporizador va más lento. Después, **Trazas**: `empresa → evento_empresa → avisos → matching → auditor → formacion`. Yaritza sigue con su opción de La Chorrera.
+3. De vuelta en el tablero, que se actualiza solo (#230): **la pestaña del tablero tiene que estar visible al volver de la vista de la empresa**, porque con la pestaña oculta el refresco automático no hace nada y se pone al día al volver a verla. Después, **Trazas**: `empresa → evento_empresa → avisos → matching → auditor → formacion`. Yaritza sigue con su opción de La Chorrera.
 
 **Se dice:** «En su vista, la empresa ve la lista sin nombres: Candidato 1. Si rechaza, el grafo no se queda ahí: avisa a Yaritza, recalcula y le deja su siguiente opción al orientador. Cada agente dejó su traza. Puente: el LLM lee y redacta, el código decide lo legal y lo justo, y una persona aprueba.»
 
@@ -149,6 +149,9 @@ El chat corre sin red con la grabación de #209, verificada en `LLM_MODO=reprodu
 - **Base del tablero aparte:** «Reiniciar demo» borra `tablero.db`. Por eso la terminal B usa `terminal.db`.
 - **Archivos del tablero:** el tablero escribe el CV, la carta, el mensaje y el `.ics` en `PUENTE_OUTBOX` (`$DEMO/outbox-tablero`) (#207).
 - **Navegador:** si un diálogo de confirmación no responde, recarga (F5) y sigue: el estado queda guardado en SQLite.
+- **Casillas de consentimiento:** no dejes marcadas casillas «El joven consintió» sin enviar en otras tarjetas: frenan la actualización automática del tablero.
+- **Chips de la tarjeta (#227):** tras «Reiniciar demo», hasta que entre el PR #261, la tarjeta de Yaritza queda sin los chips «CV · PDF» y «Cita .ics» aunque los archivos sí salen al outbox. Comprueba que el #261 esté en `main` antes de grabar el paso 6.
+- **Evals:** si los mencionas, no digas «62 de 62»: hoy son 61 ok y 1 fallo (E2E-01, #238). El README ya lo cuenta así.
 
 ## Plan B general
 

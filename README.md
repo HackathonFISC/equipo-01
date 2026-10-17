@@ -127,8 +127,8 @@ Los siete agentes mínimos que sugiere el documento del reto y dónde están en 
 **Más allá de los siete agentes (stretch).** Verificado en `main` el 17 de octubre, sin red:
 
 - **Cobertura por turnos (#165).** Cuando ningún joven puede cubrir un turno completo porque le cruza con sus clases, `puente/solver/turnos.py` usa CP-SAT para proponer una dupla de mañana y tarde. En el tablero se prueba con «Probar escenario cobertura por turnos» (`POST /api/orientador/cobertura-turnos/demo`). Aprobar exige el consentimiento de los dos jóvenes. Pruebas en `tests/test_turnos.py`.
-- **Vista por rol y panel de operación (#168).** La cabecera del tablero tiene un selector de rol: «Orientador (Admin)», `/joven` y `/empresa`. El desplegable «Umbrales del solver editables y panel de operación (Admin)» hace dos cosas:
-  - recalcula con otros topes (`POST /api/orientador/umbrales`), por ejemplo 90 min de traslado, y deja una `Decision` firmada;
+- **Vista por rol y panel de operación (#168).** La cabecera del tablero tiene un selector de rol: «Orientador (Admin)», «Vista Aplicante» (`/joven`) y «Vista Empresa» (`/empresa/lista-corta`). El desplegable «Umbrales del solver editables y panel de operación (Admin)» hace dos cosas:
+  - recalcula con otros topes (`POST /api/orientador/umbrales`), por ejemplo 95 min de traslado, con lo que Tocumen deja de quedar fuera para Yaritza, y deja una `Decision` firmada;
   - muestra el uso del LLM por agente y el estado de los canales (`GET /api/admin/operacion`).
 - **Ofertas y CV por archivo (#170).** En el tablero, «Subir oferta (PDF o foto con cámara)» y «Subir CV (PDF o foto con cámara)» (`POST /api/ofertas/archivo` y `POST /api/perfiles/archivo`).
   - Los guardrails de tamaño (5 MB) y de tipo se aplican antes de leer el archivo, y el audio se rechaza.
