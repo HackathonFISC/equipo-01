@@ -1,0 +1,32 @@
+{
+  "hash": "3e9711ebea5739abfbb0c2502ec09cd5a569c12e28cfd9d02491b9a182813970",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "perfil",
+  "esquema": "PerfilExtraido",
+  "salida": {
+    "habilidades": [
+      {
+        "skill_id": "recepcion_mercancia",
+        "evidencia": "Recibo la mercancía cuando llega el camión"
+      },
+      {
+        "skill_id": "reposicion_productos",
+        "evidencia": "acomodo los productos en los estantes"
+      }
+    ],
+    "edad": null,
+    "corregimiento": null,
+    "ubicacion_texto": null,
+    "salario_minimo": null,
+    "horario_libre": [],
+    "horario_clases": [],
+    "transcripcion_literal": null
+  },
+  "uso": {
+    "entrada": 2541,
+    "salida": 157
+  },
+  "creado": "2026-10-17T03:19:39+00:00"
+}

@@ -1,0 +1,44 @@
+{
+  "hash": "51c04872f42362dcdf5fd706dfec26b4e9a4d5b69a47755dc3baed99ab7897a5",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "mercado",
+  "esquema": "OfertaExtraida",
+  "salida": {
+    "puesto": "Promotor/a - Recaudación de fondos para ONG mundial",
+    "empresa": "Empresa A",
+    "corregimiento": null,
+    "ubicacion_texto": "Panamá, Panamá",
+    "salario_mensual": 650.0,
+    "salario_tipo": "comisiones",
+    "horario": null,
+    "horario_tipo": "no_publicado",
+    "plazas": null,
+    "franjas_entrevista": [],
+    "habilidades": [
+      "Comunicación",
+      "Dinamismo",
+      "Gestión de equipos",
+      "Liderazgo",
+      "Proactividad",
+      "Tolerancia a la frustración",
+      "Trabajo en equipo",
+      "Cierre de ventas",
+      "Relaciones públicas",
+      "Inglés"
+    ],
+    "requisitos_texto": "Educación mínima: Bachillerato / Educación Media; años de experiencia; Idiomas: Inglés; Edad: entre 20 y 28 años; Conocimientos: Comunicación, Dinamismo, Gestión de equipos, Liderazgo, Proactividad, Tolerancia a la frustración, Trabajo en equipo, Cierre de ventas, Relaciones públicas",
+    "transcripcion_literal": null
+  },
+  "uso": {
+    "entrada": 2158,
+    "salida": 713
+  },
+  "creado": "2026-10-17T03:29:49+00:00",
+  "atendido_por": {
+    "proveedor": "anthropic",
+    "modelo": "claude-opus-5-5",
+    "modo": "json_libre_por_timeout_esquema"
+  }
+}

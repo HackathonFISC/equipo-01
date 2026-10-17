@@ -1,0 +1,36 @@
+{
+  "hash": "76a86655fdcc10a4c0654efd7db6cb80439c9d5ac821f7768e36a75311160aa1",
+  "proveedor": "anthropic",
+  "modelo": "claude-opus-5-5",
+  "tipo": "estructurado",
+  "agente": "mercado",
+  "esquema": "OfertaExtraida",
+  "salida": {
+    "puesto": "Vendedor en tienda",
+    "empresa": "Empresa D",
+    "corregimiento": null,
+    "ubicacion_texto": "Panamá, Panamá",
+    "salario_mensual": 620.0,
+    "salario_tipo": "comisiones",
+    "horario": null,
+    "horario_tipo": "no_publicado",
+    "plazas": null,
+    "franjas_entrevista": [],
+    "habilidades": [
+      "Ventas",
+      "Asesoría a clientes"
+    ],
+    "requisitos_texto": "Educación mínima: Educación Básica Secundaria; años de experiencia",
+    "transcripcion_literal": null
+  },
+  "uso": {
+    "entrada": 2032,
+    "salida": 630
+  },
+  "creado": "2026-10-17T03:30:08+00:00",
+  "atendido_por": {
+    "proveedor": "anthropic",
+    "modelo": "claude-opus-5-5",
+    "modo": "json_libre_por_timeout_esquema"
+  }
+}
