@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+import time
 
 import httpx
 import pytest
@@ -904,6 +905,37 @@ def test_issue_170_ingesta_multicanal_archivos_guardrails_y_pii(
                 headers={"Content-Length": str(50 * 1024 * 1024)},
             )
             assert r_grande.status_code == 413
+
+            # 6. Rechazo de PDF dañado o no legible -> 422
+            pdf_corrupto = b"%PDF-1.4\n" + b"contenido completamente corrupto sin xref ni trailer" * 10
+            r_corrupto = await client.post(
+                "/api/perfiles/archivo",
+                files={"archivo": ("corrupto.pdf", pdf_corrupto, "application/pdf")},
+                data={"edad": "21", "corregimiento": "La Chorrera"},
+            )
+            assert r_corrupto.status_code == 422
+            assert "dañado" in r_corrupto.text
+
+            # 7. Falta de encabezado Content-Length -> 411
+            r_sin_cl = await client.post(
+                "/api/perfiles/archivo",
+                content=b"--boundary\r\nContent-Disposition: form-data; name=\"archivo\"; filename=\"test.pdf\"\r\nContent-Type: application/pdf\r\n\r\n%PDF-1.4\r\n--boundary--\r\n",
+                headers={
+                    "Content-Type": "multipart/form-data; boundary=boundary",
+                    "Content-Length": "",
+                },
+            )
+            assert r_sin_cl.status_code == 411
+            assert "Content-Length" in r_sin_cl.text
+
+            # 8. Límite de subidas por minuto antes de parsear cuerpo -> 429
+            monkeypatch.setattr(srv, "LIMITE_PERFILES_POR_MINUTO", 0)
+            r_limite = await client.post(
+                "/api/ofertas/archivo",
+                files={"archivo": ("volante2.jpg", datos_volante, "image/jpeg")},
+            )
+            assert r_limite.status_code == 429
+            assert "Muchas subidas seguidas" in r_limite.text
 
     asyncio.run(_ejecutar())
 

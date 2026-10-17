@@ -3410,6 +3410,12 @@ from puente.agents.mercado import procesar_ofertas
 from puente.agents.perfil import extraer_texto_cv
 from puente.guardrails import EXTENSIONES_PERMITIDAS, MAX_BYTES_ARCHIVO, ResultadoGuardrail, validar_archivo
 
+try:
+    from pypdf.errors import PyPdfError
+except ImportError:  # pragma: no cover
+    class PyPdfError(Exception):
+        pass
+
 # El nombre entra en el prompt de Mercado y por tanto en la clave de la grabación (#45): fijo por
 # tipo, para que el mismo archivo dé la misma clave venga de donde venga (cámara, PDF, otro equipo).
 NOMBRE_SUBIDA_OFERTA = "oferta_subida"
@@ -3465,11 +3471,15 @@ async def leer_archivo_subido(request: Request, estado: dict[str, Any]) -> tuple
     """
     if _subida_de_otro_sitio(request):
         raise ErrorSubida("Solicitud desde otro sitio rechazada", 403)
+    if not _subida_dentro_del_limite(request):
+        raise ErrorSubida("Muchas subidas seguidas. Espera un minuto y vuelve a intentarlo.", 429)
     ctype = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
     if ctype != "multipart/form-data":
         raise ErrorSubida("Sube el archivo como multipart/form-data en el campo «archivo».", 415)
     declarado = request.headers.get("content-length", "")
-    if declarado.isdigit() and int(declarado) > MAX_BYTES_ARCHIVO + MARGEN_MULTIPART:
+    if not declarado or not declarado.isdigit():
+        raise ErrorSubida("Falta el encabezado Content-Length.", 411)
+    if int(declarado) > MAX_BYTES_ARCHIVO + MARGEN_MULTIPART:
         rechazo = validar_archivo("subida", int(declarado))
         _registrar_decision_db(estado, rechazo.decision)
         raise ErrorSubida(_mensaje_rechazo(rechazo), 413)
@@ -3513,7 +3523,16 @@ def leer_texto_de_cv(tipo: str, contenido: bytes) -> str:
     with tempfile.TemporaryDirectory(prefix="puente_cv_") as carpeta:
         ruta = Path(carpeta) / f"cv_subido.{tipo}"
         ruta.write_bytes(contenido)
-        return extraer_texto_cv(ruta)
+        try:
+            return extraer_texto_cv(ruta)
+        except (PyPdfError, ValueError) as exc:
+            raise ErrorSubida("El archivo PDF no se pudo leer o está dañado.", 422) from exc
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            if tipo == "pdf":
+                raise ErrorSubida("El archivo PDF no se pudo leer o está dañado.", 422) from exc
+            raise
 
 
 def _alerta_para_tablero(alerta: str) -> dict[str, str]:
@@ -3686,8 +3705,6 @@ def _respuesta_subida(exc: ErrorSubida) -> JSONResponse:
 async def endpoint_oferta_archivo(request: Request) -> JSONResponse:
     try:
         tipo, contenido, _campos = await leer_archivo_subido(request, ESTADO_GLOBAL)
-        if not _subida_dentro_del_limite(request):
-            raise ErrorSubida("Muchas subidas seguidas. Espera un minuto y vuelve a intentarlo.", 429)
         resultado = await run_in_threadpool(extraer_oferta_de_archivo, tipo, contenido)
         subida = registrar_oferta_subida(ESTADO_GLOBAL, resultado)
     except ErrorSubida as exc:
@@ -3700,15 +3717,19 @@ async def endpoint_perfil_archivo(request: Request) -> JSONResponse:
         tipo, contenido, campos = await leer_archivo_subido(request, ESTADO_GLOBAL)
         try:
             texto_cv = await run_in_threadpool(leer_texto_de_cv, tipo, contenido)
+        except ErrorSubida:
+            raise
         except RuntimeError as exc:  # foto sin OCR local instalado: nunca se manda la imagen al LLM
             raise ErrorSubida(
                 "Este equipo no tiene OCR local para leer fotos de CV (la foto no se envía al modelo "
                 "porque trae la cédula). Sube el CV en PDF o registra al joven con la entrevista.",
                 422,
             ) from exc
+        except Exception as exc:
+            if tipo == "pdf":
+                raise ErrorSubida("El archivo PDF no se pudo leer o está dañado.", 422) from exc
+            raise
         entrada = preparar_entrada_cv(ESTADO_GLOBAL, texto_cv, campos)
-        if not _subida_dentro_del_limite(request):
-            raise ErrorSubida("Muchas subidas seguidas. Espera un minuto y vuelve a intentarlo.", 429)
         taxonomia = cargar_taxonomia_grafo()
         try:
             perfil, decision = await run_in_threadpool(

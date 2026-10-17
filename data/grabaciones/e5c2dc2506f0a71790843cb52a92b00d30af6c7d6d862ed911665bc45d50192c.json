@@ -2,6 +2,7 @@
   "hash": "e5c2dc2506f0a71790843cb52a92b00d30af6c7d6d862ed911665bc45d50192c",
   "proveedor": "anthropic",
   "modelo": "claude-opus-5-5",
+  "nota": "Grabación sintética determinística de prueba para fixtures de ingesta multicanal (issue #170).",
   "tipo": "estructurado",
   "agente": "mercado",
   "esquema": "OfertaExtraida",
