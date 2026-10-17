@@ -475,6 +475,46 @@ def _leer_decisiones_db(estado: dict[str, Any]) -> list[dict[str, Any]]:
         conn.close()
 
 
+def _cobertura_aprobada(estado: dict[str, Any], cobertura: dict[str, Any]) -> bool:
+    """Una cobertura por turnos está aprobada cuando las postulaciones de sus dos jóvenes están «enviado» (#165, #256)."""
+    segmentos = cobertura.get("segmentos") or []
+    if len(segmentos) < 2:
+        return False
+    return all(
+        (_buscar_postulacion(estado, seg.get("perfil_id", ""), cobertura.get("oferta_id", "")) or {}).get("estado")
+        == EstadoPostulacion.ENVIADO.value
+        for seg in segmentos[:2]
+    )
+
+
+def _marca_de_tiempo(decision: dict[str, Any]) -> float:
+    """Segundos desde la época de `timestamp` (ISO con Z o con huso); una marca ilegible queda al principio."""
+    try:
+        marca = datetime.fromisoformat(str(decision.get("timestamp") or "").replace("Z", "+00:00"))
+    except ValueError:
+        return 0.0
+    return (marca if marca.tzinfo else marca.replace(tzinfo=timezone.utc)).timestamp()
+
+
+def _historial_de_trazas(estado: dict[str, Any]) -> list[dict[str, Any]]:
+    """Todas las decisiones del caso, en orden: lo guardado en SQLite más lo que solo está en memoria (#256).
+
+    La pestaña «Trazas» dibujaba `decisiones`, que cada recálculo reemplaza por la corrida actual de Matching, Auditor
+    y Formación; el historial completo estaba en `decisiones_db` y nadie lo dibujaba. Las decisiones que solo viven
+    en memoria (por ejemplo la del nodo de aprobación del grafo) se suman, sin repetir las que ya están en SQLite.
+    """
+    guardadas = _leer_decisiones_db(estado)
+    claves = {(d["agente"], d["entrada_resumen"], d["salida_resumen"]) for d in guardadas}
+    solo_memoria = [
+        {campo: str(_serializar_decision(d).get(campo) or "") for campo in
+         ("agente", "entrada_resumen", "salida_resumen", "razon", "timestamp")}
+        for d in estado.get("decisiones") or []
+        if (_serializar_decision(d).get("agente"), _serializar_decision(d).get("entrada_resumen"),
+            _serializar_decision(d).get("salida_resumen")) not in claves
+    ]
+    return sorted([*guardadas, *solo_memoria], key=_marca_de_tiempo)  # estable: a igual hora, el orden en que llegaron
+
+
 def _evaluar_reglas_discriminacion(requisitos_texto: str, puesto: str = "") -> tuple[bool, list[dict[str, str]]]:
     """Delega 100% la revisión legal a `puente.rules.discriminacion` (Ley 11 de 2005): requisitos y puesto (#190)."""
     hallazgos = revisar_oferta(puesto, requisitos_texto)
@@ -1059,7 +1099,11 @@ def recalcular_pipeline_tablero(
                 estado, seg["perfil_id"], cob_dict["oferta_id"]
             )
         coberturas_ui.append(cob_dict)
-    estado["coberturas_turnos"] = coberturas_ui
+    # Las duplas ya aprobadas (sus dos postulaciones están «enviado») se conservan: el solver ya no las propone porque
+    # pasaron a ser historial, y sin esto la tarjeta aprobada desaparecía en el siguiente recálculo (#256).
+    aprobadas = [c for c in (estado.get("coberturas_turnos") or []) if _cobertura_aprobada(estado, c)]
+    ya_aprobadas = {c.get("oferta_id") for c in aprobadas}
+    estado["coberturas_turnos"] = aprobadas + [c for c in coberturas_ui if c.get("oferta_id") not in ya_aprobadas]
 
     # Registrar las decisiones de los nodos centrales en puente.tools.db en orden cronológico real (#124)
     if registrar_trazas:
@@ -1148,6 +1192,16 @@ def recalcular_pipeline_tablero(
     finally:
         conn.close()
 
+    # Una postulación que sigue «preseleccionado» pero ya no está en la lista corta (el solver eligió otras opciones
+    # al desbloquear una oferta o cambiar un umbral) no tiene tarjeta: se quita para que el embudo cuente lo que se
+    # ve (#256). Si la pareja vuelve a la lista, se vuelve a crear desde SQLite. Las enviadas, rechazadas o
+    # contratadas son historial y se quedan.
+    en_lista_corta = {(m["perfil_id"], m["oferta_id"]) for m in matches_ui}
+    nuevas_postulaciones = [
+        post for post in nuevas_postulaciones
+        if post.get("estado") != EstadoPostulacion.PRESELECCIONADO.value
+        or (post["perfil_id"], post["oferta_id"]) in en_lista_corta
+    ]
     estado["postulaciones"] = nuevas_postulaciones
     estado["metricas"] = _calcular_metricas_impacto(estado)
     if registrar_trazas:
@@ -2756,6 +2810,7 @@ def serializar_estado_publico(estado: dict[str, Any]) -> dict[str, Any]:
     payload["conteo_embudo"] = conteo_embudo
     payload["catalogo_data"] = listar_catalogo_data()
     payload["decisiones_db"] = _leer_decisiones_db(estado)
+    payload["trazas"] = _historial_de_trazas(estado)
     payload["metricas"] = _calcular_metricas_impacto(estado)
     payload["operacion"] = obtener_panel_operacion(estado)
     payload["modo_demo_publica"] = es_publica
@@ -2869,6 +2924,51 @@ async def endpoint_nueva_oferta(request: Request) -> JSONResponse:
     except ErrorValidacionTablero as exc:
         return JSONResponse({"detail": str(exc)}, status_code=422)
     return await endpoint_estado(request)
+
+
+async def endpoint_empresa_publicar_oferta(request: Request) -> JSONResponse:
+    """La empresa publica una vacante y recibe solo el resultado de esa oferta (#258).
+
+    `/api/ofertas` devuelve el estado completo del tablero, con los jóvenes y sus datos: es del orientador. La
+    página de la empresa (`/empresa`) usa esta ruta, que pasa por el mismo análisis de Ley 11 y por el mismo
+    Matching, pero responde con el id, el puesto, la empresa, si quedó bloqueada y sus alertas con la frase.
+    """
+    datos, err_resp = await _leer_json_validado(request)
+    if err_resp is not None or datos is None:
+        return err_resp  # type: ignore[return-value]
+    try:
+        req = NuevaOfertaRequest.model_validate(datos)
+        previas = {o["id"] for o in ESTADO_GLOBAL["ofertas"]}
+        analizar_nueva_oferta_texto(
+            ESTADO_GLOBAL,
+            puesto=req.puesto,
+            empresa=req.empresa,
+            corregimiento=req.corregimiento,
+            salario_mensual=req.salario_mensual,
+            requisitos_texto=req.requisitos_texto,
+            habilidades=req.habilidades,
+        )
+    except ValidationError as exc:
+        return JSONResponse({"detail": exc.errors(include_context=False)}, status_code=422)
+    except ErrorValidacionTablero as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
+    nueva = next(o for o in reversed(ESTADO_GLOBAL["ofertas"]) if o["id"] not in previas)
+    # Una empresa nueva recibe su código ahora: el enlace sale en la consola del servidor, no en la respuesta.
+    empresa.anunciar_codigos_empresa(ESTADO_GLOBAL)
+    return JSONResponse(
+        {
+            "oferta": {
+                "id": nueva["id"],
+                "puesto": nueva["puesto"],
+                "empresa": nueva["empresa"],
+                "bloqueada": bool(nueva["bloqueada"]),
+                "alertas": [
+                    {"tipo": a.get("tipo"), "frase": a.get("frase"), "regla": a.get("regla")} for a in nueva["alertas"]
+                ],
+            }
+        },
+        status_code=201,
+    )
 
 
 async def endpoint_nuevo_perfil(request: Request) -> JSONResponse:
@@ -3061,6 +3161,44 @@ ESTADOS_ENVIADOS = (
 ESTADOS_CERRADOS = (*ESTADOS_ENVIADOS, EstadoPostulacion.NO_SELECCIONADO.value)
 NOMBRES_DIAS = {"miercoles": "miércoles", "sabado": "sábado"}
 
+
+def cv_llego_a_la_empresa(post: dict[str, Any], estado: dict[str, Any] | None = None) -> bool:
+    """Si el CV se envió a la empresa alguna vez, aunque después ella haya dicho que no (#257).
+
+    El estado vigente pasa a `no_seleccionado` cuando la empresa rechaza o da la vacante por cubierta, y con él se
+    perdía el hecho de que el envío ya había ocurrido: el embudo lo mostraba sin enviar y la tarjeta decía «no se
+    envió». Se cuenta como enviada si el estado vigente lo dice, si la postulación conserva los archivos que genera
+    Postulación al enviar (el CV y el mensaje) o, sobre todo, si el historial de SQLite pasó por «enviado» o más
+    allá: los archivos se pierden cuando el tablero reconstruye su estado desde la base, el historial no.
+    Si el orientador rechaza antes de enviar, no hay archivos ni paso por «enviado».
+    """
+    if post.get("estado") in ESTADOS_ENVIADOS:
+        return True
+    archivos = [str(a) for a in post.get("archivos_generados") or []]
+    if any(a.startswith(("cv_", "mensaje_")) for a in archivos):
+        return True
+    if estado is None or post.get("estado") != EstadoPostulacion.NO_SELECCIONADO.value:
+        return False  # la base solo se consulta para las cerradas sin envío aparente: el resto no la necesita
+    return _paso_por_enviado_en_sqlite(estado, str(post.get("perfil_id")), str(post.get("oferta_id")))
+
+
+def _paso_por_enviado_en_sqlite(estado: dict[str, Any], perfil_id: str, oferta_id: str) -> bool:
+    ruta_db = estado.get("_db_path") or os.getenv("PUENTE_DB") or str(RUTA_DB_TABLERO)
+    marcas = ", ".join("?" for _ in ESTADOS_ENVIADOS)
+    try:
+        conn = db.conectar(ruta_db)
+        try:
+            fila = conn.execute(
+                "SELECT 1 FROM postulaciones_historial h JOIN postulaciones p ON p.id = h.postulacion_id "
+                f"WHERE p.perfil_id = ? AND p.oferta_id = ? AND h.estado_nuevo IN ({marcas}) LIMIT 1",
+                (perfil_id, oferta_id, *ESTADOS_ENVIADOS),
+            ).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return False
+    return fila is not None
+
 # Perfil (#6) extrae las habilidades con este LLM a través de `puente.llm` (#45); las pruebas lo
 # cambian por uno falso. El LLM solo propone: el código verifica taxonomía y evidencia literal.
 llm_perfil_joven: Callable[[str], Any] = llm_puente
@@ -3136,11 +3274,9 @@ def _dentro_del_limite(request: Request) -> bool:
     return dentro
 
 
-def _token_de(request: Request, *, permitir_query: bool = False) -> str | None:
-    token = request.headers.get(ENCABEZADO_TOKEN_JOVEN)
-    if not token and permitir_query:  # el enlace del .ics es un <a href>: no lleva encabezados
-        token = request.query_params.get("token")
-    return token
+def _token_de(request: Request) -> str | None:
+    # Solo en el encabezado: en la URL quedaría en el registro del servidor y en el historial del teléfono (#257).
+    return request.headers.get(ENCABEZADO_TOKEN_JOVEN)
 
 
 class PerfilJovenRequest(BaseModel):
@@ -3444,6 +3580,7 @@ def resultado_joven(estado: dict[str, Any], perfil_id: str) -> dict[str, Any]:
     matches = {m["oferta_id"]: m for m in estado.get("matches", []) if m.get("perfil_id") == perfil_id}
 
     vacantes: list[dict[str, Any]] = []
+    salieron_de_lista: list[dict[str, Any]] = []
     for post in estado.get("postulaciones", []):
         if post.get("perfil_id") != perfil_id:
             continue
@@ -3451,7 +3588,16 @@ def resultado_joven(estado: dict[str, Any], perfil_id: str) -> dict[str, Any]:
         match = matches.get(oferta_id)
         estado_post = post.get("estado", EstadoPostulacion.PRESELECCIONADO.value)
         if match is None and estado_post not in ESTADOS_CERRADOS:
-            continue  # ya no está en la lista corta tras un recálculo
+            # Ya no está en la lista corta tras un recálculo: se avisa en vez de dejarla desaparecer (#257).
+            oferta = ofertas.get(oferta_id, {})
+            salieron_de_lista.append(
+                {
+                    "oferta_id": oferta_id,
+                    "puesto": post.get("puesto") or oferta.get("puesto", oferta_id),
+                    "empresa": post.get("empresa") or oferta.get("empresa", ""),
+                }
+            )
+            continue
         consentimiento = _estado_consentimiento(_ultimo_consentimiento(estado, perfil_id, oferta_id))
         if estado_post in ESTADOS_CERRADOS or consentimiento != EstadoPostulacion.CONSENTIDO.value:
             estado_visible = estado_post
@@ -3475,6 +3621,8 @@ def resultado_joven(estado: dict[str, Any], perfil_id: str) -> dict[str, Any]:
                 "consentimiento": consentimiento,
                 "puede_consentir": match is not None and estado_post in ESTADOS_ADMITEN_CONSENTIMIENTO,
                 "enviada": estado_post in ESTADOS_ENVIADOS,
+                # El CV llegó a la empresa, aunque ella haya dicho después que no (#257).
+                "se_envio": cv_llego_a_la_empresa(post, estado),
                 "ics": next(
                     (a for a in post.get("archivos_generados") or [] if str(a).endswith(".ics")),
                     None,
@@ -3522,6 +3670,9 @@ def resultado_joven(estado: dict[str, Any], perfil_id: str) -> dict[str, Any]:
             sid: taxonomia.get(sid, {}).get("nombre_es", sid) for sid in sorted(i for i in ids_habilidades if i)
         },
         "vacantes": vacantes,
+        "salieron_de_lista": salieron_de_lista,
+        # Por qué no hay ninguna opción: las restricciones o el cupo lleno de las vacantes que sí las cumplen (#245).
+        "sin_opcion": (estado.get("sin_opcion") or {}).get(perfil_id),
         "descartes": descartes,
         "rutas_formacion": rutas,
         # TODO(#12/#84): el mensaje para el joven lo arma Postulación (#12). Cuando #84 esté en main,
@@ -3648,7 +3799,7 @@ async def endpoint_joven_ics(request: Request) -> FileResponse | JSONResponse:
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=422)
     try:
-        verificar_token_joven(ESTADO_GLOBAL, perfil_id, _token_de(request, permitir_query=True))
+        verificar_token_joven(ESTADO_GLOBAL, perfil_id, _token_de(request))
     except CredencialJovenInvalida as exc:
         return JSONResponse({"detail": str(exc)}, status_code=401)
     post = _buscar_postulacion(ESTADO_GLOBAL, perfil_id, oferta_id)
@@ -4043,6 +4194,7 @@ app = Starlette(
         Route("/api/orientador/accion", endpoint_accion_orientador, methods=["POST"]),
         Route("/api/ofertas/desbloquear", endpoint_desbloquear_oferta, methods=["POST"]),
         Route("/api/ofertas", endpoint_nueva_oferta, methods=["POST"]),
+        Route("/api/empresa/ofertas", endpoint_empresa_publicar_oferta, methods=["POST"]),
         Route("/api/ofertas/archivo", endpoint_oferta_archivo, methods=["POST"]),
         Route("/api/perfiles", endpoint_nuevo_perfil, methods=["POST"]),
         Route("/api/perfiles/archivo", endpoint_perfil_archivo, methods=["POST"]),

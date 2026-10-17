@@ -140,7 +140,7 @@
       };
       let resp;
       try {
-        resp = await fetch("/api/ofertas", {
+        resp = await fetch("/api/empresa/ofertas", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
@@ -161,9 +161,8 @@
         return;
       }
       $("msg-empresa").hidden = true;
-      // La respuesta es el estado del tablero: solo se lee la vacante recién publicada, que queda al final.
-      const ofertas = (datos && datos.ofertas) || [];
-      const nueva = ofertas[ofertas.length - 1];
+      // La respuesta es solo el resultado de la oferta publicada: el estado del tablero no llega a esta página.
+      const nueva = datos && datos.oferta;
       if (nueva) pintarResultado(nueva);
       else mostrarAviso("Vacante procesada por Puente (Ley 11 de 2005).");
     });

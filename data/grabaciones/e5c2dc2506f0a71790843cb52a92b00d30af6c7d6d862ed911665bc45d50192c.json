@@ -2,7 +2,7 @@
   "hash": "e5c2dc2506f0a71790843cb52a92b00d30af6c7d6d862ed911665bc45d50192c",
   "proveedor": "anthropic",
   "modelo": "claude-opus-5-5",
-  "nota": "Grabación sintética determinística de prueba para fixtures de ingesta multicanal (issue #170).",
+  "nota": "Salida escrita a mano por scripts/grabar_fixtures_ingesta.py; no la produjo el modelo. «proveedor» y «modelo» solo identifican la clave del hash, no quién respondió; el uso 0/0 indica que no hubo llamada. Ver data/grabaciones/README.md (#170, #236).",
   "tipo": "estructurado",
   "agente": "mercado",
   "esquema": "OfertaExtraida",
