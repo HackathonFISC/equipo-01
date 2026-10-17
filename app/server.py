@@ -3004,20 +3004,34 @@ async def endpoint_empresa_publicar_oferta(request: Request) -> JSONResponse:
     nueva = next(o for o in reversed(ESTADO_GLOBAL["ofertas"]) if o["id"] not in previas)
     # Una empresa nueva recibe su código ahora: el enlace sale en la consola del servidor, no en la respuesta.
     empresa.anunciar_codigos_empresa(ESTADO_GLOBAL)
-    return JSONResponse(
-        {
-            "oferta": {
-                "id": nueva["id"],
-                "puesto": nueva["puesto"],
-                "empresa": nueva["empresa"],
-                "bloqueada": bool(nueva["bloqueada"]),
-                "alertas": [
-                    {"tipo": a.get("tipo"), "frase": a.get("frase"), "regla": a.get("regla")} for a in nueva["alertas"]
-                ],
-            }
-        },
-        status_code=201,
-    )
+    return JSONResponse({"oferta": _oferta_para_empresa(nueva)}, status_code=201)
+
+
+def _oferta_para_empresa(nueva: dict[str, Any]) -> dict[str, Any]:
+    """Lo único que la empresa recibe de su oferta recién publicada: id, puesto, empresa, si quedó bloqueada y sus alertas."""
+    return {
+        "id": nueva["id"],
+        "puesto": nueva["puesto"],
+        "empresa": nueva["empresa"],
+        "bloqueada": bool(nueva["bloqueada"]),
+        "alertas": [{"tipo": a.get("tipo"), "frase": a.get("frase"), "regla": a.get("regla")} for a in nueva["alertas"]],
+    }
+
+
+async def endpoint_empresa_volante(request: Request) -> JSONResponse:
+    """La empresa sube el volante de su vacante (PDF o foto) y recibe solo el resultado de esa oferta (#303).
+
+    Usa la misma lectura de archivo, los mismos guardrails, el mismo agente Mercado y la misma Ley 11 que
+    `/api/ofertas/archivo` (del orientador), pero responde como `/api/empresa/ofertas`: sin el estado del tablero.
+    """
+    try:
+        tipo, contenido, _campos = await leer_archivo_subido(request, ESTADO_GLOBAL)
+        resultado = await run_in_threadpool(extraer_oferta_de_archivo, tipo, contenido)
+        subida = registrar_oferta_subida(ESTADO_GLOBAL, resultado)
+    except ErrorSubida as exc:
+        return _respuesta_subida(exc)
+    empresa.anunciar_codigos_empresa(ESTADO_GLOBAL)
+    return JSONResponse({"oferta": _oferta_para_empresa(subida["oferta"])}, status_code=201)
 
 
 async def endpoint_nuevo_perfil(request: Request) -> JSONResponse:
@@ -4274,6 +4288,7 @@ app = Starlette(
         Route("/api/ofertas/desbloquear", endpoint_desbloquear_oferta, methods=["POST"]),
         Route("/api/ofertas", endpoint_nueva_oferta, methods=["POST"]),
         Route("/api/empresa/ofertas", endpoint_empresa_publicar_oferta, methods=["POST"]),
+        Route("/api/empresa/volante", endpoint_empresa_volante, methods=["POST"]),
         Route("/api/ofertas/archivo", endpoint_oferta_archivo, methods=["POST"]),
         Route("/api/perfiles", endpoint_nuevo_perfil, methods=["POST"]),
         Route("/api/perfiles/archivo", endpoint_perfil_archivo, methods=["POST"]),

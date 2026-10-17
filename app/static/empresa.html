@@ -83,6 +83,20 @@
       </fieldset>
     </form>
 
+    <form id="form-empresa-volante" class="tarjeta" style="margin-bottom:1.25rem;">
+      <fieldset>
+        <legend>Subir volante (PDF o imagen)</legend>
+        <p>Si ya tienes tu aviso en un volante, súbelo y SkillMatch lee la vacante y la revisa con la Ley 11 de 2005, igual que si la escribieras.</p>
+        <label class="campo campo-ancho">
+          <span>Archivo del volante (PDF, JPG o PNG)</span>
+          <input id="vol-archivo" type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" required />
+        </label>
+        <div style="margin-top:0.75rem;">
+          <button type="submit" class="btn btn-pri">Subir volante y validar con Ley 11</button>
+        </div>
+      </fieldset>
+    </form>
+
     <section id="resultado" class="tarjeta" aria-live="polite" hidden>
       <h2 id="resultado-titulo" style="margin-top:0;"></h2>
       <p id="resultado-detalle"></p>
@@ -165,6 +179,44 @@
       const nueva = datos && datos.oferta;
       if (nueva) pintarResultado(nueva);
       else mostrarAviso("Vacante procesada por SkillMatch (Ley 11 de 2005).");
+    });
+
+    // Subir volante (#303): la misma respuesta que publicar, solo el resultado de la oferta.
+    $("form-empresa-volante").addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const archivo = $("vol-archivo").files && $("vol-archivo").files[0];
+      if (!archivo) {
+        mostrarAviso("Elige el archivo del volante primero.");
+        return;
+      }
+      const cuerpo = new FormData();
+      cuerpo.append("archivo", archivo);
+      const boton = ev.submitter;
+      if (boton) boton.disabled = true;
+      let resp;
+      try {
+        resp = await fetch("/api/empresa/volante", { method: "POST", body: cuerpo });
+      } catch (err) {
+        mostrarAviso(`Sin respuesta del servidor: ${err.message}`);
+        return;
+      } finally {
+        if (boton) boton.disabled = false;
+      }
+      let datos = null;
+      try {
+        datos = await resp.json();
+      } catch {
+        datos = null;
+      }
+      if (!resp.ok) {
+        const detalle = datos && datos.detail;
+        mostrarAviso(typeof detalle === "string" ? detalle : "No se pudo leer el volante.");
+        return;
+      }
+      $("msg-empresa").hidden = true;
+      $("vol-archivo").value = "";
+      if (datos && datos.oferta) pintarResultado(datos.oferta);
+      else mostrarAviso("Volante procesado por SkillMatch (Ley 11 de 2005).");
     });
   </script>
 </body>
