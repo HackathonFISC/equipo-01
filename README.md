@@ -306,7 +306,7 @@ El CV ciego, el `.ics` y los mensajes quedan en `outbox/` (o en `PUENTE_OUTBOX`)
 uv run python -m puente.cargar
 ```
 
-**3. El tablero.** Se abre en http://127.0.0.1:8000.
+**3. El tablero.** Se abre en http://127.0.0.1:8000/orientador; en la raíz está la landing.
 
 ```bash
 uv run python -m app.server

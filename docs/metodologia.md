@@ -317,7 +317,7 @@ uv run python -m puente.graph
 uv run python -m puente.cargar                 # carga data/ en puente.db (#46)
 uv run python -m puente.metricas --tendencias  # tendencias del mercado sobre puente.db (#198)
 uv run python -m puente.agents.perfil --entrevista   # entrevista de Perfil por terminal
-uv run python -m app.server                    # tablero en http://127.0.0.1:8000 (vista del joven en /joven)
+uv run python -m app.server                    # landing en http://127.0.0.1:8000, tablero en /orientador, joven en /joven
 uv run python -m evals.run                     # evals (escribe evals/resultados.md)
 ```
 
