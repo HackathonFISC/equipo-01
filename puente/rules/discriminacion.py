@@ -1,11 +1,12 @@
-"""Requisitos discriminatorios: bloqueo (edad y sexo, Ley 11 de 2005) y alertas. Issues #5, #43 y #73.
+"""Requisitos discriminatorios: bloqueo (edad y sexo, Ley 11 de 2005) y alertas. Issues #5, #43, #73, #117 y #121.
 
 Solo regex sobre el texto original de la oferta, sin LLM: el modelo nunca decide si una
 oferta es legal. Bloquean el límite de edad (art. 2) y la exigencia de sexo (art. 1).
 Las demás causales del art. 1 (raza, nacimiento, discapacidad, clase social, religión e
-ideas políticas) y el puesto escrito solo en femenino ("cajera") alertan citando el artículo,
-para que el orientador decida. "Buena presencia", foto y estado civil solo alertan, porque
-la ley no menciona la apariencia. Cada hallazgo guarda la regla, la frase literal y si bloquea.
+ideas políticas) y el puesto o el estado civil escritos solo en femenino ("cajera", "soltera")
+alertan citando el artículo, para que el orientador decida. "Buena presencia", foto y estado
+civil solo alertan, porque la ley no menciona la apariencia. Cada hallazgo guarda la regla, la
+frase literal y si bloquea.
 """
 
 from __future__ import annotations
@@ -57,22 +58,56 @@ _RANGO = re.compile(
 # como edad "a partir de 2026", "desde 25 dólares" o "mínimo 26 horas".
 _DESDE = r"(?:a\s+partir\s+de|desde)(?:\s+los)?"
 _EN_ADELANTE = r"(?:\s+en\s+adelante\b)?"
+# Singular y plural (#121): "menor de 28 años" y "mayor de 25 años" son el mismo límite que "menores de".
+_MENOR_MAYOR = r"(?:no\s+)?(?:menor|mayor)(?:es)?\s+de"
+# "máximo", "máxima", "máx." y "máx" (#121), y lo mismo para el mínimo.
+_MAX_MIN = r"(?:maxim[oa]|minim[oa]|max|min)\.?"
 _TOPE_EDAD = re.compile(
-    rf"\b(?:menores?\s+de|no\s+mayor(?:es)?\s+de|mayores?\s+de|maximo|minimo|hasta|no\s+mas\s+de|{_DESDE})\s+\d{{2}}\s*{_ANOS}\b{_EN_ADELANTE}"
+    rf"\b(?:{_MENOR_MAYOR}|{_MAX_MIN}|hasta|no\s+mas\s+de|{_DESDE})\s+\d{{2}}\s*{_ANOS}\b{_EN_ADELANTE}"
     rf"|\b\d{{2}}\s*{_ANOS}\s+en\s+adelante\b"
-    rf"|\bedad\s+(?:maxima|minima|limite|tope|requerida)\s*:?\s*(?:de\s+)?\d{{2}}\b(?:\s*{_ANOS}\b)?"
-    rf"|\bedad\s*:?\s*(?:de\s+|entre\s+|{_DESDE}\s+)?\d{{2}}\b(?:\s*(?:a|-|–|y|hasta)\s*\d{{2}}\b)?(?:\s*{_ANOS}\b)?{_EN_ADELANTE}"
-    rf"|\b(?:jovenes|personas?)\s+(?:menores|mayores)\s+de\s+\d{{2}}\b"
+    rf"|\b\d{{2}}\s*\+\s*{_ANOS}\b"
+    rf"|\bedad\s+(?:maxima|minima|max\.?|min\.?|limite|tope|requerida)\s*:?\s*(?:de\s+)?\d{{2}}\b(?:\s*\+)?(?:\s*{_ANOS}\b)?"
+    rf"|\bedad\s*:?\s*(?:de\s+|entre\s+|{_DESDE}\s+|{_MENOR_MAYOR}\s+|{_MAX_MIN}\s+)?\d{{2}}\b(?:\s*\+)?"
+    rf"(?:\s*(?:a|-|–|y|hasta)\s*\d{{2}}\b)?(?:\s*{_ANOS}\b)?{_EN_ADELANTE}"
+    rf"|\b(?:jovenes|personas?)\s+(?:menor|mayor)(?:es)?\s+de\s+\d{{2}}\b"
 )
+# Quién tiene la edad: "cuidar niños menores de 10 años" o "adultos mayores de 65 años" describen a
+# otros, no al candidato. "Persona mayor de 25 años" sigue siendo edad: ante la duda, bloquea.
+_OTROS_ANTES = re.compile(r"\b(?:hij[oa]s?|nin[oa]s?|bebes?|infantes|estudiantes|alumn[oa]s?|pacientes|adult[oa]s)\s+$")
+# "No se aceptan menores de 18 años" anuncia la edad legal para trabajar, no un límite.
+_NEGACION_ANTES = re.compile(
+    r"\b(?:no\s+(?:se\s+)?(?:aceptan?|aceptamos|admiten?|admitimos|contratan?|contratamos|reciben?|recibimos)"
+    r"|abstenerse|prohibido(?:\s+contratar)?|excepto|salvo)\s+(?:a\s+)?(?:personas\s+|jovenes\s+)?$"
+)
+
+_VERBO_CONTRATAR = (
+    r"(?:se\s+(?:busca|buscan|solicita|solicitan|necesita|necesitan|requiere|requieren|contrata|contratan)"
+    r"|buscamos|solicitamos|necesitamos|requerimos|contratamos)"
+)
+# Sexo implícito: "señorita", "chicas", "masculino" o "femenino" sueltos como requisito. No cuentan
+# cuando describen otra cosa: "uniforme masculino", "fútbol femenino", "ropa para chicas", "caja chica".
+_SEXO_SUELTO = re.compile(r"\b(?:masculino|femenino)s?\b")
+_OBJETO_ANTES = re.compile(
+    r"\b(?:uniformes?|ropa|vestimenta|calzado|zapatos?|vestuarios?|vestidor(?:es)?|camerinos?|banos?|sanitarios?|duchas?"
+    r"|perfumes?|fragancias?|tallas?|departamento|seccion|linea|moda|articulos?|productos?|publico|clientela|categoria"
+    r"|equipo|liga|torneo|seleccion|futbol|baloncesto|voleibol|softbol|beisbol)\s+$"
+)
+_FEMENINO_SUELTO = re.compile(r"\b(?:senoritas?|chicas|muchachas?)\b")
+_DESTINATARIO_ANTES = re.compile(r"\b(?:para|de|a|con|entre|cajas?)\s+(?:las?\s+|nuestras\s+|sus\s+)?$")
+_EXCLUSION_ANTES = {_SEXO_SUELTO: _OBJETO_ANTES, _FEMENINO_SUELTO: _DESTINATARIO_ANTES}
 
 _PATRONES: list[tuple[str, re.Pattern[str]]] = [
     (SEXO, re.compile(r"\b(?:sexo|genero)\s*:?\s*(?:femenino|masculino|mujer|hombre|f|m)\b")),
     (SEXO, re.compile(rf"\b(?:solo|solamente|unicamente|exclusivamente)\s+(?:para\s+)?(?:{_PERSONA}|personal\s+(?:femenino|masculino))\b")),
-    (SEXO, re.compile(rf"\bse\s+(?:busca|buscan|solicita|solicitan|necesita|necesitan|requiere|requieren|contrata|contratan)\s+(?:una?\s+)?{_PERSONA}\b")),
+    (SEXO, re.compile(rf"\b{_VERBO_CONTRATAR}\s+(?:una?\s+|\d+\s+)?{_PERSONA}\b")),
+    # Preferencia explícita de sexo (#121): "preferiblemente mujer" exige un sexo igual que
+    # "preferiblemente masculino", que ya bloqueaba por la palabra suelta.
+    (SEXO, re.compile(
+        rf"\b(?:preferiblemente|preferentemente|de\s+preferencia|con\s+preferencia|se\s+prefieren?|preferimos)\s*:?\s*(?:una?\s+)?{_PERSONA}\b"
+    )),
     (SEXO, re.compile(r"\bpersonal\s+(?:femenino|masculino)\b")),
-    # Sexo implícito: "señorita", "masculino" o "femenino" sueltos como requisito.
-    (SEXO, re.compile(r"\bsenoritas?\b")),
-    (SEXO, re.compile(r"\b(?:masculino|femenino)s?\b")),
+    (SEXO, _FEMENINO_SUELTO),
+    (SEXO, _SEXO_SUELTO),
     (BUENA_PRESENCIA, re.compile(r"\b(?:buena|excelente|muy\s+buena)\s+presencia\b|\bpresencia\s+agradable\b|\bbuen\s+aspecto(?:\s+fisico)?\b")),
     (FOTO, re.compile(
         r"\b(?:hoja\s+de\s+vida|cv|curriculum(?:\s+vitae)?)\s+con\s+foto(?:grafia)?\b"
@@ -108,8 +143,16 @@ _PATRONES: list[tuple[str, re.Pattern[str]]] = [
     )),
 ]
 
-# "masculino o femenino", "femenino y masculino", "masculino/femenino": no exige un sexo.
-_AMBOS_SEXOS = re.compile(r"\b(?:masculino|femenino)s?\s*(?:y\s*/\s*o|o|y|u|/|,)\s*(?:masculino|femenino)s?\b")
+# "masculino o femenino", "femenino y masculino", "masculino/femenino", "damas y caballeros" o
+# "chicos y chicas": no exige un sexo.
+_MASC = r"(?:masculinos?|hombres?|varon(?:es)?|caballeros?|chicos?|muchachos?)"
+_FEM = r"(?:femeninos?|mujer(?:es)?|damas?|senoritas?|chicas?|muchachas?)"
+_O_SEXO = r"\s*(?:y\s*/\s*o|o|y|u|e|/|,)\s*"
+_AMBOS_SEXOS = re.compile(rf"\b(?:{_MASC}{_O_SEXO}{_FEM}|{_FEM}{_O_SEXO}{_MASC})\b")
+
+# Estado civil en femenino (#117): "se prefiere soltera" pide una mujer aunque el puesto sea neutro.
+# Alerta como "cajera"; "persona soltera", "soltero/a" y "soltero o soltera" no.
+_ESTADO_CIVIL_FEMENINO = re.compile(r"\b(?P<fem>soltera|casada|divorciada|viuda)s?\b")
 
 # Puestos en femenino; el masculino se deriva (cajera -> cajero, vendedora -> vendedor).
 _PUESTOS_FEMENINOS = (
@@ -173,15 +216,33 @@ def _es_rango_de_edad(plegado: str, m: re.Match[str]) -> bool:
     if re.search(r"\d{1,2}\s*[:h]\s*$", contexto_antes) or re.match(r"\s*(?:horas|hrs|h\b|:|lps|balboas|\$)", contexto_despues):
         return False
     tiene_anos = re.search(_ANOS, m.group(0)) is not None
-    return tiene_anos or "edad" in contexto_antes
+    # "Jóvenes entre 18 y 24" sin "años" (#121): el rango va pegado a quién se busca.
+    de_personas = re.search(rf"\b(?:jovenes|personas|candidat[oa]s|aspirantes|postulantes|{_PERSONA})\s*$", contexto_antes)
+    return tiene_anos or "edad" in contexto_antes or de_personas is not None
 
 
 def _es_minimo_legal(frase: str) -> bool:
-    """"Mayor de 18 años", "a partir de 18 años", "18 años en adelante" o "edad mínima 18" es la
-    edad legal para trabajar, no un límite discriminatorio. Un mínimo mayor de 18 sí bloquea."""
+    """"Mayor de 18 años", "a partir de 18 años", "18 años en adelante", "edad mínima 18", "mín. 18",
+    "no menor de 18" o "Edad: 18+" es la edad legal para trabajar, no un límite discriminatorio. Un
+    mínimo mayor de 18 sí bloquea."""
     numero = re.search(r"\d{2}", frase)
-    minimo = re.search(r"mayor|minim|partir|desde|adelante", frase) is not None
+    minimo = re.search(r"mayor|\bmin|partir|desde|adelante|no\s+menor|\+", frase) is not None
     return bool(numero) and int(numero.group()) <= 18 and minimo and "no mayor" not in frase
+
+
+def _describe_a_otros(plegado: str, m: re.Match[str]) -> bool:
+    """"Niños menores de 10 años" o "adultos mayores de 65 años": la edad es de otros, no del candidato."""
+    return re.match(r"(?:menor|mayor)(?:es)?\s+de\b", m.group(0)) is not None and bool(
+        _OTROS_ANTES.search(plegado[max(0, m.start() - 20) : m.start()])
+    )
+
+
+def _niega_menores_de_edad(plegado: str, m: re.Match[str]) -> bool:
+    """"No se aceptan menores de 18 años" o "abstenerse menores de 18": repite la edad legal."""
+    numero = re.match(r"menor(?:es)?\s+de\s+(\d{2})", m.group(0))
+    return bool(numero) and int(numero.group(1)) <= 18 and bool(
+        _NEGACION_ANTES.search(plegado[max(0, m.start() - 40) : m.start()])
+    )
 
 
 def _es_experiencia(plegado: str, m: re.Match[str]) -> bool:
@@ -189,15 +250,17 @@ def _es_experiencia(plegado: str, m: re.Match[str]) -> bool:
     años en adelante" cuentan experiencia, no edad.
 
     Ante la duda es edad: bajo la Ley 11 un límite que se escapa pesa más que una oferta bloqueada de
-    más. Nunca es experiencia si la frase describe personas ("mayores de", "menores de"), si empieza
-    por "edad", si lleva "los" antes del número ("desde los 25 años") o "de edad" después. Entre
-    "experiencia" y el número se admite un solo calificativo de una lista cerrada; "indispensable",
-    "requerida" o "necesaria" quedan fuera porque tras ellas un "desde 25 años" suele ser edad.
+    más. Nunca es experiencia si la frase describe personas ("mayores de", "menores de", "no mayor
+    de"), si empieza por "edad", si lleva "los" antes del número ("desde los 25 años") o "de edad"
+    después. El singular "mayor de" concuerda también con "experiencia" ("experiencia mayor de 10
+    años", #121), así que sigue la misma regla que "desde" o "mínimo". Entre "experiencia" y el número
+    se admite un solo calificativo de una lista cerrada; "indispensable", "requerida" o "necesaria"
+    quedan fuera porque tras ellas un "desde 25 años" suele ser edad.
     """
     frase = m.group(0)
     antes, despues = plegado[max(0, m.start() - 40) : m.start()], plegado[m.end() : m.end() + 20]
     if (
-        re.match(r"(?:no\s+)?(?:mayor|menor)(?:es)?\s+de\b", frase)
+        re.match(r"no\s+(?:mayor|menor)(?:es)?\s+de\b|(?:mayor|menor)es\s+de\b", frase)
         or frase.startswith("edad")
         or re.search(r"\blos\s+\d", frase)
         or re.match(r"\s*de\s+edad\b", despues)
@@ -227,7 +290,12 @@ def revisar_texto(texto: str) -> list[Hallazgo]:
         encontrados.append((inicio, Hallazgo(regla, _frase(texto, inicio, fin), regla in REGLAS_BLOQUEO)))
 
     for m in _TOPE_EDAD.finditer(plegado):
-        if _es_minimo_legal(m.group(0)) or _es_experiencia(plegado, m):
+        if (
+            _es_minimo_legal(m.group(0))
+            or _es_experiencia(plegado, m)
+            or _describe_a_otros(plegado, m)
+            or _niega_menores_de_edad(plegado, m)
+        ):
             continue
         anotar(EDAD, m.start(), m.end())
     for m in _RANGO.finditer(plegado):
@@ -235,12 +303,23 @@ def revisar_texto(texto: str) -> list[Hallazgo]:
             anotar(EDAD, m.start(), m.end())
     ambos = [(m.start(), m.end()) for m in _AMBOS_SEXOS.finditer(plegado)]
     for regla, patron in _PATRONES:
+        excluir = _EXCLUSION_ANTES.get(patron)
         for m in patron.finditer(plegado):
             if regla == SEXO and any(i < m.end() and m.start() < f for i, f in ambos):
+                continue
+            if excluir is not None and excluir.search(plegado[max(0, m.start() - 30) : m.start()]):
                 continue
             anotar(regla, m.start(), m.end())
     for m in _PUESTO_FEMENINO.finditer(plegado):
         if _puesto_solo_en_femenino(plegado, m):
+            anotar(SEXO_IMPLICITO, m.start(), m.end())
+    estado_civil = [(i, f) for r, i, f in vistos if r == ESTADO_CIVIL]
+    for m in _ESTADO_CIVIL_FEMENINO.finditer(plegado):
+        if (
+            any(i <= m.start() and m.end() <= f for i, f in estado_civil)
+            and not re.search(r"\bpersonas?\s+$", plegado[max(0, m.start() - 15) : m.start()])
+            and _puesto_solo_en_femenino(plegado, m)
+        ):
             anotar(SEXO_IMPLICITO, m.start(), m.end())
 
     return [h for _, h in sorted(encontrados, key=lambda par: par[0])]

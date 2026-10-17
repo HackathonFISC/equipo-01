@@ -23,7 +23,7 @@ from evals.run import DependenciaPendiente, ResultadoCaso
 RAIZ = Path(__file__).resolve().parents[1]
 CONTEO_ESPERADO = {
     "extraccion_ofertas": 5,
-    "requisitos_discriminatorios": 7,  # 6 del issue + DIS-07 («soltera, sin hijos»), seguimiento de #13
+    "requisitos_discriminatorios": 10,  # 6 del issue + DIS-07 («soltera, sin hijos»), seguimiento de #13, + DIS-08..10 (#121)
     "perfil_sin_cv": 4,
     "matching_factible": 3,
     "sesgo_contrafactual": 3,

@@ -307,9 +307,55 @@ casos:
     fallos:
       - fecha: "2026-10-16"
         observado: "bloqueada false y alertas [estado_civil]: falta sexo_implicito por «soltera»"
-        cambio_hecho: "pendiente: que «soltera» dé sexo_implicito en puente/rules/discriminacion.py (#117)"
+        cambio_hecho: "«soltera», «casada» y sus plurales en un requisito de estado civil dan además sexo_implicito en puente/rules/discriminacion.py; «persona soltera», «soltero/a» y «soltero o soltera» siguen solo como estado_civil (#117, PR de #121)"
         issue: "#117"
-        nueva_ejecucion: "pendiente"
+        nueva_ejecucion: "2026-10-16 22:27, evals.run en modo reproducir: ok, bloqueada false y alertas [estado_civil, sexo_implicito]"
+
+  - id: DIS-08
+    categoria: requisitos_discriminatorios
+    descripcion: "Límite de edad en singular («menor de 28 años») y «máx.»: bloquea por el art. 2. Antes de #121 no daba ningún hallazgo."
+    entrada:
+      texto: |
+        Se solicita ayudante de cocina para fonda en Arraiján. Edad: menor de 28 años
+        (máx. 30 años si ya trabajó en cocina). Salario $450 mensual. Turno de 6 a 2.
+    esperado:
+      bloqueada: true
+      reglas: ["art. 2"]
+      alertas: []
+    escrito_el: "2026-10-16"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: DIS-09
+    categoria: requisitos_discriminatorios
+    descripcion: "Preferencia explícita de sexo («preferiblemente mujer», «buscamos chicas»): bloquea por el art. 1, igual que «preferiblemente masculino». Antes de #121 no se detectaba."
+    entrada:
+      texto: |
+        Buscamos chicas dinámicas para impulsar productos en supermercado de San Miguelito.
+        Preferiblemente mujer con facilidad de palabra. Pago $20 por día.
+    esperado:
+      bloqueada: true
+      reglas: ["art. 1"]
+      alertas: []
+    escrito_el: "2026-10-16"
+    datos_sinteticos: true
+    fallos: []
+
+  - id: DIS-10
+    categoria: requisitos_discriminatorios
+    descripcion: "Control negativo de #121: «calzado masculino» describe la sección, «Edad: 18+» y «no se aceptan menores de 18 años» repiten la edad legal y «experiencia mayor de 10 años» es experiencia. No bloquea ni alerta."
+    entrada:
+      texto: |
+        Tienda Ficticia en Albrook busca vendedor(a) para la sección de calzado masculino.
+        Edad: 18+. No se aceptan menores de 18 años. Supervisor con experiencia mayor de 10 años te capacita.
+        Salario $520 mensual.
+    esperado:
+      bloqueada: false
+      reglas: []
+      alertas: []
+    escrito_el: "2026-10-16"
+    datos_sinteticos: true
+    fallos: []
 
   - id: PER-01
     categoria: perfil_sin_cv
