@@ -276,6 +276,9 @@ def test_edad_minima_legal_de_18_no_bloquea(texto):
         "Mayor de 18, turno nocturno",
         "Mínimo 20 años de experiencia",
         "Experiencia: desde 20 años",
+        "Experiencia de 20 años en adelante",
+        "Experiencia mínima de 20 años en adelante",
+        "Experiencia laboral: 20 años en adelante",
     ],
 )
 def test_numeros_que_no_son_edad_no_bloquean(texto):
