@@ -1,11 +1,13 @@
-"""Validación de entradas, detección de inyección, fuera de alcance y limpieza de PII. Issues #9 y #56.
+"""Validación de entradas, detección de inyección, fuera de alcance y limpieza de PII. Issues #9, #56 y #128.
 
 Todo es determinístico, sin LLM: se corre antes de gastar una sola llamada al modelo.
 
 - Archivos: solo pdf, jpg o png de hasta 5 MB. El tamaño se revisa antes que nada, así
   un archivo de 50 MB se rechaza sin leer su contenido ni llamar al LLM. Las notas de voz
   (.ogg, .mp3, .m4a, .wav) se rechazan con un mensaje propio hasta que exista #55.
-- Texto: hasta 10,000 caracteres y no vacío.
+  Las rutas (`ruta`, `cv_ruta`) de la entrada, de `ofertas_crudas` y de `entradas_perfil`
+  cuentan como entrada y pasan por la misma revisión, con tamaño y firma leídos del disco (#128).
+- Texto: una cadena de hasta 10,000 caracteres y no vacía.
 - Rangos: edad entre 18 y 29 (los menores quedan fuera de la demo), salario mayor que 0.
 - Inyección: se marca y el texto sigue como dato; nunca se ejecuta como instrucción.
   Las palabras clave solo marcan: la defensa real es estructural (salida estructurada,
@@ -55,7 +57,7 @@ RESPUESTA_FUERA_DE_ALCANCE = "Solo atiendo empleo y formación."
 # lo limpia el agente que lo extrae (Perfil quita la PII antes del LLM). El corregimiento del
 # formulario también (#95): es justo lo que se guarda del domicilio, y «Barrio Norte» o «Barrio Sur»
 # no pueden quedar como «[DIRECCION]».
-CLAVES_SIN_LIMPIAR = frozenset({"cv_ruta", "ruta", "corregimiento"})
+CLAVES_SIN_LIMPIAR = frozenset({"cv_ruta", "ruta", "rutas", "corregimiento"})
 # Ofertas de empresas: su dirección es la de la empresa, no la de una persona, y Mercado la necesita
 # ("Entrevistas en Edificio Ficticio, piso 2"). De ellas solo se quitan cédula y teléfono (#95).
 CLAVES_OFERTA = frozenset({"ofertas_crudas", "ofertas"})
@@ -135,6 +137,39 @@ PALABRAS_EN_ALCANCE = (
     "corregimiento",
     "edad",
     "anos",
+    # Experiencia y oficios contados por el joven (#128): «Fui entrenador de fútbol», «Sé reparar
+    # aires de clima», «Doy clases de religión». Ganan a la palabra ajena que traen.
+    "chamba",
+    "fui",
+    "he sido",
+    "me encarg",
+    "me dedico",
+    "ayud",
+    "particip",
+    "voluntari",
+    "lider",
+    "organi",
+    "entrena",
+    "instructor",
+    "profesor",
+    "maestr",
+    "tutor",
+    "clases",
+    "ensen",
+    "repar",
+    "arregl",
+    "instal",
+    "mantenimiento",
+    "tecnic",
+    "mecanic",
+    "electric",
+    "plomer",
+    "albanil",
+    "carpinter",
+    "soldad",
+    "pintor",
+    "jardiner",
+    "cuid",
 )
 # Temas claramente ajenos. Solo cuentan si no aparece ninguna palabra en alcance.
 PALABRAS_FUERA_DE_ALCANCE = (
@@ -168,6 +203,18 @@ PALABRAS_FUERA_DE_ALCANCE = (
     "contrasena",
     "bomba",
     "droga",
+)
+# Tareas escolares: fuera de alcance aunque digan «trabajo» (#128). «Hazme el trabajo de historia»
+# o «resuélveme la tarea»; «tareas de limpieza» o «ayúdame con mi trabajo nuevo» no cuentan.
+_MATERIA = (
+    r"(?:historia|matematicas?|ciencias|espanol|ingles|quimica|fisica|biologia|geografia|civica|literatura"
+    r"|filosofia|sociales|religion)"
+)
+TAREA_ESCOLAR = re.compile(
+    r"\b(?:hazme|haz|haceme|hagame|resuelve|resuelveme|resolver|escribeme|redactame|ayudame\s+(?:con|a\s+hacer))\b"
+    r"(?:\s+(?:el|la|las|los|un|una|mi|mis))?\s+(?:tareas?|deberes|ensayo|monografia|asignacion)\b"
+    rf"|\b(?:tareas?|deberes|trabajo|proyecto|ensayo|monografia|asignacion|examen|exposicion)\s+(?:de|sobre|para)\s+"
+    rf"(?:(?:la\s+)?clase\s+de\s+)?{_MATERIA}\b"
 )
 
 
@@ -250,8 +297,58 @@ def validar_archivo(
     return _decidir(True, f"archivo {tipo} dentro del límite", entrada, "aceptado")
 
 
+# Claves con la ruta de un archivo en la entrada, en `ofertas_crudas` y en `entradas_perfil`.
+CLAVES_RUTA = ("ruta", "cv_ruta")
+_BYTES_FIRMA = max(len(f) for firmas in FIRMAS_ARCHIVO.values() for f in firmas)
+
+
+def validar_ruta(ruta: str | os.PathLike[str]) -> ResultadoGuardrail:
+    """`validar_archivo` sobre un archivo en disco (#128): el tamaño sale del disco y la firma de sus
+    primeros bytes, que solo se leen si el tamaño y la extensión ya pasaron. La decisión guarda solo
+    el nombre del archivo, no la ruta completa."""
+    camino = Path(ruta)
+    nombre = camino.name
+    try:
+        tamano = camino.stat().st_size if camino.is_file() else None
+    except OSError:
+        tamano = None
+    if tamano is None:
+        return _decidir(False, f"no se encontró el archivo {nombre!r}", f"archivo {nombre!r}", "rechazado")
+    previo = validar_archivo(nombre, tamano)
+    if not previo.ok:
+        return previo
+    try:
+        with camino.open("rb") as archivo:
+            cabecera = archivo.read(_BYTES_FIRMA)
+    except OSError:
+        return _decidir(False, f"no se pudo leer el archivo {nombre!r}", f"archivo {nombre!r}", "rechazado")
+    return validar_archivo(nombre, tamano, cabecera)
+
+
+def _rutas_en(valor: Any) -> list[str]:
+    """Rutas de archivo de un elemento de la entrada: dict con `ruta`/`cv_ruta`, Path, o texto de una
+    sola línea que nombra un archivo existente (así lo lee Mercado)."""
+    if isinstance(valor, dict):
+        return [str(valor[c]) for c in CLAVES_RUTA if isinstance(valor.get(c), (str, os.PathLike)) and str(valor[c]).strip()]
+    if isinstance(valor, os.PathLike):
+        return [str(valor)]
+    if isinstance(valor, str) and "\n" not in valor and Path(valor).suffix.lower() in {*EXTENSIONES_PERMITIDAS, *EXTENSIONES_AUDIO}:
+        return [valor] if Path(valor).is_file() else []
+    return []
+
+
+def rutas_del_estado(estado: dict[str, Any]) -> list[str]:
+    """Rutas de `ofertas_crudas` y `entradas_perfil`: una oferta en foto o un CV en PDF también es
+    entrada y pasa por los guardrails de archivo, traiga texto o no (#128)."""
+    elementos = [*(estado.get("ofertas_crudas") or []), *(estado.get("entradas_perfil") or [])]
+    return [ruta for elemento in elementos for ruta in _rutas_en(elemento)]
+
+
 def validar_texto(texto: str) -> ResultadoGuardrail:
-    """Acepta texto no vacío de hasta 10,000 caracteres."""
+    """Acepta texto no vacío de hasta 10,000 caracteres. Un número u otro tipo se rechaza sin romper (#128)."""
+    if not isinstance(texto, str):
+        tipo = type(texto).__name__
+        return _decidir(False, f"el texto debe ser una cadena, llegó {tipo}", f"texto de tipo {tipo}", "rechazado")
     entrada = f"texto de {len(texto)} caracteres"
     if not texto.strip():
         return _decidir(False, "texto vacío", entrada, "rechazado")
@@ -305,6 +402,8 @@ def fuera_de_alcance(texto: str) -> bool | None:
     """True si el texto es claramente ajeno a empleo y formación, False si está en alcance,
     None si no se puede saber (se deja pasar y se marca)."""
     normal = normalizar(texto)
+    if TAREA_ESCOLAR.search(normal):
+        return True
     if _contiene(normal, PALABRAS_EN_ALCANCE):
         return False
     if _contiene(normal, PALABRAS_FUERA_DE_ALCANCE):
@@ -356,16 +455,24 @@ def revisar_texto(texto: str) -> list[ResultadoGuardrail]:
 
 
 def evaluar_entrada(entrada: dict[str, Any]) -> list[ResultadoGuardrail]:
-    """Revisa una entrada cruda con claves opcionales `archivo` ({nombre, tamano_bytes, contenido}),
-    `texto`, `edad` y `salario`. Los archivos van primero: si se rechaza uno, no se mira el resto."""
+    """Revisa una entrada cruda con claves opcionales `archivo` ({nombre, tamano_bytes, contenido} o
+    {ruta}), `ruta`, `cv_ruta`, `rutas` (lista), `texto`, `edad` y `salario`. Los archivos van
+    primero: si se rechaza uno, no se mira el resto. Una entrada con solo una ruta no está vacía."""
     resultados: list[ResultadoGuardrail] = []
     archivo = entrada.get("archivo")
-    if archivo is not None:
+    rutas = [*_rutas_en(entrada), *(str(r) for r in entrada.get("rutas") or [])]
+    if isinstance(archivo, dict) and archivo.get("contenido") is None and _rutas_en(archivo):
+        rutas = [*_rutas_en(archivo), *rutas]
+    elif archivo is not None:
         contenido = archivo.get("contenido")
         tamano = archivo.get("tamano_bytes")
         if tamano is None:
             tamano = len(contenido) if contenido is not None else 0
         resultados.append(validar_archivo(archivo.get("nombre", ""), tamano, contenido))
+        if not resultados[-1].ok:
+            return resultados
+    for ruta in dict.fromkeys(rutas):  # sin repetir, en orden
+        resultados.append(validar_ruta(ruta))
         if not resultados[-1].ok:
             return resultados
     if entrada.get("edad") is not None or entrada.get("salario") is not None:
@@ -417,12 +524,21 @@ def nodo_guardrails(estado: EstadoPuente) -> dict:
     {"ok", "marcas", "motivos", "respuesta"}. Un rechazo deja una línea "guardrails: ..." en errores.
 
     Vuelve a limpiar la entrada por si el grafo no lo hizo: los resúmenes de `decisiones`
-    nunca llevan PII."""
+    nunca llevan PII.
+
+    Las rutas de `ofertas_crudas` y `entradas_perfil` se revisan también (#128): una oferta que
+    llega solo como foto ya no es "entrada vacía", y un ejecutable renombrado a .pdf no llega al
+    extractor aunque venga con texto. Si hay respuesta fija (fuera de alcance, nota de voz),
+    queda también en `respuesta` para que el tablero la muestre."""
     entrada = limpiar_entrada(estado.get("entrada") or {})  # type: ignore[call-overload]
+    rutas = rutas_del_estado(estado)  # type: ignore[arg-type]
+    if rutas:
+        entrada = {**entrada, "rutas": [*(entrada.get("rutas") or []), *rutas]}
     resultados = evaluar_entrada(entrada)
     rechazos = [r for r in resultados if not r.ok]
     respuesta = next((r.respuesta for r in resultados if r.respuesta), None)
     return {
+        **({"respuesta": respuesta} if respuesta else {}),
         "decisiones": [
             *estado.get("decisiones", []),
             *(r.decision for r in resultados),
