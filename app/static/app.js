@@ -31,6 +31,9 @@ const AGENTES = {
   auditor: { nombre: "Auditor", icono: "flask" },
   formacion: { nombre: "Formación", icono: "cap" },
   orientador_humano: { nombre: "Orientador", icono: "check" },
+  orientador: { nombre: "Orientador (Admin)", icono: "check" },
+  empresa: { nombre: "Empresa", icono: "briefcase" },
+  joven: { nombre: "Joven (Aplicante)", icono: "user" },
   tablero: { nombre: "Tablero", icono: "list" },
   consentimiento: { nombre: "Consentimiento", icono: "check" },
   postulacion: { nombre: "Postulación", icono: "send" },
@@ -228,6 +231,7 @@ function renderizarTodo() {
   renderizarTrazas();
   renderizarEmbudo();
   renderizarAuditoria();
+  renderizarOperacionYUmbrales();
 }
 
 function postulacionDe(perfilId, ofertaId) {
@@ -1406,5 +1410,102 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("btn-cargar-data-oferta")?.addEventListener("click", cargarDesdeData("oferta", "select-data-oferta"));
   document.getElementById("btn-cargar-data-perfil")?.addEventListener("click", cargarDesdeData("perfil", "select-data-perfil"));
 
+  const formUmbrales = document.getElementById("form-umbrales-solver");
+  if (formUmbrales) {
+    formUmbrales.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const boton = ev.currentTarget.querySelector("button[type=submit]");
+      const payload = {
+        max_minutos_traslado: parseInt(document.getElementById("umb-minutos").value || "60", 10),
+        max_porcentaje_salario_pasaje: parseFloat(document.getElementById("umb-pasaje-pct").value || "15") / 100.0,
+        max_vacantes_por_perfil: parseInt(document.getElementById("umb-max-ofertas").value || "3", 10),
+      };
+      await conBoton(boton, async () => {
+        if (aplicarEstado(await llamarApi("/api/orientador/umbrales", payload))) {
+          mostrarToast(
+            `Solver recalculado: traslado ≤ ${payload.max_minutos_traslado} min, pasaje ≤ ${Math.round(payload.max_porcentaje_salario_pasaje * 100)} %, máx. ${payload.max_vacantes_por_perfil} ofertas.`
+          );
+        }
+      });
+    });
+  }
+
+  const btnTocumen95 = document.getElementById("btn-umb-tocumen-95") || document.getElementById("btn-umb-tocumen-90");
+  if (btnTocumen95) {
+    btnTocumen95.addEventListener("click", async () => {
+      const inpMin = document.getElementById("umb-minutos");
+      if (inpMin) inpMin.value = "95";
+      await conBoton(btnTocumen95, async () => {
+        if (
+          aplicarEstado(
+            await llamarApi("/api/orientador/umbrales", {
+              max_minutos_traslado: 95,
+              max_porcentaje_salario_pasaje: 0.15,
+              max_vacantes_por_perfil: 3,
+            })
+          )
+        ) {
+          mostrarToast("Traslado máximo ajustado a 95 min: OF-TOCUMEN-03 ahora es viable para Yaritza y quedó trazado.");
+        }
+      });
+    });
+  }
+
   cargarEstado();
 });
+
+function renderizarOperacionYUmbrales() {
+  const bannerDemo = document.getElementById("banner-demo-publica");
+  if (bannerDemo) {
+    if (estadoActual?.modo_demo_publica) {
+      bannerDemo.className = "banner banner--warn";
+      bannerDemo.innerHTML = `${icono("info")}<div><strong>Demo pública de solo lectura (estado efímero):</strong> Los cambios en esta instancia usan <code>LLM_MODO=reproducir</code> sin claves y se reinician entre invocaciones.</div>`;
+    } else {
+      bannerDemo.className = "banner hidden";
+      bannerDemo.innerHTML = "";
+    }
+  }
+
+  const op = estadoActual?.operacion;
+  if (!op) return;
+  const umb = op.umbrales_solver || {};
+  const inpMin = document.getElementById("umb-minutos");
+  const inpPas = document.getElementById("umb-pasaje-pct");
+  const inpMax = document.getElementById("umb-max-ofertas");
+  if (inpMin && document.activeElement !== inpMin) {
+    inpMin.value = String(umb.max_minutos_traslado ?? 60);
+  }
+  if (inpPas && document.activeElement !== inpPas) {
+    inpPas.value = String(Math.round(Number(umb.max_porcentaje_salario_pasaje ?? 0.15) * 100));
+  }
+  if (inpMax && document.activeElement !== inpMax) {
+    inpMax.value = String(umb.max_vacantes_por_perfil ?? 2);
+  }
+
+  const cont = document.getElementById("contenedor-operacion-admin");
+  if (!cont) return;
+  const tot = op.uso_total || {};
+  const porAgente = op.uso_por_agente || {};
+  const filasAgentes = Object.entries(porAgente)
+    .map(
+      ([ag, u]) =>
+        `<tr><td><code>${escaparHtml(ag)}</code></td><td class="num">${Number(u.llamadas || 0)}</td><td class="num">${Number(u.tokens_entrada || 0)} / ${Number(u.tokens_salida || 0)}</td><td class="num">$${Number(u.costo_usd || 0).toFixed(4)}</td></tr>`
+    )
+    .join("");
+  const grab = op.grabaciones_disponibles || {};
+  cont.innerHTML = `
+    <div class="razon" style="display:grid;gap:0.65rem;">
+      <div style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:center;">
+        ${pill(`LLM_MODO=${op.llm_modo || "reproducir"}`, "neutral", "flask")}
+        ${pill(`Llamadas LLM: ${tot.llamadas ?? 0} · $${Number(tot.costo_usd || 0).toFixed(4)}`, "info")}
+        ${pill(`Grabaciones: ${grab.total ?? 0} JSON`, "ok", "database")}
+        ${pill(`Telegram: ${op.telegram_estado || "outbox_local"} · WhatsApp: ${op.whatsapp_estado || "sandbox_inactivo"}`, "neutral", "send")}
+      </div>
+      ${
+        filasAgentes
+          ? `<div class="table-card"><table class="table"><thead><tr><th>Agente</th><th>Llamadas</th><th>Tokens (E/S)</th><th>Costo USD</th></tr></thead><tbody>${filasAgentes}</tbody></table></div>`
+          : `<p class="muted" style="margin:0;">Modo determinista / fixture activo: 0 llamadas en vivo al LLM.</p>`
+      }
+    </div>`;
+}
+
