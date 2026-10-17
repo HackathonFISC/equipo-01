@@ -682,10 +682,10 @@ def test_issue_168_roles_umbrales_tocumen_y_panel_operacion(
                 for m in est0["matches"]
             )
 
-            # 3. Cambiar el traslado máximo a 90 min hace viable OF-TOCUMEN-03 para Yaritza y queda trazado con agente='orientador'
+            # 3. Cambiar el traslado máximo a 95 min hace viable OF-TOCUMEN-03 para Yaritza y queda trazado con agente='orientador'
             r_umb = await client.post(
                 "/api/orientador/umbrales",
-                json={"max_minutos_traslado": 90},
+                json={"max_minutos_traslado": 95, "max_vacantes_por_perfil": 3},
             )
             assert r_umb.status_code == 200
             est_umb = r_umb.json()
@@ -694,7 +694,7 @@ def test_issue_168_roles_umbrales_tocumen_y_panel_operacion(
                 for m in est_umb["matches"]
             )
             assert any(
-                d["agente"] == "orientador" and "90 min" in d["salida_resumen"]
+                d["agente"] == "orientador" and "95 min" in d["salida_resumen"]
                 for d in est_umb["decisiones_db"]
             )
 
@@ -707,7 +707,43 @@ def test_issue_168_roles_umbrales_tocumen_y_panel_operacion(
             )
             assert r_joven.status_code == 200
 
-            # 5. Acción de la empresa en /api/empresa/evento deja Decision con agente='empresa'
+            # Intentar citar a entrevista antes de que la postulación esté en 'enviado' es rechazado con 422
+            r_emp_invalida = await client.post(
+                "/api/empresa/evento",
+                json={
+                    "tipo": "acepta",
+                    "oferta_id": "OF-CHORRERA-01",
+                    "perfil_id": "PERFIL-YARITZA",
+                    "empresa": "Supermercados del Istmo",
+                },
+            )
+            assert r_emp_invalida.status_code == 422
+
+            # Orientador aprueba la candidatura consentida -> se envía a la empresa
+            r_aprob = await client.post(
+                "/api/orientador/accion",
+                json={
+                    "accion": "aprobar",
+                    "perfil_id": "PERFIL-YARITZA",
+                    "oferta_id": "OF-CHORRERA-01",
+                    "consentimiento_joven": True,
+                    "orientador": "Orientadora Ana Gómez",
+                },
+            )
+            assert r_aprob.status_code == 200
+
+            # 5. Acción de la empresa en /api/empresa/evento deja Decision con agente='empresa' sin filtrar estado orientador
+            r_emp_404 = await client.post(
+                "/api/empresa/evento",
+                json={
+                    "tipo": "acepta",
+                    "oferta_id": "OF-CHORRERA-01",
+                    "perfil_id": "PERFIL-INEXISTENTE-999",
+                    "empresa": "Supermercados del Istmo",
+                },
+            )
+            assert r_emp_404.status_code == 404
+
             r_emp = await client.post(
                 "/api/empresa/evento",
                 json={
@@ -719,7 +755,15 @@ def test_issue_168_roles_umbrales_tocumen_y_panel_operacion(
                 },
             )
             assert r_emp.status_code == 200
-            est_final = r_emp.json()
+            assert r_emp.json().get("ok") is True
+            assert "decisiones_db" not in r_emp.json()
+
+            # En /api/empresa/postulaciones la empresa solo ve postulaciones enviadas
+            r_post_emp = await client.get("/api/empresa/postulaciones")
+            assert r_post_emp.status_code == 200
+            assert "postulaciones" in r_post_emp.json()
+
+            est_final = (await client.get("/api/estado")).json()
             agentes_db = {d["agente"] for d in est_final["decisiones_db"]}
             assert {"orientador", "empresa", "joven"} <= agentes_db
 
@@ -731,7 +775,7 @@ def test_issue_168_roles_umbrales_tocumen_y_panel_operacion(
             assert "uso_por_agente" in op
             assert "uso_total" in op
             assert "grabaciones_disponibles" in op
-            assert op["umbrales_solver"]["max_minutos_traslado"] == 90
+            assert op["umbrales_solver"]["max_minutos_traslado"] == 95
 
     asyncio.run(_ejecutar())
 

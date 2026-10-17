@@ -99,6 +99,7 @@ def _clonar_oferta_con_segmento(
     dias: list[str],
     inicio_hhmm: str,
     fin_hhmm: str,
+    salario_segmento: float | None = None,
 ) -> dict[str, Any]:
     """Crea una representación dict de la oferta acotada al horario del segmento."""
     if isinstance(oferta, BaseModel):
@@ -117,6 +118,8 @@ def _clonar_oferta_con_segmento(
             "habilidades": list(_get_field(oferta, "habilidades", default=[]) or []),
             "bloqueada": bool(_get_field(oferta, "bloqueada", default=False)),
         }
+    if salario_segmento is not None:
+        base["salario_mensual"] = salario_segmento
     base["horario"] = {
         "dias": list(dias),
         "hora_inicio": inicio_hhmm,
@@ -269,13 +272,19 @@ def _proponer_cobertura_oferta_unica(
     salario_raw = _get_field(oferta, "salario_mensual", "salario", default=None)
     salario_total = float(salario_raw) if salario_raw is not None else None
 
+    duracion_total = max(1, fin_min - inicio_min)
     for corte_min in cortes_candidatos:
         inicio_str = _formatear_hora(inicio_min)
         corte_str = _formatear_hora(corte_min)
         fin_str = _formatear_hora(fin_min)
 
-        oferta_manana = _clonar_oferta_con_segmento(oferta, dias_lista, inicio_str, corte_str)
-        oferta_tarde = _clonar_oferta_con_segmento(oferta, dias_lista, corte_str, fin_str)
+        duracion_m = corte_min - inicio_min
+        duracion_t = fin_min - corte_min
+        salario_m = round(salario_total * (duracion_m / duracion_total), 2) if salario_total is not None else None
+        salario_t = round(salario_total * (duracion_t / duracion_total), 2) if salario_total is not None else None
+
+        oferta_manana = _clonar_oferta_con_segmento(oferta, dias_lista, inicio_str, corte_str, salario_segmento=salario_m)
+        oferta_tarde = _clonar_oferta_con_segmento(oferta, dias_lista, corte_str, fin_str, salario_segmento=salario_t)
 
         eval_manana: dict[int, dict[str, Any]] = {}
         eval_tarde: dict[int, dict[str, Any]] = {}

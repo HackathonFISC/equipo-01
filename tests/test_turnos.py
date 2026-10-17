@@ -53,7 +53,7 @@ def _perfiles_complementarios_chorrera() -> list[Perfil]:
                 hora_fin="18:00",
             )
         ],
-        salario_minimo=600.0,
+        salario_minimo=300.0,
         presupuesto_pasaje_diario=2.50,
         habilidades=[
             HabilidadPerfil(
@@ -86,7 +86,7 @@ def _perfiles_complementarios_chorrera() -> list[Perfil]:
                 hora_fin="11:45",
             )
         ],
-        salario_minimo=600.0,
+        salario_minimo=300.0,
         presupuesto_pasaje_diario=2.50,
         habilidades=[
             HabilidadPerfil(
