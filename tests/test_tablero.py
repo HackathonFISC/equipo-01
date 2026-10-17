@@ -77,6 +77,14 @@ def test_datos_iniciales_demo_incluyen_caso_yaritza_ley11_y_fuentes_sinteticas()
     assert "corregimiento" in estado["auditoria"]["nota_metodologica"].lower()
     assert "referencia_inec" in estado["metricas"]
     assert "operativas_demo" in estado["metricas"]
+    assert estado["metricas"]["total_ofertas_descartadas_traslado_pasaje"] == 3
+    assert {d["oferta_id"] for d in estado["metricas"]["ofertas_descartadas_traslado_pasaje"]} == {
+        "OF-TOCUMEN-03"
+    }
+    assert all(
+        d["oferta_descartada_id"] == "OF-TOCUMEN-03"
+        for d in estado["metricas"]["comparaciones_mensuales"]
+    )
     inec = estado["metricas"]["referencia_inec"]
     assert inec["fecha"] == "agosto de 2026"
     assert inec["desocupacion_20_24_pct"] == 22.6
