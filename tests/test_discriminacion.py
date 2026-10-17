@@ -75,7 +75,8 @@ def test_bloqueo_por_exigencia_de_sexo(texto, frase):
         ("Excelente presencia y puntualidad", BUENA_PRESENCIA, "Excelente presencia"),
         ("Enviar hoja de vida con foto reciente", FOTO, "hoja de vida con foto"),
         ("Adjuntar fotografía tamaño carnet", FOTO, "Adjuntar fotografía"),
-        ("Estado civil: soltera", ESTADO_CIVIL, "Estado civil: soltera"),
+        # «Estado civil: soltera» da además sexo_implicito desde #117: ver la sección de #117 abajo.
+        ("Estado civil: soltero/a", ESTADO_CIVIL, "Estado civil: soltero"),
         ("Preferiblemente casado", ESTADO_CIVIL, "casado"),
     ],
 )
@@ -338,3 +339,149 @@ def test_mas_puestos_en_femenino_alertan(texto, frase):
 )
 def test_puestos_neutros_o_en_ambos_generos_no_alertan(texto):
     assert revisar_texto(texto) == []
+
+
+# ---------------------------------------------------------------- #121: singular, «máx.», rangos sin «años» y preferencia de sexo
+
+
+@pytest.mark.parametrize(
+    "texto, frase",
+    [
+        ("Edad: menor de 28 años", "Edad: menor de 28 años"),
+        ("mayor de 25 años", "mayor de 25 años"),
+        ("Candidato mayor de 25 años, bachiller", "mayor de 25 años"),
+        ("Menor de 28 años", "Menor de 28 años"),
+        ("Edad: menor de 28", "Edad: menor de 28"),
+        ("Edad: no mayor de 30", "Edad: no mayor de 30"),
+        ("Persona mayor de 30", "Persona mayor de 30"),
+        ("máx. 25 años", "máx. 25 años"),
+        ("Máx 25 años", "Máx 25 años"),
+        ("Edad máx. 25", "Edad máx. 25"),
+        ("mín. 26 años", "mín. 26 años"),
+        ("Jóvenes entre 18 y 24", "entre 18 y 24"),
+        ("Personas de 18 a 24, turno de mañana", "de 18 a 24"),
+        ("Edad: 25+", "Edad: 25+"),
+        ("25+ años", "25+ años"),
+        ("experiencia indispensable mayor de 25 años", "mayor de 25 años"),
+        ("Experiencia mínima 2 años. Mayor de 25 años", "Mayor de 25 años"),
+        ("No se aceptan menores de 25 años", "menores de 25 años"),
+    ],
+)
+def test_limite_de_edad_en_singular_y_abreviado_bloquea(texto, frase):
+    hallazgos = revisar_texto(texto)
+    assert esta_bloqueada(hallazgos)
+    assert (EDAD, frase) in _reglas(texto)
+    assert "Ley 11 de 2005 art. 2" in next(h for h in hallazgos if h.regla == EDAD).como_texto()
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Ser mayor de edad",
+        "Mayor de 18 años",
+        "Edad: mayor de 18 años",
+        "Edad: no menor de 18 años",
+        "Edad: 18+",
+        "Edad 18+",
+        "18+ años",
+        "Mín. 18 años",
+        "Edad mín. 18",
+        "No se aceptan menores de 18 años",
+        "No se aceptan menores de edad",
+        "Abstenerse menores de 18 años",
+        "Cuidado de niños menores de 10 años",
+        "Niñero(a) para hijos menores de 12 años",
+        "Cuidador(a) de adultos mayores de 65 años",
+        "Experiencia mayor de 10 años",
+        "mayor de 10 años de experiencia",
+        "mín. 10 años de experiencia",
+        "Experiencia mín. 10 años",
+        "Jóvenes, turno de 14 a 22",
+    ],
+)
+def test_edad_legal_experiencia_o_edad_de_otros_no_bloquea(texto):
+    assert revisar_texto(texto) == []
+
+
+@pytest.mark.parametrize(
+    "texto, frase",
+    [
+        ("Preferiblemente mujer", "Preferiblemente mujer"),
+        ("De preferencia hombres para carga", "De preferencia hombres"),
+        ("Se prefiere mujer para caja", "Se prefiere mujer"),
+        ("Buscamos chicas dinámicas para promoción", "Buscamos chicas"),
+        ("Chicas dinámicas para impulsar productos", "Chicas"),
+        ("Necesitamos 2 caballeros para bodega", "Necesitamos 2 caballeros"),
+        ("Muchacha para atender fonda", "Muchacha"),
+    ],
+)
+def test_preferencia_explicita_de_sexo_bloquea(texto, frase):
+    hallazgos = revisar_texto(texto)
+    assert esta_bloqueada(hallazgos)
+    assert (SEXO, frase) in _reglas(texto)
+    assert "Ley 11 de 2005 art. 1" in next(h for h in hallazgos if h.regla == SEXO).como_texto()
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Se entrega uniforme masculino",
+        "Uniformes masculinos y camisa de la empresa",
+        "Vendedor(a) para la sección de calzado masculino",
+        "Baño masculino para el personal",
+        "Entrenador(a) de fútbol femenino",
+        "Tienda de ropa para chicas en Albrook",
+        "Manejo de caja chica",
+        "Se solicitan damas y caballeros",
+        "Buscamos chicos y chicas para eventos",
+        "Preferiblemente hombres o mujeres con licencia",
+    ],
+)
+def test_sexo_que_describe_otra_cosa_o_ambos_no_bloquea(texto):
+    assert revisar_texto(texto) == []
+
+
+def test_masculino_suelto_como_requisito_sigue_bloqueando():
+    for texto, frase in [("Requisitos: masculino, licencia", "masculino"), ("Preferiblemente masculino", "masculino")]:
+        assert esta_bloqueada(revisar_texto(texto))
+        assert (SEXO, frase) in _reglas(texto)
+
+
+# ---------------------------------------------------------------- #117: «soltera» como requisito alerta sexo implícito
+
+
+@pytest.mark.parametrize(
+    "texto, esperado",
+    [
+        (
+            "Asistente de tienda. Se prefiere soltera, sin hijos.",
+            [(ESTADO_CIVIL, "soltera"), (SEXO_IMPLICITO, "soltera"), (ESTADO_CIVIL, "sin hijos")],
+        ),
+        ("Estado civil: soltera", [(ESTADO_CIVIL, "Estado civil: soltera"), (SEXO_IMPLICITO, "soltera")]),
+        ("Solteras para turno de noche", [(ESTADO_CIVIL, "Solteras"), (SEXO_IMPLICITO, "Solteras")]),
+        ("Preferiblemente casada", [(ESTADO_CIVIL, "casada"), (SEXO_IMPLICITO, "casada")]),
+    ],
+)
+def test_estado_civil_en_femenino_alerta_sexo_implicito_sin_bloquear(texto, esperado):
+    hallazgos = revisar_texto(texto)
+    assert not esta_bloqueada(hallazgos)
+    assert _reglas(texto) == esperado
+    implicito = next(h for h in hallazgos if h.regla == SEXO_IMPLICITO)
+    assert implicito.como_texto().startswith("alerta · sexo_implicito") and "art. 1" in implicito.como_texto()
+
+
+@pytest.mark.parametrize(
+    "texto, esperado",
+    [
+        ("Se prefiere persona soltera", [(ESTADO_CIVIL, "soltera")]),
+        ("Personas solteras", [(ESTADO_CIVIL, "solteras")]),
+        ("Soltero/a", [(ESTADO_CIVIL, "Soltero")]),
+        ("Soltera/o", [(ESTADO_CIVIL, "Soltera")]),
+        ("Soltero o soltera", [(ESTADO_CIVIL, "Soltero"), (ESTADO_CIVIL, "soltera")]),
+        ("Sin hijos", [(ESTADO_CIVIL, "Sin hijos")]),
+        ("Se prefiere soltero", [(ESTADO_CIVIL, "soltero")]),
+    ],
+)
+def test_estado_civil_neutro_solo_alerta_estado_civil(texto, esperado):
+    assert _reglas(texto) == esperado
+    assert not esta_bloqueada(revisar_texto(texto))

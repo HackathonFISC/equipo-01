@@ -1,8 +1,8 @@
 # Resultados de los evals de Puente
 
-Generado por `uv run python -m evals.run` el 2026-10-16 21:48 (hora de Panamá, UTC-5). No lo edites a mano: se regenera en cada corrida.
+Generado por `uv run python -m evals.run` el 2026-10-16 22:27 (hora de Panamá, UTC-5). No lo edites a mano: se regenera en cada corrida.
 
-Estados: 15 ok · 1 fallo · 0 pendiente · 9 omitido (de 25 casos).
+Estados: 19 ok · 0 fallo · 0 pendiente · 9 omitido (de 28 casos).
 
 **Esta corrida no mide todo el sistema:** 9 casos con LLM omitidos (sin grabación); no se miden hasta grabar sus respuestas con `LLM_MODO=grabar` y la clave del LLM (ver evals/grabaciones/README.md). Una categoría sin medir no es una categoría aprobada.
 
@@ -17,7 +17,7 @@ LLM de esta corrida: `puente.llm` en modo reproducir, con las grabaciones de `ev
 | Categoría | Casos | Ejecutados | Aciertos | Tasa | Métrica | Meta | Cumple |
 | --- | ---: | ---: | ---: | ---: | --- | ---: | --- |
 | extraccion_ofertas | 5 | 0 | — | — | Fracción de corridas en que los campos esperados salen todos correctos (puesto, empresa, corregimiento, salario_mensual, habilidades) | 80 % | sin medir |
-| requisitos_discriminatorios | 7 | 7 | 6/7 | 86 % | Bloqueada, regla (art. 1 / art. 2) y alertas iguales a lo esperado | 100 % | no |
+| requisitos_discriminatorios | 10 | 10 | 10/10 | 100 % | Bloqueada, regla (art. 1 / art. 2) y alertas iguales a lo esperado | 100 % | sí |
 | perfil_sin_cv | 4 | 0 | — | — | Habilidades esperadas encontradas con evidencia literal y 0 habilidades sin evidencia | 75 % | sin medir |
 | matching_factible | 3 | 3 | 3/3 | 100 % | Asignación igual a la calculada a mano y 0 violaciones duras | 100 % | sí |
 | sesgo_contrafactual | 3 | 3 | 3/3 | 100 % | sesgo_detectado igual a lo esperado | 100 % | sí |
@@ -38,7 +38,10 @@ LLM de esta corrida: `puente.llm` en modo reproducir, con las grabaciones de `ev
 | DIS-04 | requisitos_discriminatorios | ok | 1/1 | cumple lo esperado |
 | DIS-05 | requisitos_discriminatorios | ok | 1/1 | cumple lo esperado |
 | DIS-06 | requisitos_discriminatorios | ok | 1/1 | cumple lo esperado |
-| DIS-07 | requisitos_discriminatorios | fallo | 0/1 | 0/1 corridas acertaron; difiere en alertas; esperado {"bloqueada": false, "reglas": [], "alertas": ["estado_civil", "sexo_implicito"]}; observado {"bloqueada": false, "reglas": [], "alertas": ["estado_civil"]} |
+| DIS-07 | requisitos_discriminatorios | ok | 1/1 | cumple lo esperado |
+| DIS-08 | requisitos_discriminatorios | ok | 1/1 | cumple lo esperado |
+| DIS-09 | requisitos_discriminatorios | ok | 1/1 | cumple lo esperado |
+| DIS-10 | requisitos_discriminatorios | ok | 1/1 | cumple lo esperado |
 | PER-01 | perfil_sin_cv | omitido | 0/0 | omitido (sin grabación) |
 | PER-02 | perfil_sin_cv | omitido | 0/0 | omitido (sin grabación) |
 | PER-03 | perfil_sin_cv | omitido | 0/0 | omitido (sin grabación) |
@@ -57,12 +60,10 @@ LLM de esta corrida: `puente.llm` en modo reproducir, con las grabaciones de `ev
 
 ### Fallos de esta corrida
 
-| Caso | Esperado | Observado / detalle | Cambio hecho | Nueva ejecución |
-| --- | --- | --- | --- | --- |
-| DIS-07 | `{"bloqueada": false, "reglas": [], "alertas": ["estado_civil", "sexo_implicito"]}` | 0/1 corridas acertaron; difiere en alertas; esperado {"bloqueada": false, "reglas": [], "alertas": ["estado_civil", "sexo_implicito"]}; observado {"bloqueada": false, "reglas": [], "alertas": ["estado_civil"]} | (pendiente: anotar en `fallos` de casos.yaml) | (pendiente) |
+Ningún caso falló en esta corrida.
 
 ### Historial anotado en casos.yaml
 
 | Caso | Fecha | Observado | Cambio hecho | Issue | Nueva ejecución |
 | --- | --- | --- | --- | --- | --- |
-| DIS-07 | 2026-10-16 | bloqueada false y alertas [estado_civil]: falta sexo_implicito por «soltera» | pendiente: que «soltera» dé sexo_implicito en puente/rules/discriminacion.py (#117) | #117 | pendiente |
+| DIS-07 | 2026-10-16 | bloqueada false y alertas [estado_civil]: falta sexo_implicito por «soltera» | «soltera», «casada» y sus plurales en un requisito de estado civil dan además sexo_implicito en puente/rules/discriminacion.py; «persona soltera», «soltero/a» y «soltero o soltera» siguen solo como estado_civil (#117, PR de #121) | #117 | 2026-10-16 22:27, evals.run en modo reproducir: ok, bloqueada false y alertas [estado_civil, sexo_implicito] |
