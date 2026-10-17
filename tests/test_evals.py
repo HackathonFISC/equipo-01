@@ -23,7 +23,7 @@ from evals.run import DependenciaPendiente, ResultadoCaso
 RAIZ = Path(__file__).resolve().parents[1]
 CONTEO_ESPERADO = {
     "extraccion_ofertas": 5,
-    "requisitos_discriminatorios": 6,
+    "requisitos_discriminatorios": 7,  # 6 del issue + DIS-07 («soltera, sin hijos»), seguimiento de #13
     "perfil_sin_cv": 4,
     "matching_factible": 3,
     "sesgo_contrafactual": 3,
@@ -82,7 +82,7 @@ def _yaml_minimo():
 # ---------------------------------------------------------------------------- casos.yaml
 def test_casos_yaml_completo(casos):
     ids = [c["id"] for c in casos["casos"]]
-    assert len(ids) == 24 == len(set(ids))
+    assert len(ids) == sum(CONTEO_ESPERADO.values()) == len(set(ids))
     conteo = {nombre: sum(1 for c in casos["casos"] if c["categoria"] == nombre) for nombre in casos["categorias"]}
     assert conteo == CONTEO_ESPERADO
     for caso in casos["casos"]:
@@ -433,6 +433,32 @@ def test_dependencia_pendiente(casos):
     assert tabla.count("\n") >= 7  # encabezado, separador y 6 categorías
 
 
+def _fila(tabla, categoria):
+    return next(f for f in tabla.splitlines() if f.startswith(f"| {categoria} |"))
+
+
+def test_categoria_medida_a_medias_dice_parcial_y_no_si(casos):
+    """Una categoría con casos ok y otros omitidos o pendientes no está aprobada: dice «parcial», no «sí»."""
+    dis = [c["id"] for c in casos["casos"] if c["categoria"] == "requisitos_discriminatorios"]
+    resultados = [ResultadoCaso(dis[0], "requisitos_discriminatorios", "ok", 1, 1, {}, "cumple lo esperado")]
+    resultados += [ResultadoCaso(i, "requisitos_discriminatorios", "pendiente", 0, 0, None, "pendiente (#5)") for i in dis[1:]]
+    fila = _fila(run.tabla(resultados, casos), "requisitos_discriminatorios")
+    assert fila.endswith("| parcial |") and "| 1/1 | 100 % |" in fila
+
+    con_fallo = [ResultadoCaso(dis[0], "requisitos_discriminatorios", "fallo", 0, 1, {}, "difiere")] + resultados[1:]
+    assert _fila(run.tabla(con_fallo, casos), "requisitos_discriminatorios").endswith("| no (parcial) |")
+
+    completos = [ResultadoCaso(i, "requisitos_discriminatorios", "ok", 1, 1, {}, "cumple lo esperado") for i in dis]
+    assert _fila(run.tabla(completos, casos), "requisitos_discriminatorios").endswith("| sí |")
+
+
+def test_categoria_con_llm_omitido_en_parte_dice_parcial(casos):
+    ext = [c["id"] for c in casos["casos"] if c["categoria"] == "extraccion_ofertas"]
+    resultados = [ResultadoCaso(ext[0], "extraccion_ofertas", "ok", 3, 3, {}, "cumple lo esperado")]
+    resultados += [ResultadoCaso(i, "extraccion_ofertas", "omitido", 0, 0, None, "omitido (sin grabación)") for i in ext[1:]]
+    assert _fila(run.tabla(resultados, casos), "extraccion_ofertas").endswith("| parcial |")
+
+
 def test_resolver_deja_pendiente_si_falta_el_modulo_o_la_funcion():
     with pytest.raises(DependenciaPendiente) as sin_modulo:
         run._resolver(("puente.modulo_que_no_existe", "f", 7))
@@ -587,7 +613,7 @@ def test_registro_de_fallos_y_casos_intactos(tmp_path, casos, monkeypatch, capsy
     salida = tmp_path / "resultados.md"
     assert run.main(["--casos", str(copia), "--salida", str(salida), "--sin-llm"]) == 0
     assert copia.read_bytes() == antes  # el runner nunca reescribe casos.yaml
-    assert len(run.cargar_casos(copia)["casos"]) == 24  # y ningún caso se borra
+    assert len(run.cargar_casos(copia)["casos"]) == sum(CONTEO_ESPERADO.values())  # y ningún caso se borra
 
     texto = salida.read_text(encoding="utf-8")
     registro = texto[texto.index("## Registro de fallos"):]
@@ -600,12 +626,23 @@ def test_registro_de_fallos_y_casos_intactos(tmp_path, casos, monkeypatch, capsy
 
 def test_escribir_resultados_con_fecha_de_panama(tmp_path, casos):
     resultados = [ResultadoCaso("GRD-01", "guardrails", "ok", 1, 1, {"veredicto": "rechazar"}, "cumple lo esperado")]
+    sin_historial = copy.deepcopy(casos)
+    for caso in sin_historial["casos"]:
+        caso["fallos"] = []
     ruta = run.escribir_resultados(
-        resultados, casos, tmp_path / "sub" / "r.md", ahora=datetime.fromisoformat("2026-10-16T22:30:00+00:00")
+        resultados, sin_historial, tmp_path / "sub" / "r.md", ahora=datetime.fromisoformat("2026-10-16T22:30:00+00:00")
     )
     texto = ruta.read_text(encoding="utf-8")
     assert "2026-10-16 17:30 (hora de Panamá, UTC-5)" in texto
     assert "Sin fallos anotados todavía" in texto
+
+
+def test_el_historial_de_casos_yaml_sale_en_resultados(tmp_path, casos):
+    anotados = [c["id"] for c in casos["casos"] if c.get("fallos")]
+    assert "DIS-07" in anotados  # #117: «soltera» sin alerta de sexo implícito
+    texto = run.escribir_resultados([], casos, tmp_path / "r.md").read_text(encoding="utf-8")
+    historial = texto.split("### Historial anotado en casos.yaml", 1)[1]
+    assert "| DIS-07 |" in historial and "#117" in historial
 
 
 def test_aviso_dice_que_no_se_midio_todo(casos):
@@ -776,10 +813,16 @@ def test_extraccion_sin_oferta_valida_es_fallo_con_el_motivo(casos):
     assert "ValueError" in resultados[0].detalle and "ninguna oferta" in resultados[0].detalle
 
 
+def _con_fallo_pendiente(caso):
+    """Caso con un fallo anotado en casos.yaml cuya nueva ejecución sigue pendiente (bug abierto)."""
+    return any(str(f.get("nueva_ejecucion", "")).startswith("pendiente") for f in caso.get("fallos") or [])
+
+
 def test_discriminacion_contra_revisar_texto_real(casos):
     ejecutor = run.ejecutores_por_defecto()["requisitos_discriminatorios"]
     for caso in casos["casos"]:
-        if caso["categoria"] == "requisitos_discriminatorios":
+        # Un fallo conocido y anotado (p. ej. DIS-07, #117) no rompe la suite: el eval lo reporta como fallo.
+        if caso["categoria"] == "requisitos_discriminatorios" and not _con_fallo_pendiente(caso):
             observado = ejecutor(caso)
             assert run.comparar(caso["categoria"], caso["esperado"], observado), (caso["id"], observado)
     assert ejecutor(_caso(casos, "DIS-01")) == {"bloqueada": True, "reglas": ["art. 2"], "alertas": ["presencia"]}
