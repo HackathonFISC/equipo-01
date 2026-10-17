@@ -15,9 +15,13 @@ por proceso y el cliente queda en caché: tras editar `.env`, reinicie el tabler
 - `LLM_PROVEEDOR_RESPALDO` y `LLM_MODELO_RESPALDO` (opcionales): un solo reintento si el modelo rechaza (refusal).
 - `PUENTE_LLM_FALLBACKS` (`false` por defecto): respaldo del servidor de Anthropic (beta). Sin verificar con clave.
 
-La salida estructurada usa `messages.create` con `output_config.format` (esquema Pydantic transformado por
-`anthropic.transform_schema`) y valida el JSON aquí, después de revisar `stop_reason`: así un corte por `max_tokens`
-o un rechazo con texto no llegan como un error de esquema.
+La salida estructurada usa `messages.create` con `output_config.format` y valida el JSON aquí, después de revisar
+`stop_reason`: así un corte por `max_tokens` o un rechazo con texto no llegan como un error de esquema. El esquema que
+se envía es el de `anthropic.transform_schema`, simplificado por `esquema_para_api`: todo obligatorio, `$defs` en línea,
+sin `title` ni `default`. La API limita la suma de parámetros opcionales (24) y con unión (16) de los esquemas
+estrictos, y además el tamaño de la gramática compilada; con todo opcional, `OfertaExtraida` daba HTTP 400 «Schema is
+too complex» (#137). Si aun así la API rechaza el esquema por complejidad, se pide en modo no estricto: el esquema va en
+el sistema y la respuesta se valida con el modelo Pydantic. Una salida que no valida se pide una vez más.
 
 Reglas del API de Claude Opus 5.5 que este módulo respeta: sin `temperature`/`top_p`/`top_k`, sin `tool_choice`
 forzado, sin `thinking` (el razonamiento no se apaga), sin prefill; el esfuerzo va en `output_config`.
@@ -33,6 +37,7 @@ import hashlib
 import json
 import mimetypes
 import os
+import re
 import threading
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -476,6 +481,82 @@ def _uso_anthropic(respuesta: Any) -> tuple[int, int]:
     return entrada, int(getattr(uso, "output_tokens", 0) or 0)
 
 
+# ---------------------------------------------------------------- esquema para la salida estructurada (#137)
+
+_RE_DEFAULT_EN_DESCRIPCION = re.compile(r"\s*\{default: [^{}]*\}\s*$")
+INSTRUCCION_JSON_LIBRE = (
+    "Responde únicamente con un objeto JSON válido que cumpla este JSON Schema, sin texto antes ni después y sin "
+    "bloques de código. Incluye todas las propiedades; usa null cuando el dato no aparece.\n{esquema}"
+)
+
+
+class _EsquemaDemasiadoComplejo(Exception):
+    """La API rechazó el esquema estricto por complejidad: se pide otra vez en modo no estricto."""
+
+
+def esquema_para_api(esquema: type[BaseModel]) -> dict[str, Any]:
+    """JSON Schema que se envía en `output_config.format`, más simple que el de `anthropic.transform_schema`.
+
+    - Todas las propiedades van en `required`: la API cuenta cada propiedad opcional contra su límite (24 por
+      pedido) y cada una multiplica la gramática. Los campos que pueden faltar siguen admitiendo null, así que el
+      modelo los manda como null y Pydantic aplica el mismo contrato que antes.
+    - Los `$defs` van en línea (sin `$ref`), y se quitan `title`, `default` y la nota «{default: ...}» que
+      `transform_schema` agrega a la descripción.
+
+    No cambia el contrato de `generar_estructurado`: la respuesta se sigue validando con el modelo Pydantic.
+    """
+    import anthropic
+
+    base = anthropic.transform_schema(esquema)
+    definiciones = base.pop("$defs", {})
+
+    def limpiar(nodo: Any, pila: tuple[str, ...] = ()) -> Any:
+        if isinstance(nodo, list):
+            return [limpiar(n, pila) for n in nodo]
+        if not isinstance(nodo, dict):
+            return nodo
+        if "$ref" in nodo:
+            nombre = str(nodo["$ref"]).rsplit("/", 1)[-1]
+            if nombre in pila or nombre not in definiciones:
+                raise ValueError(f"referencia no soportada en el esquema: {nodo['$ref']}")
+            return limpiar(definiciones[nombre], (*pila, nombre))
+        limpio: dict[str, Any] = {}
+        for clave, valor in nodo.items():
+            if clave in ("title", "default"):
+                continue
+            if clave == "description" and isinstance(valor, str):
+                valor = _RE_DEFAULT_EN_DESCRIPCION.sub("", valor)
+                if not valor:
+                    continue
+            if clave == "properties" and isinstance(valor, dict):
+                limpio[clave] = {nombre: limpiar(prop, pila) for nombre, prop in valor.items()}
+                continue
+            limpio[clave] = limpiar(valor, pila)
+        if isinstance(limpio.get("properties"), dict):
+            limpio["required"] = list(limpio["properties"])
+            limpio["additionalProperties"] = False
+        return limpio
+
+    return limpiar(base)
+
+
+def _es_esquema_complejo(exc: Exception) -> bool:
+    """HTTP 400 por un esquema que la API no puede compilar («Schema is too complex for compilation»)."""
+    cuerpo = getattr(exc, "body", None)
+    mensaje = str(getattr(exc, "message", "") or exc)
+    if isinstance(cuerpo, dict):
+        error = cuerpo.get("error")
+        mensaje += " " + str(error.get("message", "") if isinstance(error, dict) else error or "")
+    mensaje = mensaje.lower()
+    return "schema" in mensaje and ("complex" in mensaje or "compil" in mensaje)
+
+
+def _json_de_texto(texto: str) -> str:
+    """En modo no estricto el modelo puede envolver el JSON en un bloque de código: se toma el objeto JSON."""
+    inicio, fin = texto.find("{"), texto.rfind("}")
+    return texto[inicio : fin + 1] if 0 <= inicio < fin else texto
+
+
 def _llamar_anthropic(
     cliente: Any,
     *,
@@ -489,20 +570,79 @@ def _llamar_anthropic(
     max_tokens: int,
     cache_sistema: bool,
 ) -> tuple[Any, int, int]:
+    """Una llamada con salida estructurada, con dos reintentos acotados (#137).
+
+    1. Si la API rechaza el esquema estricto por complejidad, se pide otra vez sin `output_config.format`: el esquema
+       va en el sistema y la respuesta se valida igual con Pydantic.
+    2. Si la respuesta no cumple el esquema, se pide una vez más en el mismo modo; si vuelve a fallar, `salida_invalida`.
+    """
+    argumentos_comunes = {
+        "modelo": modelo,
+        "prompt": prompt,
+        "esquema": esquema,
+        "archivos": archivos,
+        "sistema": sistema,
+        "agente": agente,
+        "effort": effort,
+        "max_tokens": max_tokens,
+        "cache_sistema": cache_sistema,
+    }
+    estricto = True
+    reintento_por_salida = False
+    while True:
+        try:
+            return _pedir_anthropic(cliente, estricto=estricto, **argumentos_comunes)
+        except _EsquemaDemasiadoComplejo:
+            estricto = False
+        except ErrorLLM as error:
+            if esquema is None or error.causa != "salida_invalida" or reintento_por_salida:
+                raise
+            reintento_por_salida = True
+
+
+def _pedir_anthropic(
+    cliente: Any,
+    *,
+    estricto: bool,
+    modelo: str,
+    prompt: str,
+    esquema: type[T] | None,
+    archivos: list[tuple[str, bytes]],
+    sistema: str | None,
+    agente: str,
+    effort: str,
+    max_tokens: int,
+    cache_sistema: bool,
+) -> tuple[Any, int, int]:
     import anthropic
 
     config_salida: dict[str, Any] = {"effort": effort}
+    texto_sistema = sistema
     if esquema is not None:
-        config_salida["format"] = {"type": "json_schema", "schema": anthropic.transform_schema(esquema)}
+        try:
+            esquema_api = esquema_para_api(esquema)
+        except Exception as exc:  # noqa: BLE001 - un esquema que no se puede simplificar no debe salir como error crudo
+            raise ErrorLLM(
+                f"El esquema {esquema.__name__} no se puede usar con el modelo (agente {agente}): {type(exc).__name__}.",
+                causa="esquema",
+                proveedor="anthropic",
+                modelo=modelo,
+                agente=agente,
+            ) from exc
+        if estricto:
+            config_salida["format"] = {"type": "json_schema", "schema": esquema_api}
+        else:
+            instruccion = INSTRUCCION_JSON_LIBRE.format(esquema=json.dumps(esquema_api, ensure_ascii=False))
+            texto_sistema = f"{sistema}\n\n{instruccion}" if sistema else instruccion
     argumentos: dict[str, Any] = {
         "model": modelo,
         "max_tokens": max_tokens,
         "messages": [{"role": "user", "content": _bloques_anthropic(prompt, archivos)}],
         "output_config": config_salida,
     }
-    if sistema:
+    if texto_sistema:
         argumentos["system"] = (
-            [{"type": "text", "text": sistema, "cache_control": {"type": "ephemeral"}}] if cache_sistema else sistema
+            [{"type": "text", "text": texto_sistema, "cache_control": {"type": "ephemeral"}}] if cache_sistema else texto_sistema
         )
     servicio = cliente.messages
     if _fallbacks_servidor():
@@ -515,6 +655,10 @@ def _llamar_anthropic(
         respuesta = servicio.create(**argumentos)
     except ErrorLLM:
         raise
+    except anthropic.BadRequestError as exc:
+        if estricto and esquema is not None and _es_esquema_complejo(exc):
+            raise _EsquemaDemasiadoComplejo() from exc
+        raise _error_anthropic(exc, "anthropic", modelo, agente) from exc
     except anthropic.AnthropicError as exc:
         raise _error_anthropic(exc, "anthropic", modelo, agente) from exc
     # El uso se cuenta en cuanto llega la respuesta, antes de revisar stop_reason o validar: un corte por max_tokens,
@@ -530,7 +674,7 @@ def _llamar_anthropic(
     if not texto.strip():
         raise ErrorLLM(f"El modelo no devolvió una salida estructurada ({modelo}, agente {agente}).", causa="sin_salida", **contexto)
     try:
-        return esquema.model_validate_json(texto), entrada, salida
+        return esquema.model_validate_json(texto if estricto else _json_de_texto(texto)), entrada, salida
     except ValidationError as exc:
         raise ErrorLLM(
             f"La respuesta del modelo no cumple el esquema {esquema.__name__} ({modelo}, agente {agente}).",

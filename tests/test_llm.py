@@ -134,7 +134,7 @@ def test_api_publica_estructurado_y_texto():
     assert kw["model"] == "claude-opus-5-5"
     assert kw["output_config"] == {
         "effort": "low",
-        "format": {"type": "json_schema", "schema": anthropic.transform_schema(Salida)},
+        "format": {"type": "json_schema", "schema": llm.esquema_para_api(Salida)},
     }
     assert kw["system"] == "Eres un extractor"
     assert kw["messages"] == [{"role": "user", "content": [{"type": "text", "text": "Extrae"}]}]
@@ -705,7 +705,8 @@ def test_sdk_real_salida_invalida_y_sin_salida_cuentan_uso():
         generar_estructurado("x", Salida, agente="perfil", cliente=_sdk_con_respuesta("end_turn", ""))
     assert info.value.causa == "sin_salida"
     fila = llm.uso_por_agente()["perfil"]
-    assert fila["llamadas"] == 2 and fila["tokens_entrada"] == 240 and fila["tokens_salida"] == 60
+    # La salida inválida se pide una vez más (#137): 2 llamadas + 1 sin salida, y cada una cuesta.
+    assert fila["llamadas"] == 3 and fila["tokens_entrada"] == 360 and fila["tokens_salida"] == 90
 
 
 def test_sdk_real_exito_cuenta_la_llamada_una_sola_vez():
@@ -773,3 +774,118 @@ def test_configuracion_carga_dotenv_una_sola_vez(monkeypatch):
     _dotenv_falso(monkeypatch, LLM_MODO="grabar")
     assert configuracion()["modo"] == "grabar"
     assert llm._dotenv_cargado is True
+
+
+# ---------------------------------------------------------------- esquema simplificado y reintentos (#137)
+
+
+def _medir_esquema(esquema: dict) -> tuple[int, int]:
+    """(opcionales, uniones) como los cuenta la API: propiedades fuera de `required` y con anyOf o type array."""
+    opcionales = uniones = 0
+
+    def visitar(nodo):
+        nonlocal opcionales, uniones
+        if isinstance(nodo, list):
+            for n in nodo:
+                visitar(n)
+            return
+        if not isinstance(nodo, dict):
+            return
+        requeridos = set(nodo.get("required", []))
+        for nombre, prop in (nodo.get("properties") or {}).items():
+            opcionales += nombre not in requeridos
+            uniones += "anyOf" in prop or isinstance(prop.get("type"), list)
+        for valor in nodo.values():
+            visitar(valor)
+
+    visitar(esquema)
+    return opcionales, uniones
+
+
+def test_esquema_de_oferta_queda_bajo_los_limites_de_la_api():
+    """Con transform_schema todo era opcional en OfertaExtraida y la API respondía «Schema is too complex» (#137)."""
+    antes = _medir_esquema(anthropic.transform_schema(OfertaExtraida))
+    esquema = llm.esquema_para_api(OfertaExtraida)
+    opcionales, uniones = _medir_esquema(esquema)
+    assert antes[0] >= 16 and opcionales == 0  # límite de la API: 24 opcionales por pedido (antes, todo opcional)
+    assert uniones <= 16  # límite de la API: 16 parámetros con unión por pedido
+    texto = json.dumps(esquema, ensure_ascii=False)
+    for sobra in ('"$ref"', '"$defs"', '"title"', '"default"', "{default:"):
+        assert sobra not in texto
+    # Cada objeto lista todas sus propiedades y no admite propiedades extra.
+    assert esquema["required"] == list(esquema["properties"]) and esquema["additionalProperties"] is False
+    horario = next(alt for alt in esquema["properties"]["horario"]["anyOf"] if alt.get("type") == "object")
+    assert horario["required"] == ["dias", "hora_inicio", "hora_fin"] and horario["additionalProperties"] is False
+    # Una respuesta con todas las propiedades en null o vacías sigue validando con el modelo Pydantic.
+    vacia = {nombre: None for nombre in esquema["properties"]} | {"habilidades": [], "franjas_entrevista": []}
+    assert OfertaExtraida.model_validate(vacia) == OfertaExtraida()
+
+
+def _error_400(mensaje):
+    return anthropic.BadRequestError(
+        mensaje, response=_http(400), body={"type": "error", "error": {"type": "invalid_request_error", "message": mensaje}}
+    )
+
+
+class ClienteEnSecuencia:
+    """Imita messages.create: cada llamada devuelve (o lanza) el siguiente elemento de la lista."""
+
+    def __init__(self, *pasos):
+        self.pasos = list(pasos)
+        self.llamadas: list[dict] = []
+        self.messages = SimpleNamespace(create=self._crear)
+
+    def _crear(self, **kwargs):
+        self.llamadas.append(kwargs)
+        paso = self.pasos.pop(0)
+        if isinstance(paso, Exception):
+            raise paso
+        return paso
+
+
+def test_esquema_demasiado_complejo_se_pide_en_modo_no_estricto():
+    cliente = ClienteEnSecuencia(
+        _error_400("Schema is too complex for compilation."),
+        respuesta(texto='```json\n{"respuesta": "ok", "puntos": 2}\n```'),
+    )
+    resultado = generar_estructurado("Extrae", Salida, sistema="Eres un extractor", agente="mercado", cliente=cliente)
+    assert resultado == Salida(respuesta="ok", puntos=2)
+    estricta, libre = cliente.llamadas
+    assert estricta["output_config"]["format"]["type"] == "json_schema"
+    assert "format" not in libre["output_config"] and libre["output_config"]["effort"] == "low"
+    assert libre["system"].startswith("Eres un extractor\n\n") and "JSON Schema" in libre["system"]
+    assert '"respuesta"' in libre["system"]  # el esquema simplificado viaja en el sistema
+    assert llm.uso_por_agente()["mercado"]["llamadas"] == 1  # el 400 no generó tokens
+
+
+def test_otro_error_400_no_cambia_de_modo():
+    cliente = ClienteEnSecuencia(_error_400("messages: field required"))
+    with pytest.raises(ErrorLLM) as info:
+        generar_estructurado("x", Salida, cliente=cliente)
+    assert info.value.causa == "estado_http" and len(cliente.llamadas) == 1
+
+
+def test_modo_no_estricto_tambien_falla_si_la_api_rechaza_otra_cosa():
+    cliente = ClienteEnSecuencia(_error_400("Schema is too complex."), _error_400("Schema is too complex."))
+    with pytest.raises(ErrorLLM) as info:
+        generar_estructurado("x", Salida, cliente=cliente)
+    assert info.value.causa == "estado_http" and len(cliente.llamadas) == 2  # no hay un tercer intento
+
+
+def test_salida_invalida_se_pide_una_vez_mas():
+    cliente = ClienteEnSecuencia(respuesta(texto='{"respuesta": 1}'), respuesta(parsed=Salida(respuesta="bien")))
+    assert generar_estructurado("x", Salida, agente="perfil", cliente=cliente) == Salida(respuesta="bien")
+    assert len(cliente.llamadas) == 2 and llm.uso_por_agente()["perfil"]["llamadas"] == 2
+
+
+def test_salida_invalida_dos_veces_da_errorllm():
+    cliente = ClienteEnSecuencia(respuesta(texto="no es json"), respuesta(texto='{"respuesta": 1}'))
+    with pytest.raises(ErrorLLM) as info:
+        generar_estructurado("x", Salida, cliente=cliente)
+    assert info.value.causa == "salida_invalida" and len(cliente.llamadas) == 2
+
+
+def test_texto_libre_no_reintenta_ni_cambia_de_modo():
+    cliente = ClienteEnSecuencia(respuesta(texto="hola"))
+    assert generar_texto("x", cliente=cliente) == "hola"
+    assert len(cliente.llamadas) == 1 and "format" not in cliente.llamadas[0]["output_config"]
