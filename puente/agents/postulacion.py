@@ -301,7 +301,8 @@ def _texto_lista_corta(
             saludo = cegar(saludo, perfil, del_orientador=True)
         lineas += [saludo, ""]
     lineas += [
-        f"Lista corta para {oferta.puesto} en {oferta.empresa} ({oferta.corregimiento})",
+        # Sin corregimiento: si coincide con el del joven, revelaría dónde vive (#123).
+        f"Lista corta para {oferta.puesto} en {oferta.empresa}",
         "Candidatos aprobados por el orientador. Datos de demostración (sintéticos).",
         f"Las fechas de entrevista de los .ics adjuntos son propuestas. {AVISO_FECHA}.",
         "",

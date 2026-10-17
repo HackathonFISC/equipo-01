@@ -692,3 +692,23 @@ def test_una_pareja_sin_perfil_en_ningun_lado_sale_sola_y_las_demas_siguen(tmp_p
     })
     assert len(caso.empresa.mensajes) == 1 and "Carlos" not in caso.empresa.mensajes[0][2]
     assert any("falta el perfil carlos" in e for e in salida["errores"])
+
+
+def test_ni_el_pdf_ni_el_mensaje_a_la_empresa_filtran_ubicacion_descartes_ni_otras_ofertas(tmp_path):
+    """#123: hacia la empresa no salen el corregimiento del joven, «Descartes», el presupuesto ni otras ofertas."""
+    from tests.test_cv_ciego import _texto_pdf
+
+    caso = Caso(tmp_path, con_tocumen=True)
+    caso.aprobar()
+    perfiles = {p.id: p for p in caso.valores["perfiles"]}
+    otras = [o for o in caso.valores["ofertas"] if o.id != caso.valores["aprobacion"]["oferta_id"]]
+    _, _, texto, adjuntos = caso.empresa.mensajes[0]
+    pdfs = [a for a in adjuntos if a.suffix == ".pdf"]
+    assert pdfs
+    for salida in [texto, *(_texto_pdf(a) for a in pdfs)]:
+        for prohibido in ("Descartes", "descart", "presupuesto", "pasaje", MOTIVO_TOCUMEN):
+            assert prohibido not in salida
+        for p in perfiles.values():
+            assert p.corregimiento not in salida
+        for o in otras:
+            assert o.empresa not in salida and o.puesto not in salida
