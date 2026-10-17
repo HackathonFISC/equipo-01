@@ -707,6 +707,76 @@ function renderizarPersona(perfil, matches) {
     </section>`;
 }
 
+function renderizarCoberturasTurnos() {
+  const coberturas = estadoActual.coberturas_turnos || [];
+  if (!coberturas.length) {
+    return `
+      <div class="banner banner--info" style="margin-top:1rem;display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap">
+        <div>
+          <strong>Cobertura por turnos (Job-Sharing CP-SAT · #165):</strong>
+          Cuando ningún estudiante individual puede cubrir un turno completo (08:00-17:00) por cruce con sus clases, el solver propone una dupla complementaria mañana/tarde.
+        </div>
+        <button type="button" class="btn btn--ghost btn-demo-cobertura-turnos">
+          ${icono("users")}Probar escenario cobertura por turnos
+        </button>
+      </div>`;
+  }
+  const tarjetas = coberturas
+    .map((c) => {
+      const segM = (c.segmentos || [])[0] || {};
+      const segT = (c.segmentos || [])[1] || {};
+      const oid = c.oferta_id || "";
+      const idCheckM = `consent-cob-m-${oid}`;
+      const idCheckT = `consent-cob-t-${oid}`;
+      const postM = postulacionDe(segM.perfil_id, oid);
+      const postT = postulacionDe(segT.perfil_id, oid);
+      const yaEnviada = postM?.estado === "enviado" && postT?.estado === "enviado";
+      return `
+        <section class="persona cobertura-turnos-card" data-cobertura-oferta="${escaparHtml(oid)}" style="border-left:4px solid var(--brand, #2563eb);margin-top:1rem">
+          <header class="persona__head">
+            <span class="avatar" aria-hidden="true">2×</span>
+            <div class="persona__titulo">
+              <h3>Cobertura por turnos · ${escaparHtml(c.puesto || oid)}</h3>
+              <span class="muted">${escaparHtml(c.empresa || "")} · ${escaparHtml(c.corregimiento || "")} · Jornada ${escaparHtml(c.horario_completo || "08:00-17:00")} (corte ${escaparHtml(c.hora_corte || "12:30")})</span>
+              <span class="persona__resumen">${pill(`Puntaje combinado: ${c.puntaje_combinado} pts`, "brand")}${yaEnviada ? pill("Dupla aprobada y enviada", "ok", "check") : pill("Sugerencia CP-SAT", "info")}</span>
+            </div>
+          </header>
+          <div class="persona__body">
+            <p class="muted" style="margin-bottom:0.75rem">${escaparHtml(c.motivo || "")}</p>
+            <div class="opciones" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:0.75rem">
+              <article class="opcion">
+                <h4>Turno Mañana (${escaparHtml(segM.inicio)}-${escaparHtml(segM.fin)}) · ${escaparHtml(segM.nombre_perfil || segM.perfil_id)}</h4>
+                <p class="muted">Puntaje: <strong>${escaparHtml(segM.puntaje)} pts</strong> · Traslado: ${escaparHtml(segM.desglose?.minutos_traslado ?? 15)} min · Pasaje: ${dinero(segM.desglose?.pasaje_diario ?? 1.0)}/día</p>
+                <label class="consent" for="${escaparHtml(idCheckM)}">
+                  <input type="checkbox" id="${escaparHtml(idCheckM)}" ${segM.consentimiento_joven ? "checked" : ""} ${yaEnviada ? "disabled" : ""} />
+                  <span><strong>${escaparHtml(segM.nombre_perfil || segM.perfil_id)}</strong> consintió enviar su CV para el segmento matutino</span>
+                </label>
+              </article>
+              <article class="opcion">
+                <h4>Turno Tarde (${escaparHtml(segT.inicio)}-${escaparHtml(segT.fin)}) · ${escaparHtml(segT.nombre_perfil || segT.perfil_id)}</h4>
+                <p class="muted">Puntaje: <strong>${escaparHtml(segT.puntaje)} pts</strong> · Traslado: ${escaparHtml(segT.desglose?.minutos_traslado ?? 15)} min · Pasaje: ${dinero(segT.desglose?.pasaje_diario ?? 1.0)}/día</p>
+                <label class="consent" for="${escaparHtml(idCheckT)}">
+                  <input type="checkbox" id="${escaparHtml(idCheckT)}" ${segT.consentimiento_joven ? "checked" : ""} ${yaEnviada ? "disabled" : ""} />
+                  <span><strong>${escaparHtml(segT.nombre_perfil || segT.perfil_id)}</strong> consintió enviar su CV para el segmento vespertino</span>
+                </label>
+              </article>
+            </div>
+            ${
+              yaEnviada
+                ? `<div class="cerrada" style="margin-top:0.75rem">${pill("2 postulaciones enviadas (mañana y tarde)", "ok", "check")}</div>`
+                : `<div class="hitl__botones" style="margin-top:0.75rem">
+                    <button type="button" class="btn btn--ok btn-aprobar-cobertura-turnos" data-oferta-id="${escaparHtml(oid)}">
+                      ${icono("send")}Aprobar cobertura por turnos (2 postulaciones)
+                    </button>
+                  </div>`
+            }
+          </div>
+        </section>`;
+    })
+    .join("");
+  return tarjetas;
+}
+
 function renderizarListaCorta() {
   const contenedor = document.getElementById("contenedor-matches");
   const filtro = document.getElementById("filtro-perfil").value;
@@ -732,9 +802,11 @@ function renderizarListaCorta() {
         ${enviadas} ${enviadas === 1 ? "postulación enviada" : "postulaciones enviadas"}; el detalle y los archivos están en la pestaña Postulaciones.</div></div>`
     : "";
 
-  contenedor.innerHTML = bloqueo + terminado + perfiles
-    .map((p) => renderizarPersona(p, matches.filter((m) => m.perfil_id === p.id)))
-    .join("");
+  contenedor.innerHTML =
+    bloqueo +
+    terminado +
+    perfiles.map((p) => renderizarPersona(p, matches.filter((m) => m.perfil_id === p.id))).join("") +
+    renderizarCoberturasTurnos();
 }
 
 // Al volver a dibujar la lista, el botón que se pulsó desaparece; el foco pasa a la
@@ -1193,9 +1265,42 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("filtro-agente").addEventListener("change", renderizarTrazas);
 
   // Delegación para los botones del orientador (data-* sin onclick inline)
-  document.getElementById("contenedor-matches").addEventListener("click", (ev) => {
+  document.getElementById("contenedor-matches").addEventListener("click", async (ev) => {
     const btn = ev.target.closest(".btn-accion-hitl");
-    if (btn) ejecutarAccionOrientador(btn);
+    if (btn) {
+      ejecutarAccionOrientador(btn);
+      return;
+    }
+    const btnDemoCob = ev.target.closest(".btn-demo-cobertura-turnos");
+    if (btnDemoCob) {
+      await conBoton(btnDemoCob, async () => {
+        if (aplicarEstado(await llamarApi("/api/orientador/cobertura-turnos/demo", {}))) {
+          mostrarToast("Escenario de cobertura por turnos cargado: Sofía (mañana) + Mateo (tarde).");
+        }
+      });
+      return;
+    }
+    const btnAprobarCob = ev.target.closest(".btn-aprobar-cobertura-turnos");
+    if (btnAprobarCob) {
+      const oid = btnAprobarCob.dataset.ofertaId;
+      const checkM = document.getElementById(`consent-cob-m-${oid}`);
+      const checkT = document.getElementById(`consent-cob-t-${oid}`);
+      const consentM = checkM ? Boolean(checkM.checked) : false;
+      const consentT = checkT ? Boolean(checkT.checked) : false;
+      await conBoton(btnAprobarCob, async () => {
+        if (
+          aplicarEstado(
+            await llamarApi("/api/orientador/cobertura-turnos/aprobar", {
+              oferta_id: oid,
+              consentimiento_manana: consentM,
+              consentimiento_tarde: consentT,
+            })
+          )
+        ) {
+          mostrarToast("Cobertura por turnos aprobada: 2 postulaciones registradas con consentimiento.");
+        }
+      });
+    }
   });
 
   document.getElementById("contenedor-ofertas-bloqueadas")?.addEventListener("click", async (ev) => {
