@@ -199,6 +199,7 @@
   }
 
   function abrirChat(estadoChat, previa) {
+    if ($("ingreso")) $("ingreso").hidden = true;
     tokenActual = chat.token;
     progreso = estadoChat;
     conversacion = previa;
@@ -774,7 +775,7 @@
     nuevaEntrevistaFase1();
   };
 
-  document.head.append(el("link", { rel: "stylesheet", href: "/static/joven_fase2.css?v=2026101702" }));
+  document.head.append(el("link", { rel: "stylesheet", href: "/static/joven_fase2.css?v=2026101703" }));
   construirChat();
   const botonChat = el("button", { type: "button", id: "f2-btn-chat", class: "btn btn-sec", text: "Prefiero la entrevista por chat" });
   botonChat.addEventListener("click", () => iniciarChat(botonChat));

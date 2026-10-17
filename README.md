@@ -122,6 +122,12 @@ Los siete agentes mínimos que sugiere el documento del reto y dónde están en 
 
 **Fuera de alcance, y por qué.** La entrevista simulada daría como resultado la opinión de un LLM sobre una conversación, y no hay forma de verificarla en código en 24 horas. Priorizamos lo que sí se puede verificar: que nada salga sin aprobación y consentimiento.
 
+**Sin fusionar al congelamiento de las 11:30 (#41), y por eso fuera de alcance de la entrega:**
+- El chatbot de WhatsApp del joven (#160, PR #253). Hace la entrevista por el sandbox de Twilio, pide el CV en PDF antes de las preguntas y el SÍ o NO al consentimiento, y pasa por el mismo camino que `/joven`.
+- La edad del perfil de 18 a 98 años (#299, PR #300). La entrega sigue con el tope de 29.
+
+La demo en vivo de WhatsApp corre desde la rama de #253 en la laptop. Durante la demo, https://puente-equipo-01.vercel.app sirve ese tablero por un túnel (#307); después vuelve a la demo de solo lectura (PR #312).
+
 **Tendencias del mercado (#198).** `puente/metricas.py` calcula en código las habilidades más pedidas, el salario por zona y los bloqueos de la Ley 11 sobre las ofertas de la base: `uv run python -m puente.cargar` y después `uv run python -m puente.metricas --tendencias`. Con las 20 ofertas de `data/`, atención al cliente es la más pedida (6).
 
 **Más allá de los siete agentes (stretch).** Verificado en `main` el 17 de octubre, sin red:
@@ -133,6 +139,8 @@ Los siete agentes mínimos que sugiere el documento del reto y dónde están en 
 - **Ofertas y CV por archivo (#170).** En el tablero, «Subir oferta (PDF o foto con cámara)» y «Subir CV (PDF)» (`POST /api/ofertas/archivo` y `POST /api/perfiles/archivo`).
   - Los guardrails de tamaño (5 MB) y de tipo se aplican antes de leer el archivo, y el audio se rechaza.
   - La cédula y el teléfono se quitan antes del LLM.
+  - En `/joven`, el primer paso permite elegir **PDF, foto JPG/PNG o completar los datos**. `POST /api/joven/cv` valida el archivo y los horarios, extrae el texto y llama a Perfil; después recalcula las vacantes y devuelve un código privado al joven. Con CV no se exige la entrevista.
+  - Las fotos se leen con **RapidOCR local** (incluido al ejecutar `uv sync`); la imagen original no sale al modelo. Solo el texto limpio llega a Perfil. El archivo temporal se elimina y no se conserva su texto crudo.
   - Sin red solo funcionan los archivos de prueba, con grabaciones escritas a mano (#236): `tests/fixtures/volante_sintetico.jpg` y `tests/fixtures/cv_sintetico.pdf`.
 - **Demo pública de solo lectura (#161).** `vercel.json` publica el tablero con `PUENTE_DEMO_PUBLICA=1` y `LLM_MODO=reproducir`. Toda acción que no sea GET responde 403 y el estado es efímero. **No es la demo en vivo** (#169), que corre en local. Para verlo en local: `PUENTE_DEMO_PUBLICA=1 uv run python -m app.server`.
 

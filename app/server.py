@@ -86,7 +86,7 @@ from pydantic import StrictBool, TypeAdapter
 from starlette.concurrency import run_in_threadpool
 
 # Lista corta ciega de la empresa (#167): su lógica vive en app/empresa.py; aquí solo rutas y anuncio de códigos.
-from app import empresa
+from app import empresa, joven_cv
 from puente.agents.perfil import (
     MAX_PREGUNTAS,
     PREGUNTAS_ENTREVISTA,
@@ -3018,20 +3018,34 @@ async def endpoint_empresa_publicar_oferta(request: Request) -> JSONResponse:
     nueva = next(o for o in reversed(ESTADO_GLOBAL["ofertas"]) if o["id"] not in previas)
     # Una empresa nueva recibe su código ahora: el enlace sale en la consola del servidor, no en la respuesta.
     empresa.anunciar_codigos_empresa(ESTADO_GLOBAL)
-    return JSONResponse(
-        {
-            "oferta": {
-                "id": nueva["id"],
-                "puesto": nueva["puesto"],
-                "empresa": nueva["empresa"],
-                "bloqueada": bool(nueva["bloqueada"]),
-                "alertas": [
-                    {"tipo": a.get("tipo"), "frase": a.get("frase"), "regla": a.get("regla")} for a in nueva["alertas"]
-                ],
-            }
-        },
-        status_code=201,
-    )
+    return JSONResponse({"oferta": _oferta_para_empresa(nueva)}, status_code=201)
+
+
+def _oferta_para_empresa(nueva: dict[str, Any]) -> dict[str, Any]:
+    """Lo único que la empresa recibe de su oferta recién publicada: id, puesto, empresa, si quedó bloqueada y sus alertas."""
+    return {
+        "id": nueva["id"],
+        "puesto": nueva["puesto"],
+        "empresa": nueva["empresa"],
+        "bloqueada": bool(nueva["bloqueada"]),
+        "alertas": [{"tipo": a.get("tipo"), "frase": a.get("frase"), "regla": a.get("regla")} for a in nueva["alertas"]],
+    }
+
+
+async def endpoint_empresa_volante(request: Request) -> JSONResponse:
+    """La empresa sube el volante de su vacante (PDF o foto) y recibe solo el resultado de esa oferta (#303).
+
+    Usa la misma lectura de archivo, los mismos guardrails, el mismo agente Mercado y la misma Ley 11 que
+    `/api/ofertas/archivo` (del orientador), pero responde como `/api/empresa/ofertas`: sin el estado del tablero.
+    """
+    try:
+        tipo, contenido, _campos = await leer_archivo_subido(request, ESTADO_GLOBAL)
+        resultado = await run_in_threadpool(extraer_oferta_de_archivo, tipo, contenido)
+        subida = registrar_oferta_subida(ESTADO_GLOBAL, resultado)
+    except ErrorSubida as exc:
+        return _respuesta_subida(exc)
+    empresa.anunciar_codigos_empresa(ESTADO_GLOBAL)
+    return JSONResponse({"oferta": _oferta_para_empresa(subida["oferta"])}, status_code=201)
 
 
 async def endpoint_nuevo_perfil(request: Request) -> JSONResponse:
@@ -3980,7 +3994,7 @@ def _subida_dentro_del_limite(request: Request) -> bool:
     return dentro
 
 
-async def leer_archivo_subido(request: Request, estado: dict[str, Any]) -> tuple[str, bytes, dict[str, str]]:
+async def leer_archivo_subido(request: Request, estado: dict[str, Any], *, max_campo: int = 200) -> tuple[str, bytes, dict[str, str]]:
     """(tipo `pdf|jpg|png`, bytes, campos de texto) de un multipart con el campo `archivo`.
 
     El tamaño declarado se mira antes de leer el cuerpo: un archivo de 50 MB se rechaza sin cargarlo.
@@ -4011,7 +4025,7 @@ async def leer_archivo_subido(request: Request, estado: dict[str, Any]) -> tuple
         contenido = await archivo.read(MAX_BYTES_ARCHIVO + 1)
         extension = _extension_declarada(archivo.filename)
         campos = {
-            k: str(v)[:200] for k, v in formulario.multi_items() if k != "archivo" and isinstance(v, str)
+            k: str(v)[:max_campo] for k, v in formulario.multi_items() if k != "archivo" and isinstance(v, str)
         }
     finally:
         await formulario.close()
@@ -4049,7 +4063,7 @@ def leer_texto_de_cv(tipo: str, contenido: bytes) -> str:
         except Exception as exc:
             if tipo == "pdf":
                 raise ErrorSubida("El archivo PDF no se pudo leer o está dañado.", 422) from exc
-            raise
+            raise ErrorSubida("No pudimos leer la foto. Usa una imagen JPG o PNG clara y completa.", 422) from exc
 
 
 def _alerta_para_tablero(alerta: str) -> dict[str, str]:
@@ -4175,7 +4189,7 @@ def preparar_entrada_cv(estado: dict[str, Any], texto_cv: str, campos: dict[str,
 
 
 def registrar_perfil_desde_cv(
-    estado: dict[str, Any], perfil: Perfil, decision: Decision, taxonomia: dict[str, dict]
+    estado: dict[str, Any], perfil: Perfil, decision: Decision, taxonomia: dict[str, dict], *, origen: str = "orientador"
 ) -> dict[str, Any]:
     """Suma el perfil al tablero sin guardar el CV ni su texto (ni en `entradas_perfil`)."""
     nuevo = {
@@ -4184,7 +4198,7 @@ def registrar_perfil_desde_cv(
         "genero": perfil.genero or "no_especificado",
         "edad": perfil.edad,
         "corregimiento": perfil.corregimiento,
-        "modalidad_ingreso": "CV subido en el tablero (PDF o foto, #170)",
+        "modalidad_ingreso": "CV subido por el joven (PDF o foto)" if origen == "joven" else "CV subido en el tablero (PDF o foto, #170)",
         "horario_libre": _horario_para_tablero(perfil),
         "horario_libre_bloques": [h.model_dump() for h in perfil.horario_libre],
         "horario_clases_bloques": [h.model_dump() for h in perfil.horario_clases],
@@ -4204,10 +4218,10 @@ def registrar_perfil_desde_cv(
     _registrar_decision_db(
         estado,
         Decision(
-            agente="orientador",
+            agente=origen,
             entrada_resumen=f"subida_cv ({perfil.id})",
             salida_resumen=f"Perfil {perfil.id} desde CV ({len(perfil.habilidades)} habilidades con evidencia)",
-            razon="El orientador subió un CV; la PII se quitó antes del LLM y el archivo temporal se borró.",
+            razon="El CV se analizó con Perfil; la PII se quitó antes del LLM y el archivo temporal se borró.",
             timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         ),
     )
@@ -4319,6 +4333,7 @@ app = Starlette(
         Route("/api/ofertas/desbloquear", endpoint_desbloquear_oferta, methods=["POST"]),
         Route("/api/ofertas", endpoint_nueva_oferta, methods=["POST"]),
         Route("/api/empresa/ofertas", endpoint_empresa_publicar_oferta, methods=["POST"]),
+        Route("/api/empresa/volante", endpoint_empresa_volante, methods=["POST"]),
         Route("/api/ofertas/archivo", endpoint_oferta_archivo, methods=["POST"]),
         Route("/api/perfiles", endpoint_nuevo_perfil, methods=["POST"]),
         Route("/api/perfiles/archivo", endpoint_perfil_archivo, methods=["POST"]),
@@ -4336,6 +4351,7 @@ app = Starlette(
         Route("/joven", endpoint_joven_pagina, methods=["GET"]),
         Route("/api/joven/formulario", endpoint_joven_formulario, methods=["GET"]),
         Route("/api/joven/perfil", endpoint_joven_perfil, methods=["POST"]),
+        Route("/api/joven/cv", joven_cv.endpoint_cv, methods=["POST"]),
         Route("/api/joven/consentimiento", endpoint_joven_consentimiento, methods=["POST"]),
         Route("/api/joven/{perfil_id}/resultado", endpoint_joven_resultado, methods=["GET"]),
         Route("/api/joven/{perfil_id}/ics/{oferta_id}", endpoint_joven_ics, methods=["GET"]),

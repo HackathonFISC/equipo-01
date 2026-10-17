@@ -243,6 +243,7 @@ async function conBoton(boton, textoOcupado, tarea) {
 }
 
 function marcarPaso(paso) {
+  if (paso === "entrevista") paso = "datos";
   for (const li of document.querySelectorAll(".pasos li")) {
     if (li.dataset.paso === paso) li.setAttribute("aria-current", "step");
     else li.removeAttribute("aria-current");
@@ -373,7 +374,7 @@ function validar() {
   if (pasaje.value === "" || Number(pasaje.value) < 0) return ["Escribe cuánto puedes gastar en pasaje al día.", pasaje];
 
   const respuestas = formulario.preguntas.map((_, i) => $(`f-respuesta-${i}`).value.trim());
-  if (!respuestas.some((r) => r.length >= 3)) return ["Responde al menos una pregunta de la entrevista.", $("f-respuesta-0")];
+  if (!window.ingresoCV?.archivo && !respuestas.some((r) => r.length >= 3)) return ["Responde al menos una pregunta de la entrevista.", $("f-respuesta-0")];
   return null;
 }
 
@@ -400,9 +401,11 @@ async function enviarFormulario(evento) {
     mostrarError(...problema);
     return;
   }
-  await conBoton($("btn-enviar"), "Leyendo tu entrevista…", async () => {
+  await conBoton($("btn-enviar"), window.ingresoCV?.archivo ? "Analizando tu CV…" : "Leyendo tu entrevista…", async () => {
     try {
-      const resultado = await api("/api/joven/perfil", datosDelFormulario());
+      const resultado = window.ingresoCV?.archivo
+        ? await window.ingresoCV.enviar(datosDelFormulario())
+        : await api("/api/joven/perfil", datosDelFormulario());
       tokenActual = resultado.token;
       mostrarResultado(resultado);
       mostrarAviso("Listo: ya tenemos tu perfil.");
@@ -537,7 +540,7 @@ function bloqueConsentimiento(resultado, vacante) {
   // aquí y las dos podían decir cosas distintas (#257).
   const aceptado = vacante.consentimiento === "consentido";
   const texto = aceptado
-    ? `Aceptaste que Puente envíe tu CV a ${vacante.empresa}. Si cambias de idea, hazlo en «Mis postulaciones», más abajo.`
+    ? `Aceptaste que SkillMatch envíe tu CV a ${vacante.empresa}. Si cambias de idea, hazlo en «Mis postulaciones», más abajo.`
     : vacante.consentimiento === "no_consentido"
       ? `Dijiste que no: tu CV no se envía a ${vacante.empresa}. Si cambias de idea, hazlo en «Mis postulaciones», más abajo.`
       : `Tu CV no se envía a ${vacante.empresa} sin tu «sí». Decídelo en «Mis postulaciones», más abajo.`;
@@ -694,7 +697,7 @@ function mostrarResultado(resultado, { desplazar = true } = {}) {
 async function cargarResultado(codigo, boton) {
   const [id = "", token = ""] = String(codigo || "").trim().split(".");
   if (!/^[A-Za-z0-9_-]{1,80}$/.test(id) || !/^[A-Za-z0-9_-]{16,128}$/.test(token)) {
-    mostrarAviso("Ese código no está completo: cópialo tal como te lo dio Puente, con el punto en medio.", "error");
+    mostrarAviso("Ese código no está completo: cópialo tal como te lo dio SkillMatch, con el punto en medio.", "error");
     return;
   }
   tokenActual = token;
