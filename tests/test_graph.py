@@ -466,6 +466,19 @@ def test_demo_llm_ofrece_grabado_y_claude_pero_no_gemini(tmp_path, capsys):
     assert error.value.code == 2 and "gemini" in capsys.readouterr().err
 
 
+
+def test_demo_muestra_los_errores_si_falta_una_grabacion(tmp_path, monkeypatch):
+    """Sin la grabación de Perfil, Yaritza no entra al Matching: la demo lo dice en vez de parecer completa."""
+    import puente.llm
+
+    monkeypatch.setenv("LLM_DIR_GRABACIONES", str(tmp_path / "grabaciones_vacias"))
+    puente.llm.reiniciar_uso()
+    lineas: list[str] = []
+    g.main(["--llm", "claude", "--checkpoints", str(tmp_path / "cp.db"), "--auto", "aprobar,aprobar"], escribir=lineas.append)
+    texto = "\n".join(lineas)
+    assert "Flujo terminado." in texto
+    assert "⚠  Errores" in texto and "Falta la grabación" in texto and "perfil" in texto
+
 CEDULA, TELEFONO = "8-123-4567", "6123-4567"
 
 
