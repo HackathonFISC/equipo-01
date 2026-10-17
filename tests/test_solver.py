@@ -594,7 +594,7 @@ def test_cobertura_cero_descarta_en_lista_corta_salvo_oferta_sin_habilidades():
     }
 
     traslados = construir_matriz_default()
-    matches = asignar([maria, yaritza], [oferta_cajero], traslados, incluir_descartados=True)
+    matches = asignar([maria, yaritza], [oferta_cajero], traslados)
     ids_corta = [m.perfil_id for m in matches if m.en_lista_corta]
     assert "PERFIL-YARITZA" in ids_corta
     assert "maria" not in ids_corta
@@ -605,7 +605,7 @@ def test_cobertura_cero_descarta_en_lista_corta_salvo_oferta_sin_habilidades():
     assert set(descarte_maria.brechas) == {"manejo_caja", "atencion_cliente"}
 
     # Si la vacante no exige habilidades, nadie se descarta por cobertura
-    matches_sin_req = asignar([maria], [oferta_sin_requisitos], traslados, incluir_descartados=True)
+    matches_sin_req = asignar([maria], [oferta_sin_requisitos], traslados)
     assert [m.perfil_id for m in matches_sin_req if m.en_lista_corta] == ["maria"]
 
 
