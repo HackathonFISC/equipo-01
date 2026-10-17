@@ -1,4 +1,4 @@
-"""Agente Mercado: ofertas sucias -> Oferta validada, reglas de discriminación, deduplicación. Issues #5 y #43.
+"""Agente Mercado: ofertas sucias -> Oferta validada, reglas de discriminación, deduplicación. Issues #5, #43 y #75.
 
 Reparto de trabajo (AGENTS.md, sección 2):
 - El LLM (Claude vía `puente.llm`, salida estructurada) solo lee la oferta y llena
@@ -7,7 +7,8 @@ Reparto de trabajo (AGENTS.md, sección 2):
 - El código decide todo lo demás: habilidades contra la taxonomía, legalidad con
   `puente.rules.discriminacion` sobre el texto original, salario y horario verificados
   contra el texto (nunca inventados: lo que falta queda `no_publicado` y por confirmar),
-  deduplicación por similitud y una `Decision` por cada oferta procesada y por cada fusión.
+  deduplicación por similitud con el mismo corregimiento (#75) y una `Decision` por cada oferta
+  procesada, por cada fusión y por cada par parecido que se deja aparte.
 - Los PDF con capa de texto se leen con `pypdf` antes de llamar al LLM: el modelo recibe
   texto delimitado y las reglas corren sobre ese texto, no sobre una transcripción.
 - Imágenes y PDF escaneados: el LLM devuelve `transcripcion_literal` en la misma llamada,
@@ -42,6 +43,7 @@ EXTENSIONES_IMAGEN = {".jpg", ".jpeg", ".png"}
 EXTENSIONES_ARCHIVO = EXTENSIONES_IMAGEN | {".pdf"}
 DELIMITADOR = "OFERTA"
 UMBRAL_SIMILITUD = 0.85
+UMBRAL_SIN_CORREGIMIENTO = 0.95  # #75: a una de las dos le falta el corregimiento
 MIN_CARACTERES_CAPA_TEXTO = 20
 
 
@@ -156,9 +158,13 @@ def extractor_claude(entrada: EntradaOferta) -> OfertaExtraida:
 # ---------------------------------------------------------------- código
 
 
-def huella(texto: str, empresa: str, puesto: str) -> str:
-    """Hash para deduplicar: texto normalizado + empresa + puesto."""
-    clave = "|".join(normalizar_texto(p) for p in (texto, empresa, puesto))
+def huella(texto: str, empresa: str, puesto: str, corregimiento: str = "") -> str:
+    """Hash para deduplicar y para el id: texto normalizado + empresa + puesto + corregimiento.
+
+    El corregimiento entra por #75: dos sucursales de la misma cadena son dos vacantes y no pueden
+    compartir id, aunque lleguen sin texto (imagen sin transcripción); `db.guardar_oferta` pisaría una.
+    """
+    clave = "|".join(normalizar_texto(p) for p in (texto, empresa, puesto, corregimiento))
     return hashlib.sha256(clave.encode("utf-8")).hexdigest()
 
 
@@ -318,7 +324,7 @@ def _procesar_entrada(
     salario, nota_salario = verificar_salario(extraida.salario_mensual, texto)
     horario, nota_horario = verificar_horario(extraida.horario, texto)
     puesto, empresa = extraida.puesto or "", extraida.empresa or ""
-    id_oferta = "of-" + huella(texto, empresa, puesto)[:10]
+    id_oferta = "of-" + huella(texto, empresa, puesto, extraida.corregimiento or "")[:10]
 
     razones = [_razon_reglas(alertas, bloqueada)]
     if descartadas:
@@ -393,24 +399,60 @@ def _revisar_existente(oferta: Oferta) -> tuple[Oferta, str]:
     return oferta.model_copy(update={"alertas": oferta.alertas + nuevas, "bloqueada": oferta.bloqueada or bloqueada}), oferta.requisitos_texto
 
 
-def razon_duplicada(oferta: Oferta, texto: str, previa: Oferta, texto_previo: str) -> str | None:
-    """Motivo de la fusión si `oferta` duplica a `previa`; None si son distintas.
+def comparar_ofertas(oferta: Oferta, texto: str, previa: Oferta, texto_previo: str) -> tuple[bool, str | None]:
+    """(¿se fusiona `oferta` con `previa`?, motivo). El motivo es None si no hay nada que registrar.
 
-    Duplicada = mismo puesto normalizado y textos con similitud >= UMBRAL_SIMILITUD: entre
-    portales la misma oferta casi nunca trae el mismo texto. Sin texto en alguna de las dos
-    no hay con qué comparar y se exige la misma huella (texto, empresa y puesto).
+    Reglas, en orden (#43 y #75):
+    1. Puesto normalizado distinto: no se fusionan.
+    2. Parecido. Con texto en las dos, similitud >= UMBRAL_SIMILITUD: entre portales la misma oferta
+       casi nunca trae el mismo texto. Sin texto en alguna no hay con qué comparar y se exige la misma
+       huella (texto, empresa, puesto y corregimiento). Sin parecido no se fusionan y no hay motivo.
+    3. Corregimiento, comparado con `normalizar_texto` (sin acentos ni mayúsculas):
+       - conocido en las dos y distinto: NO se fusionan aunque el texto se parezca. Una cadena publica
+         casi el mismo aviso para cada sucursal y unirlos le quita una vacante al Matching.
+       - el mismo en las dos: se fusionan.
+       - falta en alguna: solo se fusionan si la similitud llega a UMBRAL_SIN_CORREGIMIENTO, es decir,
+         si el texto es casi idéntico (o, sin texto, si ninguna lo trae y la huella coincide). Entre
+         los dos umbrales quedan aparte como posible duplicada: un duplicado a la vista le cuesta al
+         orientador un clic, una vacante fusionada por error se pierde sin que nadie la vea, y la
+         oferta sin corregimiento ya llega a su tablero como pendiente de confirmar.
+    Cuando el parecido habría bastado antes de #75 y no se fusionan, el motivo lo explica.
     """
     if normalizar_texto(oferta.puesto) != normalizar_texto(previa.puesto):
-        return None
-    if not texto.strip() or not texto_previo.strip():
-        if huella(texto, oferta.empresa, oferta.puesto) == huella(texto_previo, previa.empresa, previa.puesto):
-            return f"fusionada con {previa.id}: mismo puesto y empresa, sin texto que comparar"
-        return None
-    parecido = similitud(texto, texto_previo)
-    if parecido < UMBRAL_SIMILITUD:
-        return None
-    return (f"fusionada con {previa.id}: similitud {parecido:.2f} >= {UMBRAL_SIMILITUD} "
-            f"sobre el texto normalizado y mismo puesto «{oferta.puesto}»")
+        return False, None
+    if texto.strip() and texto_previo.strip():
+        parecido: float | None = similitud(texto, texto_previo)
+        if parecido < UMBRAL_SIMILITUD:
+            return False, None
+        evidencia = (f"similitud {parecido:.2f} >= {UMBRAL_SIMILITUD} sobre el texto normalizado "
+                     f"y mismo puesto «{oferta.puesto}»")
+    elif huella(texto, oferta.empresa, oferta.puesto) == huella(texto_previo, previa.empresa, previa.puesto):
+        parecido, evidencia = None, "mismo puesto y empresa, sin texto que comparar"
+    else:
+        return False, None
+
+    lugar, lugar_previo = normalizar_texto(oferta.corregimiento), normalizar_texto(previa.corregimiento)
+    if lugar and lugar_previo and lugar != lugar_previo:
+        return False, (f"no fusionada con {previa.id}: {evidencia}, pero corregimiento distinto "
+                       f"(«{oferta.corregimiento}» y «{previa.corregimiento}»): son dos vacantes")
+    if lugar and lugar == lugar_previo:
+        return True, f"fusionada con {previa.id}: {evidencia} y mismo corregimiento «{previa.corregimiento}»"
+    if parecido is None and not lugar and not lugar_previo:
+        return True, f"fusionada con {previa.id}: {evidencia}; ninguna trae corregimiento y la huella coincide"
+    falta = "ninguna trae corregimiento" if not lugar and not lugar_previo else "a una le falta el corregimiento"
+    if parecido is not None and parecido >= UMBRAL_SIN_CORREGIMIENTO:
+        return True, (f"fusionada con {previa.id}: {evidencia}; {falta}, "
+                      f"pero la similitud llega a {UMBRAL_SIN_CORREGIMIENTO}")
+    exigido = (f"sin corregimiento se exige similitud >= {UMBRAL_SIN_CORREGIMIENTO}" if parecido is not None
+               else "sin texto se exige el mismo corregimiento")
+    return False, (f"posible duplicada de {previa.id}, no fusionada: {evidencia}, pero {falta} "
+                   f"y {exigido}; el orientador decide")
+
+
+def razon_duplicada(oferta: Oferta, texto: str, previa: Oferta, texto_previo: str) -> str | None:
+    """Motivo de la fusión si `oferta` duplica a `previa`; None si quedan aparte. Reglas en `comparar_ofertas`."""
+    fusionar, razon = comparar_ofertas(oferta, texto, previa, texto_previo)
+    return razon if fusionar else None
 
 
 def procesar_ofertas(
@@ -432,14 +474,20 @@ def procesar_ofertas(
     vistas: list[tuple[Oferta, str]] = []
 
     def admitir(oferta: Oferta, texto: str) -> None:
+        aparte: list[str] = []  # pares parecidos que no se fusionan (#75): quedan en una Decision
         for previa, texto_previo in vistas:
-            razon = razon_duplicada(oferta, texto, previa, texto_previo)
-            if razon:
+            fusionar, razon = comparar_ofertas(oferta, texto, previa, texto_previo)
+            if fusionar:
                 decisiones.append(Decision(agente=AGENTE, entrada_resumen=_resumen(texto or oferta.puesto),
-                                           salida_resumen=f"duplicada de {previa.id}", razon=razon))
+                                           salida_resumen=f"duplicada de {previa.id}", razon=razon or ""))
                 return
+            if razon:
+                aparte.append(razon)
         vistas.append((oferta, texto))
         ofertas.append(oferta)
+        if aparte:
+            decisiones.append(Decision(agente=AGENTE, entrada_resumen=_resumen(texto or oferta.puesto),
+                                       salida_resumen=f"{oferta.id} · vacante aparte", razon=" · ".join(aparte)))
 
     for previa in existentes or []:
         try:

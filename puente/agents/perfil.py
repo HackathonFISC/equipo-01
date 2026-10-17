@@ -102,12 +102,56 @@ _CEDULA_ETIQUETA = re.compile(
 )
 # Celular 6xxx-xxxx, fijo 2xx-xxxx, con o sin +507.
 _TELEFONO = re.compile(r"(?<![\d-])(?:\+?\s?507[\s.-]?)?(?:6\d{3}|[2-9]\d{2})[\s.-]?\d{4}(?![\d-])")
-_DIRECCION_ETIQUETA = re.compile(r"\b(direcci[óo]n|domicilio)\b[^\n]*", re.IGNORECASE)
-_DIRECCION_EXACTA = re.compile(
-    r"\b(calle|avenida|ave?\.|casa|edificio|edif\.|apartamento|apto\.?|manzana|mz\.|lote)"
-    r"\s*(?:n[°º.o]*\s*|#\s*)?\d+[a-z]?\b",
-    re.IGNORECASE,
+# `(?<!\[)`: el "[DIRECCION]" de una pasada anterior no es una etiqueta. Guardrails limpia y Perfil
+# vuelve a limpiar; sin esto la segunda pasada borraba el resto de la línea ("[DIRECCION]. Atiendo…").
+_DIRECCION_ETIQUETA = re.compile(r"(?<!\[)\b(direcci[óo]n|domicilio)\b[^\n]*", re.IGNORECASE)
+
+# Dirección en texto libre, sin etiqueta (#63): "vivo en Calle 5ta, casa 12, Barrio Ficticio, Arraiján".
+# Una mención es una cadena de piezas en la misma línea, separadas por comas, "y", "en", "de" o espacios:
+# - elementos, que se quitan: palabra clave + nombre propio o número ("Calle 5ta", "Barrio Ficticio",
+#   "Urb. Los Pinos") o palabra clave + número ("casa 12", "apto. 3B");
+# - corregimientos y lugares generales ("Arraiján", "Panamá Oeste"), que no ubican a nadie;
+# - solo tras un disparador ("vivo en", "resido en", "mi casa queda en", "vivo por"): nombres propios
+#   sueltos ("Los Pinos"), referencias cortas ("frente al chino") y nombres en minúsculas tras la
+#   palabra clave ("barrio ficticio"), como se escribe en un chat.
+# Si la mención trae algo que quitar, se reemplaza entera como la línea etiquetada: "Corregimiento: X"
+# o "[DIRECCION]". El resto de la respuesta no se toca: de ahí sale la evidencia literal.
+_DISPARADOR_DIRECCION = (
+    r"\b(?i:viv(?:o|imos|[ií]a|[ií]amos)|resid(?:o|imos|[ií]a)|(?:estoy|estamos)\s+viviendo"
+    r"|(?:mi|nuestra)\s+casa\s+(?:queda|est[aá])|queda\s+mi\s+casa)\s+(?i:en|por)\b"
 )
+# Llevan nombre propio o número.
+_CLAVE_CON_NOMBRE = (
+    r"\b(?i:(?:calle|avenida|barriada|barrio|urbanizaci[oó]n|residencial|edificio)\b|(?:ave?|bda|urb|edif)\.)"
+)
+# Solo cuentan con número: "casa grande" o "el edificio de la empresa" no son una dirección.
+_CLAVE_CON_NUMERO = r"\b(?i:(?:casa|apartamento|apto|manzana|lote)\b\.?|mz\.)"
+_NUMERO_DIRECCION = (
+    r"(?i:(?:(?:n[°º.o]*|#|n[úu]m(?:ero|\.)?)[ \t]*)?\d+\w{0,3}\b(?:-[a-z0-9]{1,3}\b)?"
+    # "casa 2 días", "el edificio 3 veces por semana": es una cantidad, no un número de casa.
+    r"(?![ \t]*(?:%|(?:a[ñn]os?|mes(?:es)?|d[ií]as?|semanas?|horas?|veces|minutos?|personas?"
+    r"|ni[ñn]os?|platos?|clientes?|cuartos?|habitaciones?|pisos?)\b)))"
+)
+# Palabras que no pueden empezar un nombre de lugar: "Los sábados", "barrio con mi mamá".
+_PALABRAS_VACIAS = (
+    r"(?i:(?:y|e|o|u|ni|con|sin|que|donde|desde|hace|hasta|para|pero|porque|pues|cerca|frente|junto"
+    r"|al|a|en|por|de|del|mi|mis|su|sus|tu|tus|un|una|unos|unas|el|la|los|las|lo|le|les|me|se|te|nos"
+    r"|no|s[ií]|ya|muy|hay|es|son|est[aá]|estoy|soy|tengo|todo|toda|todos|todas|cada|solo|s[oó]lo)\b)"
+)
+_ARTICULO = r"(?:\b(?i:el|la|los|las)[ \t]+)"
+_PALABRA_PROPIA = r"[A-ZÁÉÍÓÚÜÑ]\w*"
+_REFERENCIA_DIRECCION = (
+    r"(?i:(?:frente[ \t]+(?:a|al)|cerca[ \t]+(?:de|del)|al[ \t]+lado[ \t]+(?:de|del)|(?:detr|atr)[aá]s[ \t]+(?:de|del)"
+    r"|diagonal[ \t]+(?:a|al)|a[ \t]+un[ \t]+costado[ \t]+(?:de|del))\b)"
+    # Corta y cerrada por puntuación: "cerca de la fonda de mi mamá donde atiendo" no es una referencia.
+    r"(?:[ \t]+[^\s,.;:!?()\[\]]+){1,4}(?=[ \t]*(?:[,.;:!?)\n]|$))"
+)
+# Lugares que no ubican a nadie: se conservan si aparecen en una mención de dirección.
+_LUGARES_GENERALES: tuple[str, ...] = (
+    "Ciudad de Panamá", "Panamá Oeste", "Panamá Norte", "Panamá Este", "Panamá", "Colón", "Chiriquí",
+    "Coclé", "Veraguas", "Darién", "Bocas del Toro", "Los Santos",
+)
+_VARIANTES_LETRA = {"a": "aá", "e": "eé", "i": "ií", "o": "oó", "u": "uúü", "n": "nñ"}
 
 
 def _sin_acentos(texto: str) -> str:
@@ -126,8 +170,127 @@ def detectar_corregimiento(texto: str, corregimientos: Iterable[str] = CORREGIMI
     return None
 
 
+def _patron_sin_acentos(nombre: str) -> str:
+    """Patrón de un nombre que, con mayúsculas ignoradas, tampoco distingue acentos: igual que
+    `detectar_corregimiento`, "Arraijan" encuentra "Arraiján"."""
+    partes = []
+    for letra in _sin_acentos(nombre).casefold():
+        if letra.isspace():
+            partes.append(r"[ \t]+")
+        else:
+            partes.append(f"[{_VARIANTES_LETRA[letra]}]" if letra in _VARIANTES_LETRA else re.escape(letra))
+    return "".join(partes)
+
+
+def _alternativas(nombres: Iterable[str]) -> str:
+    """Nombres como alternativas de regex, el más largo primero; sin nombres, nunca coincide."""
+    patrones = [_patron_sin_acentos(n) for n in sorted(set(nombres), key=len, reverse=True) if n.strip()]
+    return f"(?i:{'|'.join(patrones)})\\b" if patrones else "(?!)"
+
+
+class _PatronesDireccion:
+    """Expresiones de la dirección en texto libre para una lista de corregimientos."""
+
+    def __init__(self, corregimientos: tuple[str, ...]):
+        corregimiento = rf"\b(?i:corregimiento[ \t]*(?::|de)?[ \t]*)?{_alternativas(corregimientos)}"
+        general = rf"\b{_alternativas(_LUGARES_GENERALES)}"
+        clave = f"(?:{_CLAVE_CON_NOMBRE}|{_CLAVE_CON_NUMERO})"
+        # "Los Pinos", "Ricardo J. Alfaro", "Ficticio" en "Barrio Ficticio, Arraiján": no se come el
+        # corregimiento ni la palabra clave siguiente, que son piezas aparte.
+        nombre = (
+            rf"(?:(?:El|La|Los|Las)[ \t]+)?(?!{_PALABRAS_VACIAS}){_PALABRA_PROPIA}"
+            rf"(?:[ \t]+(?:(?:de|del|la|las|los|el|y)[ \t]+)*(?:[A-ZÁÉÍÓÚÜÑ]\.[ \t]+)?"
+            rf"(?!{clave}|{corregimiento}){_PALABRA_PROPIA})*"
+        )
+        palabra_minuscula = rf"(?!{_PALABRAS_VACIAS}|{clave}|{corregimiento})[^\W\d_]+"
+        nombre_minusculas = rf"(?:{_ARTICULO})?{palabra_minuscula}(?:[ \t]+{palabra_minuscula})?"
+        letra = r"[A-ZÁÉÍÓÚÜÑ]\b"  # "Calle A", "Calle E": la letra sola es el nombre, no una palabra vacía
+        con_nombre = rf"{_CLAVE_CON_NOMBRE}[ \t]*(?:{_NUMERO_DIRECCION}|{nombre}|{letra})"
+        con_nombre_chat = rf"{_CLAVE_CON_NOMBRE}[ \t]*(?:{_NUMERO_DIRECCION}|{nombre}|{letra}|{nombre_minusculas})"
+        con_numero = rf"{_CLAVE_CON_NUMERO}[ \t]*{_NUMERO_DIRECCION}"
+        elemento = rf"{_ARTICULO}?(?!{corregimiento})(?:{con_nombre}|{con_numero})"
+        elemento_chat = rf"{_ARTICULO}?(?!{corregimiento})(?:{con_nombre_chat}|{con_numero})"
+
+        self.inicio = re.compile(rf"(?P<disparador>{_DISPARADOR_DIRECCION})|{elemento}")
+        self.espacio = re.compile(r"[ \t]*")
+        self.separador = re.compile(
+            r"[ \t]*,[ \t]*(?:(?i:en|de|del)[ \t]+)?|[ \t]+(?i:en|de|del|y)[ \t]+|[ \t]*[-–][ \t]*|[ \t]+"
+        )
+        self.separador_fuerte = re.compile(r",|\b(?i:en|de|del)\b")
+        self.corregimiento = re.compile(corregimiento)
+        self.general = re.compile(general)
+        self.elemento = re.compile(elemento)
+        self.elemento_chat = re.compile(elemento_chat)
+        self.referencia = re.compile(_REFERENCIA_DIRECCION)
+        self.nombre_suelto = re.compile(rf"{_ARTICULO}?(?!{corregimiento}|{general}){nombre}")
+
+
+_PATRONES_DIRECCION: dict[tuple[str, ...], _PatronesDireccion] = {}
+
+
+def _patrones_direccion(corregimientos: tuple[str, ...]) -> _PatronesDireccion:
+    if corregimientos not in _PATRONES_DIRECCION:
+        _PATRONES_DIRECCION[corregimientos] = _PatronesDireccion(corregimientos)
+    return _PATRONES_DIRECCION[corregimientos]
+
+
+def _piezas_direccion(texto: str, pos: int, disparador: bool, p: _PatronesDireccion) -> list[tuple[int, int, bool]]:
+    """Piezas (inicio, fin, se_quita) de la mención de dirección que empieza en `pos`.
+
+    Sin disparador la mención tiene que abrir con un elemento ("Calle 5ta"). Un nombre propio suelto
+    solo cuenta justo tras el disparador o tras una coma, "en" o "de": "Calle 50 Atención al cliente"
+    (un CV pegado sin puntuación) no se come "Atención".
+    """
+    piezas: list[tuple[int, int, bool]] = []
+    while True:
+        separador = (p.separador if piezas else p.espacio).match(texto, pos)
+        if separador is None:
+            return piezas
+        candidatos: list[tuple[re.Pattern[str], bool]] = []
+        if disparador or piezas:
+            candidatos += [(p.corregimiento, False), (p.general, False)]
+        candidatos.append((p.elemento_chat if disparador else p.elemento, True))
+        if disparador or piezas:
+            candidatos.append((p.referencia, True))
+            if (disparador and not piezas) or p.separador_fuerte.search(separador.group()):
+                candidatos.append((p.nombre_suelto, True))
+        for patron, se_quita in candidatos:
+            pieza = patron.match(texto, separador.end())
+            if pieza:
+                break
+        else:
+            return piezas
+        piezas.append((pieza.start(), pieza.end(), se_quita))
+        pos = pieza.end()
+
+
+def _quitar_direccion_libre(texto: str, corregimientos: tuple[str, ...]) -> str:
+    """Reemplaza cada mención de dirección sin etiqueta por "Corregimiento: X" o "[DIRECCION]".
+
+    Una mención que solo nombra el corregimiento ("vivo en La Chorrera") queda igual.
+    """
+    p = _patrones_direccion(corregimientos)
+    salida: list[str] = []
+    pos = 0
+    while (inicio := p.inicio.search(texto, pos)) is not None:
+        disparador = inicio.group("disparador") is not None
+        piezas = _piezas_direccion(texto, inicio.end() if disparador else inicio.start(), disparador, p)
+        if not any(se_quita for _, _, se_quita in piezas):
+            salida.append(texto[pos : inicio.end()])
+            pos = inicio.end()
+            continue
+        desde, hasta = piezas[0][0], piezas[-1][1]
+        corregimiento = detectar_corregimiento(texto[desde:hasta], corregimientos)
+        salida += [texto[pos:desde], f"Corregimiento: {corregimiento}" if corregimiento else "[DIRECCION]"]
+        pos = hasta
+    salida.append(texto[pos:])
+    return "".join(salida)
+
+
 def quitar_pii(texto: str, corregimientos: Iterable[str] = CORREGIMIENTOS) -> str:
-    """Quita cédula, teléfono y dirección exacta. De una línea de dirección deja solo el corregimiento."""
+    """Quita cédula, teléfono y dirección exacta. De una dirección, con o sin etiqueta, deja solo el
+    corregimiento: "Dirección: Calle 5ta, Arraiján" y "vivo en Calle 5ta, Arraiján" dan
+    "Corregimiento: Arraiján" (el "vivo en" se queda). Aplicarla dos veces da lo mismo que una."""
     corregimientos = tuple(corregimientos)
 
     def _linea_direccion(m: re.Match) -> str:
@@ -138,7 +301,7 @@ def quitar_pii(texto: str, corregimientos: Iterable[str] = CORREGIMIENTOS) -> st
     texto = _CEDULA.sub("[CEDULA]", texto)
     texto = _CEDULA_ETIQUETA.sub(lambda m: f"{m.group(1)}{m.group(2)}[CEDULA]", texto)
     texto = _TELEFONO.sub("[TELEFONO]", texto)
-    return _DIRECCION_EXACTA.sub("[DIRECCION]", texto)
+    return _quitar_direccion_libre(texto, corregimientos)
 
 
 # ---------------------------------------------------------------- evidencia y taxonomía
@@ -209,7 +372,7 @@ def extraer_texto_cv(ruta: str | Path, ocr: Callable[[Path], str] | None = None)
 
 
 def _ocr_local(ruta: Path) -> str:  # pragma: no cover - depende del entorno
-    # OCR local a propósito: mandar la foto a Gemini expondría la cédula antes de poder borrarla.
+    # OCR local a propósito: mandar la foto al LLM expondría la cédula antes de poder borrarla.
     try:
         import pytesseract
         from PIL import Image
@@ -375,10 +538,6 @@ def llm_puente(prompt: str) -> PerfilExtraido:
     except ImportError as exc:
         raise RuntimeError("falta puente/llm.py (#45): no hay LLM; usa --reproducir o un llm inyectado") from exc
     return generar_estructurado(prompt, PerfilExtraido, agente=AGENTE)
-
-
-# Alias temporal: puente/graph.py (#10, PR #69) lo importa con este nombre. Se quita cuando graph.py use llm_puente.
-llm_gemini = llm_puente
 
 
 def construir_prompt(texto: str, modo: str, taxonomia: dict[str, dict]) -> str:
